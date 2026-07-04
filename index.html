@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>Savvi Open Home</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { background: #F4F0E8; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: #2C1A0E; }
+  #root { max-width: 460px; margin: 0 auto; min-height: 100vh; background: #F4F0E8; }
+  button { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+
+const API_BASE = "https://savvi.app.n8n.cloud/webhook/savvi-app";
+const PINS = { "5853": "Luke", "7267": "Sam" };
+const BLUE = "#8AACE3", BLUE_D = "#5A7FBF", BROWN = "#2C1A0E", BROWN_L = "#A89070",
+      LINEN = "#F4F0E8", SAND_D = "#DDD6C6", WHITE = "#FFF", CREAM = "#FFF4D5";
+
+async function call(action, params) {
+  try {
+    const r = await fetch(API_BASE, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...(params||{}) }) });
+    return await r.json();
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+function Pin({ onUnlock }) {
+  const [d, setD] = useState(""); const [err, setErr] = useState(false);
+  const press = (n) => {
+    if (d.length >= 4) return;
+    const next = d + n; setD(next); setErr(false);
+    if (next.length === 4) { const who = PINS[next]; if (who) onUnlock(who); else { setErr(true); setTimeout(() => setD(""), 500); } }
+  };
+  const btn = { background: WHITE, border: "1px solid " + SAND_D, borderRadius: 16, padding: 18, fontSize: 24, fontWeight: 700, color: BROWN, cursor: "pointer", fontFamily: "Georgia, serif" };
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ fontSize: 46, fontWeight: 900, color: BLUE, letterSpacing: -1.5, fontFamily: "Georgia, serif" }}>Savvi</div>
+      <div style={{ fontSize: 14, color: BROWN_L, marginBottom: 40, marginTop: 6 }}>Enter your PIN</div>
+      <div style={{ display: "flex", gap: 14, marginBottom: 40 }}>
+        {[0,1,2,3].map(i => <div key={i} style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid " + (err ? "#C0392B" : SAND_D), background: d.length > i ? (err ? "#C0392B" : BLUE) : "transparent" }} />)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, width: "100%", maxWidth: 260 }}>
+        {[1,2,3,4,5,6,7,8,9].map(n => <button key={n} onClick={() => press(String(n))} style={btn}>{n}</button>)}
+        <div />
+        <button onClick={() => press("0")} style={btn}>0</button>
+        <button onClick={() => setD(x => x.slice(0,-1))} style={{ background: "transparent", border: "none", fontSize: 20, color: BROWN_L, cursor: "pointer" }}>&#9003;</button>
+      </div>
+      {err && <div style={{ color: "#C0392B", fontSize: 13, marginTop: 16 }}>Incorrect PIN</div>}
+    </div>
+  );
+}
+
+function App() {
+  const [agent, setAgent] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [opens, setOpens] = useState([]);
+  const [listings, setListings] = useState([]);
+  const [err, setErr] = useState("");
+  const [view, setView] = useState("home");
+  const [current, setCurrent] = useState(null);
+  const [buyers, setBuyers] = useState([]);
+  const [bLoading, setBLoading] = useState(false);
+
+  const load = async () => {
+    setLoading(true); setErr("");
+    const [o, l] = await Promise.all([call("getOpensWeek"), call("getListings")]);
+    if (o.ok) setOpens(o.data || []); else setErr("Couldn't reach the backend. Pull to refresh.");
+    if (l.ok) setListings(l.data || []);
+    setLoading(false);
+  };
+  useEffect(() => { if (agent) load(); }, [agent]);
+
+  const openOne = async (oh) => {
+    setCurrent(oh); setView("open"); setBuyers([]); setBLoading(true);
+    const r = await call("getInspections", { openHomeId: oh.id });
+    setBuyers(r.ok ? r.data : []); setBLoading(false);
+  };
+
+  if (!agent) return <Pin onUnlock={setAgent} />;
+
+  const greeting = (() => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; })();
+  const byDay = {}; opens.forEach(o => { (byDay[o.date || "?"] = byDay[o.date || "?"] || []).push(o); });
+  const days = Object.keys(byDay).sort();
+  const fmtDay = (dd) => { try { return new Date(dd + "T00:00:00+11:00").toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long" }); } catch { return dd; } };
+  const openPropIds = new Set(opens.map(o => o.propertyId).filter(Boolean));
+  const listingsOnly = listings.filter(p => !openPropIds.has(p.id));
+  const specs = (x) => [x.beds && (x.beds + "b"), x.baths && (x.baths + "ba"), x.car && (x.car + "c")].filter(Boolean).join(" · ") || "Apartment";
+
+  if (view === "open" && current) {
+    return (
+      <div>
+        <div style={{ background: "#EAE4D8", padding: "16px 20px", borderBottom: "1px solid " + SAND_D }}>
+          <button onClick={() => setView("home")} style={{ background: "none", border: "none", color: BLUE_D, fontWeight: 600, fontSize: 13, cursor: "pointer", padding: 0, marginBottom: 8 }}>&larr; All opens</button>
+          <div style={{ fontSize: 21, fontWeight: 700, fontFamily: "Georgia, serif" }}>{current.address}</div>
+          <div style={{ fontSize: 13, color: "#7A5C48" }}>{current.suburb} · {current.time}{current.price ? " · " + current.price : ""}</div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 1, background: SAND_D }}>
+          {[["Registered", buyers.length], ["Hot", buyers.filter(b => b.interest === "hot").length], ["Watching", buyers.filter(b => b.interest === "watching").length]].map(([l, n]) => (
+            <div key={l} style={{ background: WHITE, padding: "15px 10px", textAlign: "center" }}>
+              <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "Georgia, serif" }}>{n}</div>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: .8, textTransform: "uppercase", color: BROWN_L }}>{l}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: 16 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: BROWN_L, margin: "6px 0 12px" }}>At this open</div>
+          {bLoading && <div style={{ textAlign: "center", padding: 24, color: BROWN_L }}>Loading…</div>}
+          {!bLoading && buyers.length === 0 && <div style={{ textAlign: "center", padding: "36px 16px", color: "#C0B8A8" }}><div style={{ fontSize: 36, marginBottom: 10 }}>👥</div><div style={{ fontSize: 14 }}>No buyers registered yet.</div></div>}
+          {!bLoading && buyers.map(b => (
+            <div key={b.id} style={{ background: WHITE, borderRadius: 14, padding: 12, marginBottom: 8, border: "1px solid " + SAND_D, display: "flex", alignItems: "center", gap: 11 }}>
+              <div style={{ width: 42, height: 42, borderRadius: "50%", background: BLUE_D, color: WHITE, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontFamily: "Georgia, serif" }}>{b.initials || "?"}</div>
+              <div style={{ flex: 1 }}><div style={{ fontSize: 14, fontWeight: 600 }}>{b.name}</div><div style={{ fontSize: 11, color: BROWN_L }}>{b.mobile}</div></div>
+              <span style={{ padding: "3px 9px", borderRadius: 100, fontSize: 11, fontWeight: 700, background: b.interest === "hot" ? "#FDECEA" : b.interest === "watching" ? "#FEF9E7" : "#F0F0F0", color: b.interest === "hot" ? "#C0392B" : b.interest === "watching" ? "#B7770D" : "#5D6D7E" }}>{b.interest === "hot" ? "Hot 🔥" : b.interest === "watching" ? "Watching 👀" : "Cool ❄️"}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ background: WHITE, padding: "24px 20px 20px", borderBottom: "1px solid " + SAND_D }}>
+        <div style={{ fontSize: 36, fontWeight: 900, color: BLUE, letterSpacing: -1, fontFamily: "Georgia, serif", marginBottom: 14 }}>Savvi</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: .9, textTransform: "uppercase", color: BROWN_L }}>{greeting}, {agent}</div>
+            <div style={{ fontSize: 19, fontWeight: 700, fontFamily: "Georgia, serif" }}>{new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long" })}</div>
+          </div>
+          {!loading && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ background: CREAM, border: "1px solid " + SAND_D, borderRadius: 100, padding: "7px 14px", fontSize: 12, fontWeight: 600 }}>{opens.length} opens</div>
+            <button onClick={() => setAgent("")} style={{ background: "transparent", border: "1px solid " + SAND_D, borderRadius: 100, padding: "7px 12px", fontSize: 11, fontWeight: 600, color: BROWN_L, cursor: "pointer" }}>Log out</button>
+          </div>}
+        </div>
+      </div>
+      {loading && <div style={{ textAlign: "center", padding: 48, color: BROWN_L }}>Loading from Attio…</div>}
+      {!loading && <div>
+        {err && <div style={{ background: "#FDECEA", border: "1px solid #F5B7B1", borderRadius: 11, margin: "12px 14px", padding: 12, fontSize: 13, color: "#C0392B" }}>{err} <span onClick={load} style={{ textDecoration: "underline", cursor: "pointer", fontWeight: 600 }}>Retry</span></div>}
+        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: BROWN_L, padding: "18px 20px 10px" }}>This Week's Open Homes</div>
+        {days.length === 0 && !err && <div style={{ padding: "0 20px 16px", fontSize: 13, color: BROWN_L }}>No opens scheduled this week.</div>}
+        {days.map(day => (
+          <div key={day}>
+            <div style={{ padding: "6px 20px 4px", fontSize: 11, fontWeight: 700, color: BLUE_D, textTransform: "uppercase", letterSpacing: .8 }}>{fmtDay(day)}</div>
+            {byDay[day].map(oh => (
+              <div key={oh.id} onClick={() => openOne(oh)} style={{ margin: "0 14px 10px", background: WHITE, borderRadius: 16, overflow: "hidden", cursor: "pointer", border: "1px solid " + SAND_D, boxShadow: "0 2px 8px rgba(44,26,14,.06)" }}>
+                <div style={{ height: 5, background: BLUE }} />
+                <div style={{ padding: "14px 16px 13px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
+                    <div><div style={{ fontSize: 16, fontWeight: 700, fontFamily: "Georgia, serif" }}>{oh.address}</div><div style={{ fontSize: 12, color: BROWN_L }}>{oh.suburb}</div></div>
+                    <div style={{ background: LINEN, border: "1px solid " + SAND_D, borderRadius: 8, padding: "5px 10px", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", height: "fit-content" }}>{oh.time}</div>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, borderTop: "1px solid " + SAND_D }}>
+                    <span style={{ fontSize: 12, color: "#7A5C48" }}>{specs(oh)}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: BLUE_D }}>{oh.price}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: BROWN_L, padding: "22px 20px 10px" }}>All Active Listings</div>
+        {listingsOnly.length === 0 && <div style={{ padding: "0 20px 16px", fontSize: 13, color: BROWN_L }}>All listings are in this week's opens.</div>}
+        {listingsOnly.map(p => (
+          <div key={p.id} style={{ margin: "0 14px 10px", background: WHITE, borderRadius: 16, overflow: "hidden", border: "1px solid " + SAND_D, borderLeft: "4px solid " + SAND_D }}>
+            <div style={{ padding: "14px 16px 13px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <div><div style={{ fontSize: 16, fontWeight: 700, fontFamily: "Georgia, serif" }}>{p.address}</div><div style={{ fontSize: 12, color: BROWN_L }}>{p.suburb}</div></div>
+                <span style={{ fontSize: 11, color: BROWN_L, fontWeight: 500, background: LINEN, border: "1px solid " + SAND_D, borderRadius: 6, padding: "4px 9px", height: "fit-content", whiteSpace: "nowrap" }}>Listing</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, marginTop: 10, borderTop: "1px solid " + SAND_D }}>
+                <span style={{ fontSize: 12, color: "#7A5C48" }}>{specs(p)}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: BLUE_D }}>{p.price}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+        <div style={{ height: 40 }} />
+      </div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
