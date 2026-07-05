@@ -1,0 +1,19 @@
+name: CI build
+# Proves the Vite build in CI on every non-main branch / PR WITHOUT touching
+# the live GitHub Pages site (which only deploy.yml, on main, publishes).
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+    branches: [main]
+permissions: { contents: read }
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm ci
+      - run: npm run build
+      - run: test -f dist/index.html && echo "build ok"
