@@ -82,8 +82,44 @@ const Attio = {
     return j?.ok ? { ok: true, data: j.data || [] } : { ok: false, data: [] };
   },
   async getInspections(openHomeId) {
-    const j = await call("getInspections", { openHomeId });
-    return j?.ok ? { ok: true, data: (j.data || []).map(normBuyer) } : { ok: false, data: [] };
+    // The backend getInspections filter is broken server-side (returns all
+    // inspections, or errors), so reconstruct the per-open buyer list from raw
+    // records: list inspections, keep those whose open_home ref matches this
+    // open, and join people for contact details. Stopgap until the backend
+    // getInspections is fixed — see [[savvi-backend-inspection-bugs]].
+    const [inspJ, pplJ] = await Promise.all([
+      call("listRecords", { objectSlug: "inspections" }),
+      call("listRecords", { objectSlug: "people" }),
+    ]);
+    if (!inspJ?.ok) return { ok: false, data: [] };
+    const rid = r => r?.id?.record_id ?? null;
+    const rref = (r, f) => r?.values?.[f]?.[0]?.target_record_id ?? null;
+    const rval = (r, f) => r?.values?.[f]?.[0]?.value ?? null;
+    const people = {};
+    (pplJ?.data || []).forEach(p => { const id = rid(p); if (id) people[id] = p; });
+    const pnm = p => { const n = p?.values?.name?.[0]; return n ? `${n.first_name || ""} ${n.last_name || ""}`.trim() : ""; };
+    const pph = p => p?.values?.phone_numbers?.[0]?.phone_number ?? "";
+    const pem = p => p?.values?.email_addresses?.[0]?.email_address ?? "";
+    const data = [];
+    (inspJ.data || []).forEach(insp => {
+      if (rref(insp, "open_home") !== openHomeId) return;
+      const cid = rref(insp, "contact");
+      const c = cid ? people[cid] : null;
+      data.push({
+        id: rid(insp),
+        contactId: cid,
+        name: c ? pnm(c) : "Unknown",
+        mobile: c ? pph(c) : "",
+        email: c ? pem(c) : "",
+        interest: (rval(insp, "interest") || "cool").toLowerCase(),
+        contractSent: !!rval(insp, "contract_sent"),
+        contractSentTime: rval(insp, "contract_sent_time") || null,
+        smsSent: !!rval(insp, "sms_sent"),
+        resendId: rval(insp, "resend_id") || null,
+        notes: rval(insp, "notes") || "",
+      });
+    });
+    return { ok: true, data: data.map(normBuyer) };
   },
   async findPersonByPhone(phone) {
     const j = await call("lookupBuyer", { phone });
@@ -102,7 +138,9 @@ const Attio = {
     return j?.ok ? { ok: true, id: j.id } : { ok: false };
   },
   async updateInspection(id, u) {
-    const j = await call("updateInspection", { id, ...u });
+    // Backend Code node reads `body.updates`, so nest the fields there to make
+    // the PATCH actually persist; keep them flat too for the documented contract.
+    const j = await call("updateInspection", { id, ...u, updates: u });
     return !!j?.ok;
   },
   async createProperty(p) {
