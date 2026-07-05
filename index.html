@@ -21,23 +21,32 @@
 const { useState, useEffect } = React;
 
 const API_BASE = "https://savvi.app.n8n.cloud/webhook/savvi-app";
-const PINS = { "5853": "Luke", "7267": "Sam" };
+let SESSION_TOKEN = null;
 const BLUE = "#8AACE3", BLUE_D = "#5A7FBF", BROWN = "#2C1A0E", BROWN_L = "#A89070",
       LINEN = "#F4F0E8", SAND_D = "#DDD6C6", WHITE = "#FFF", CREAM = "#FFF4D5";
 
 async function call(action, params) {
   try {
-    const r = await fetch(API_BASE, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...(params||{}) }) });
+    const r = await fetch(API_BASE, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, token: SESSION_TOKEN, ...(params||{}) }) });
     return await r.json();
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
+async function login(pin) {
+  try {
+    const r = await fetch(API_BASE, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "login", pin }) });
+    const j = await r.json();
+    if (j && j.ok && j.token) { SESSION_TOKEN = j.token; return j.who; }
+    return null;
+  } catch (e) { return null; }
+}
+
 function Pin({ onUnlock }) {
   const [d, setD] = useState(""); const [err, setErr] = useState(false);
-  const press = (n) => {
+  const press = async (n) => {
     if (d.length >= 4) return;
     const next = d + n; setD(next); setErr(false);
-    if (next.length === 4) { const who = PINS[next]; if (who) onUnlock(who); else { setErr(true); setTimeout(() => setD(""), 500); } }
+    if (next.length === 4) { const who = await login(next); if (who) onUnlock(who); else { setErr(true); setTimeout(() => setD(""), 500); } }
   };
   const btn = { background: WHITE, border: "1px solid " + SAND_D, borderRadius: 16, padding: 18, fontSize: 24, fontWeight: 700, color: BROWN, cursor: "pointer", fontFamily: "Georgia, serif" };
   return (
