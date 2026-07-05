@@ -5,6 +5,26 @@
 
 ---
 
+## SESSION UPDATE — 5 Jul 2026 (secure rebuild built & verified; PR open)
+
+The full secure app is **built and verified on branch `rebuild/vite-secure`**; a PR to `main` is open. **Merging it deploys the full app live** (Pages source is now "GitHub Actions"; `deploy.yml` builds `dist` and publishes).
+
+**Done & verified:** Vite scaffold (§8); §7 rewire (whole prototype UI → one token-auth `call()` to the webhook, zero keys in the bundle, PIN server-validated); verified in preview — login, opens-by-day, listings, register buyer (persists), buyer list per open, interest/notes persist, phone lookup, vendor-update (mock fallback). CI build green.
+
+**Two backend bugs found (by reading the Code node) — fixed CLIENT-SIDE, backend untouched:**
+- **`updateInspection`** reads `body.updates` but the client sent fields flat → PATCH was a silent no-op. Client now sends fields nested under `updates` (kept flat too). *Proper backend fix:* change `const u = body.updates || {}` → `const u = body.updates || body`.
+- **`getInspections`** filter `{ open_home: { record_id: body.openHomeId } }` is invalid Attio syntax → errors (or, param absent, returns ALL rows). Client now rebuilds the per-open list from `listRecords` (inspections joined to people, filtered by `open_home` ref). **Stopgap** — fetches up to 200 people, won't scale past that; buyer-load is a bit slow. *Proper backend fix:* replace the query options with `{ limit: 500 }` and add `if (ref(insp,"open_home") !== body.openHomeId) continue;` at the top of the loop.
+
+**Deferred / still open:**
+- **AI** (buyer profile, vendor summary, address lookup): app calls `aiBuyerProfile` / `aiVendorSummary` / `aiAddressLookup` with graceful mock fallback. Real AI needs an **Anthropic key added to n8n** + those 3 backend actions built (`anthropic` isn't in the Code node yet).
+- **Keys:** **Attio rotated** — the leaked token (which the backend was actually running on) was revoked, backend re-pointed to a clean token + republished, app restored. **Resend + MessageMedia keys are still LIVE** — Luke chose to defer rotating them.
+- **n8n is on a TRIAL plan → the public API is paywalled**, so backend edits must be done in the Code-node UI (can't PATCH via API). The backend depends on this workspace — upgrade or self-host before the trial lapses or the app goes dark.
+- **SMS / contract:** wired and structurally verified; fire only when a property has `instagram_video_url` / `contract_url`. Verify live once a listing carries a contract URL.
+- Toolchain on Luke's Mac: **no system Node/npm/gh** — Node installed userspace at `~/.local/node-v20.18.1-darwin-arm64/bin`.
+- Test cruft in Attio (remove via Attio web UI): person `1e479fda…` ("TEST — Claude Verify") + inspection `de37f030…`.
+
+---
+
 ## 0. TL;DR for a fresh Claude Code session
 - This repo is the **Savvi Open Home app** — a mobile web app agents use at open-for-inspections to register buyers, auto-send SMS, email contracts, take notes, and generate AI vendor updates.
 - The app must hold **ZERO secret keys**. All Attio/MessageMedia/Resend/Anthropic calls go through a **secure n8n backend** (a single webhook) that holds the keys server-side and requires a session token.
