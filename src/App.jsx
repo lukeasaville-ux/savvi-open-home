@@ -194,9 +194,23 @@ const Attio = {
   },
 };
 
+// Normalise an Australian mobile to E.164 (+61…) so the SMS gateway accepts it.
+function toE164AU(raw) {
+  let s = String(raw || "").replace(/[^\d+]/g, "");   // strip spaces, dashes, parens
+  if (!s) return "";
+  if (s.startsWith("+")) return s;                     // already international
+  if (s.startsWith("0011")) s = "+" + s.slice(4);      // AU intl dial-out prefix
+  else if (s.startsWith("61")) s = "+" + s;            // 61… → +61…
+  else if (s.startsWith("0")) s = "+61" + s.slice(1);  // 04xxxxxxxx → +614xxxxxxxx
+  else if (s.length === 9 && s.startsWith("4")) s = "+61" + s; // 4xxxxxxxx → +614xxxxxxxx
+  else s = "+" + s;                                    // fallback: assume already has country code
+  return s;
+}
+
 const MM = {
   async send({ toPhone, firstName, address, igUrl, contractUrl }) {
-    const j = await call("sendSms", { toPhone, firstName, address, igUrl, contractUrl });
+    const dest = toE164AU(toPhone);
+    const j = await call("sendSms", { toPhone: dest, firstName, address, igUrl, contractUrl });
     return { ok: !!j?.ok, error: j?.error };
   },
 };
