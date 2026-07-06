@@ -9,7 +9,16 @@ import wordmark from "./assets/savvi-wordmark.png";
    Anthropic keys server-side and requires a session token.
 ════════════════════════════════════════════ */
 const API_BASE = "https://savvi.app.n8n.cloud/webhook/savvi-app";
+// Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
+try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
+function persistSession(token, who) {
+  SESSION_TOKEN = token || null;
+  try {
+    if (token) { sessionStorage.setItem("savvi_tok", token); if (who) sessionStorage.setItem("savvi_who", who); }
+    else { sessionStorage.removeItem("savvi_tok"); sessionStorage.removeItem("savvi_who"); }
+  } catch (e) {}
+}
 
 async function call(action, params = {}) {
   try {
@@ -26,9 +35,10 @@ async function call(action, params = {}) {
 
 async function login(pin) {
   const j = await call("login", { pin });
-  if (j?.ok && j.token) { SESSION_TOKEN = j.token; return j.who; }
+  if (j?.ok && j.token) { persistSession(j.token, j.who); return j.who; }
   return null;
 }
+function logout() { persistSession(null); }
 
 const melbToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Melbourne" });
 
@@ -247,9 +257,10 @@ const BLUE="#8AACE3",BLUE_D="#5A7FBF",BROWN="#311E10",BROWN_M="#7A5C48",BROWN_L=
 const CSS=`
 @import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700;6..72,800&family=Inter:wght@300;400;500;600;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{overscroll-behavior:none;}
 body{background:${LINEN};font-family:'Inter',sans-serif;color:${BROWN};}
-.app{max-width:430px;margin:0 auto;min-height:100vh;background:${LINEN};position:relative;overflow:hidden;}
-.scr{position:absolute;inset:0;transition:transform .34s cubic-bezier(.4,0,.2,1),opacity .34s ease;background:${LINEN};overflow-y:auto;overflow-x:hidden;}
+.app{max-width:430px;margin:0 auto;min-height:100vh;background:${LINEN};position:relative;overflow:hidden;overscroll-behavior:none;}
+.scr{position:absolute;inset:0;transition:transform .34s cubic-bezier(.4,0,.2,1),opacity .34s ease;background:${LINEN};overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;}
 .scr.on{transform:translateX(0);opacity:1;}
 .scr.ol{transform:translateX(-100%);opacity:0;pointer-events:none;}
 .scr.or{transform:translateX(100%);opacity:0;pointer-events:none;}
@@ -333,7 +344,7 @@ body{background:${LINEN};font-family:'Inter',sans-serif;color:${BROWN};}
 /* overlay + sheet */
 .ov{position:fixed;inset:0;background:rgba(20,10,4,.4);z-index:100;display:flex;align-items:flex-end;transition:opacity .25s ease;}
 .ov.h{opacity:0;pointer-events:none;}.ov.s{opacity:1;}
-.sh{background:${WHITE};border-radius:22px 22px 0 0;width:100%;max-width:430px;transform:translateY(100%);transition:transform .33s cubic-bezier(.4,0,.2,1);max-height:92vh;overflow-y:auto;padding-bottom:44px;}
+.sh{background:${WHITE};border-radius:22px 22px 0 0;width:100%;max-width:430px;transform:translateY(100%);transition:transform .33s cubic-bezier(.4,0,.2,1);max-height:92vh;overflow-y:auto;overscroll-behavior:contain;padding-bottom:44px;}
 .ov.s .sh{transform:translateY(0);}
 .hndl{width:36px;height:4px;background:${SAND_D};border-radius:2px;margin:12px auto 0;}
 .sh-ttl{font-family:'Newsreader',serif;font-size:22px;font-weight:700;color:${BROWN};padding:15px 20px 2px;}
@@ -599,10 +610,11 @@ function AddSheet({open,onClose,openHome,onSave}){
     },400);
   },[mobile]);
 
-  const pick=c=>{setSelected(c);setName(c.name);setEmail(c.email||"");setStep("interest");};
+  const pick=c=>{setSelected(c);setName(c.name);setEmail(c.email||"");setStep("confirm");};
 
   const save=async()=>{
-    if(!interest||saving)return;
+    if(saving)return;
+    const interestVal=interest||"cool";  // interest is optional at registration; set later from the profile
     setSaving(true);
 
     let contactId=selected?.id;
@@ -620,7 +632,7 @@ function AddSheet({open,onClose,openHome,onSave}){
           contactId,
           propertyId:openHome?.propertyId,
           openHomeId:openHome?.id,
-          interest,
+          interest:interestVal,
         });
         if(r.ok) inspectionId=r.id;
       }
@@ -641,7 +653,7 @@ function AddSheet({open,onClose,openHome,onSave}){
     onSave({
       id:inspectionId||"b"+Date.now(),
       contactId:contactId||"local_"+Date.now(),
-      name,email,mobile,interest,
+      name,email,mobile,interest:interestVal,
       time:fmtTs(),
       initials:mkI(name),col,
       contractSent:false,contractSentTime:null,offered:false,
@@ -656,8 +668,8 @@ function AddSheet({open,onClose,openHome,onSave}){
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
     <div className="sh" onClick={e=>e.stopPropagation()}>
       <div className="hndl"/>
-      <div className="sh-ttl">{step==="mobile"?"Add buyer":step==="newdetails"?"New contact":"Interest level"}</div>
-      <div className="sh-sub">{step==="mobile"?openHome?.address:step==="newdetails"?"Fill in their details":name?`How interested is ${name.split(" ")[0]}?`:""}</div>
+      <div className="sh-ttl">{step==="mobile"?"Add buyer":step==="newdetails"?"New contact":"Register buyer"}</div>
+      <div className="sh-sub">{step==="mobile"?openHome?.address:step==="newdetails"?"Fill in their details":"Confirm and register"}</div>
 
       {step==="mobile"&&<>
         <div className="fg"><label className="fl">Mobile number</label>
@@ -682,26 +694,23 @@ function AddSheet({open,onClose,openHome,onSave}){
       {step==="newdetails"&&<>
         <div className="fg"><label className="fl">Full name</label><input className="fi" type="text" placeholder="e.g. Tom Nguyen" value={name} onChange={e=>setName(e.target.value)} autoFocus/></div>
         <div className="fg"><label className="fl">Email</label><input className="fi" type="email" placeholder="name@email.com" value={email} onChange={e=>setEmail(e.target.value)}/></div>
-        <div className="fg" style={{paddingBottom:0}}><button className="btn-dark" style={{margin:0,width:"100%"}} disabled={!name} onClick={()=>{if(name)setStep("interest");}}>Next →</button></div>
+        <div className="fg" style={{paddingBottom:0}}><button className="btn-dark" style={{margin:0,width:"100%"}} disabled={!name||saving} onClick={()=>{if(name)save();}}>{saving?<><span className="sp-sm"/>Registering…</>:"Register buyer"}</button></div>
+        {openHome?.igUrl&&<p style={{fontSize:12,color:GRN,textAlign:"center",padding:"10px 16px 0"}}>📱 SMS with the walkthrough video link will be sent automatically</p>}
       </>}
 
-      {step==="interest"&&<>
+      {step==="confirm"&&<>
         <div className="sel-c">
           <div className="av" style={{background:selected?.col||BLUE_D,width:44,height:44,fontSize:16}}>{mkI(name)}</div>
           <div style={{flex:1}}><div className="sel-nm">{name}</div><div className="sel-dt">{mobile}{email?` · ${email}`:""}</div></div>
           <span className="sel-ch" onClick={()=>setStep(selected?"mobile":"newdetails")}>Change</span>
         </div>
-        <div className="igr">{ISET.map(o=><div key={o.v} className={`io ${interest===o.v?(o.v==="hot"?"sh":o.v==="watching"?"sw":"sc"):""}`} onClick={()=>setInterest(o.v)}>
-          <div className="ie">{o.e}</div><div className="il">{o.l}</div><div className="is">{o.s}</div>
-        </div>)}</div>
         <div className="fg" style={{paddingBottom:0}}>
-          <button className="btn-dark" style={{margin:0,width:"100%"}} disabled={!interest||saving} onClick={save}>
-            {saving?<><span className="sp-sm"/>Saving…</>:"Save buyer"}
+          <button className="btn-dark" style={{margin:0,width:"100%"}} disabled={saving} onClick={save}>
+            {saving?<><span className="sp-sm"/>Registering…</>:"Register buyer"}
           </button>
         </div>
-        {openHome?.igUrl&&<p style={{fontSize:12,color:GRN,textAlign:"center",padding:"10px 16px 0"}}>
-          📱 SMS with video + contract link will fire automatically
-        </p>}
+        <p style={{fontSize:12,color:BROWN_L,textAlign:"center",padding:"10px 16px 0"}}>You can set how interested they are later, from their profile.</p>
+        {openHome?.igUrl&&<p style={{fontSize:12,color:GRN,textAlign:"center",padding:"6px 16px 0"}}>📱 SMS with the walkthrough video link will be sent automatically</p>}
       </>}
       <div style={{height:20}}/>
     </div>
@@ -1201,7 +1210,7 @@ function QuickContractSheet({ open, prop, agentName, onClose, onSent }) {
    MAIN APP
 ════════════════════════════════════════════ */
 export default function App(){
-  const[agentName,setAgentName]=useState("");
+  const[agentName,setAgentName]=useState(()=>{ try { return SESSION_TOKEN ? (sessionStorage.getItem("savvi_who")||"") : ""; } catch(e){ return ""; } });
   const[screen,setScreen]=useState("home");
   const[openHome,setOpenHome]=useState(null);
   const[openHomes,setOpenHomes]=useState([]);
@@ -1372,7 +1381,7 @@ export default function App(){
           {!loading&&<div style={{display:"flex",gap:8,alignItems:"center"}}>
           <div className="opens-chip">{visibleOpens.length} open{visibleOpens.length!==1?"s":""} this week</div>
           <button onClick={()=>setShowAddListing(true)} style={{background:AMBER,border:"none",borderRadius:"100px",padding:"7px 13px",fontSize:12,fontWeight:700,color:ESPRESSO,cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"}}>+ Add listing</button>
-          <button onClick={()=>setAgentName("")} style={{background:"transparent",border:"1px solid rgba(255,244,213,.28)",borderRadius:"100px",padding:"7px 12px",fontSize:11,fontWeight:600,color:CREAM,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Log out</button>
+          <button onClick={()=>{logout();setAgentName("");}} style={{background:"transparent",border:"1px solid rgba(255,244,213,.28)",borderRadius:"100px",padding:"7px 12px",fontSize:11,fontWeight:600,color:CREAM,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Log out</button>
         </div>}
         </div>
       </div>
