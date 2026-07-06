@@ -132,6 +132,40 @@ const Attio = {
     });
     return { ok: true, data: data.map(normBuyer) };
   },
+  // One fetch → "at this open" + "all buyers ever registered to this property" (deduped by contact).
+  async getBuyersFor(openHomeId, propertyId) {
+    const [inspJ, pplJ] = await Promise.all([
+      call("listRecords", { objectSlug: "inspections" }),
+      call("listRecords", { objectSlug: "people" }),
+    ]);
+    if (!inspJ?.ok) return { ok: false, open: [], property: [] };
+    const rid = r => r?.id?.record_id ?? null;
+    const rref = (r, f) => r?.values?.[f]?.[0]?.target_record_id ?? null;
+    const rval = (r, f) => r?.values?.[f]?.[0]?.value ?? null;
+    const people = {};
+    (pplJ?.data || []).forEach(p => { const id = rid(p); if (id) people[id] = p; });
+    const pnm = p => { const n = p?.values?.name?.[0]; return n ? `${n.first_name || ""} ${n.last_name || ""}`.trim() : ""; };
+    const pph = p => p?.values?.phone_numbers?.[0]?.phone_number ?? "";
+    const pem = p => p?.values?.email_addresses?.[0]?.email_address ?? "";
+    const build = insp => {
+      const cid = rref(insp, "contact"); const c = cid ? people[cid] : null;
+      return {
+        id: rid(insp), contactId: cid,
+        name: c ? pnm(c) : "Unknown", mobile: c ? pph(c) : "", email: c ? pem(c) : "",
+        interest: (rval(insp, "interest") || "cool").toLowerCase(),
+        contractSent: !!rval(insp, "contract_sent"), contractSentTime: rval(insp, "contract_sent_time") || null,
+        smsSent: !!rval(insp, "sms_sent"), resendId: rval(insp, "resend_id") || null,
+        notes: rval(insp, "notes") || "", _createdAt: insp?.created_at || null,
+      };
+    };
+    const open = [], propMap = {};
+    (inspJ.data || []).forEach(insp => {
+      const oh = rref(insp, "open_home"), pr = rref(insp, "property"), b = build(insp);
+      if (openHomeId && oh === openHomeId) open.push(b);
+      if (propertyId && pr === propertyId) { const k = b.contactId || b.id; if (!propMap[k]) propMap[k] = b; }
+    });
+    return { ok: true, open: open.map(normBuyer), property: Object.values(propMap).map(normBuyer) };
+  },
   async findPersonByPhone(phone) {
     const j = await call("lookupBuyer", { phone });
     if (!j?.ok) return null;
@@ -250,15 +284,15 @@ const DEMO_HISTORY={c1:[{addr:"34/2 Power Street",suburb:"Hawthorn East",date:"5
    CSS
 ════════════════════════════════════════════ */
 const BLUE="#8AACE3",BLUE_D="#5A7FBF",BROWN="#311E10",BROWN_M="#7A5C48",BROWN_L="#A89070",
-      ESPRESSO="#311E10",ESPRESSO_2="#3F2817",AMBER="#E59239",AMBER_D="#C9772A",
+      ESPRESSO="#311E10",ESPRESSO_2="#3F2817",AMBER="#FE5310",AMBER_D="#D8410A",
       WHITE="#FFFFFF",LINEN="#F4F0E8",SAND="#EAE4D8",SAND_D="#DDD6C6",
       GRN="#2D8A5E",GRN_BG="#E8F7EE",CREAM="#FFF4D5";
 
 const CSS=`
-@import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700;6..72,800&family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700;6..72,800&display=swap');
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
 html,body{overscroll-behavior:none;}
-body{background:${LINEN};font-family:'Inter',sans-serif;color:${BROWN};}
+body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BROWN};}
 .app{max-width:430px;margin:0 auto;min-height:100vh;background:${LINEN};position:relative;overflow:hidden;overscroll-behavior:none;}
 .scr{position:absolute;inset:0;transition:transform .34s cubic-bezier(.4,0,.2,1),opacity .34s ease;background:${LINEN};overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;}
 .scr.on{transform:translateX(0);opacity:1;}
@@ -282,7 +316,7 @@ body{background:${LINEN};font-family:'Inter',sans-serif;color:${BROWN};}
 .state-ic{font-size:40px;margin-bottom:12px;}
 .state-ttl{font-family:'Newsreader',serif;font-size:20px;font-weight:700;color:${BROWN};margin-bottom:6px;}
 .state-sub{font-size:14px;color:${BROWN_L};line-height:1.6;margin-bottom:20px;}
-.state-btn{background:${BLUE};color:${WHITE};border:none;border-radius:12px;padding:13px 22px;font-family:'Inter',sans-serif;font-size:14px;font-weight:600;cursor:pointer;}
+.state-btn{background:${BLUE};color:${WHITE};border:none;border-radius:12px;padding:13px 22px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:14px;font-weight:600;cursor:pointer;}
 .demo-banner{background:${CREAM};border:1px solid ${SAND_D};border-radius:11px;margin:0 14px 10px;padding:10px 14px;font-size:12px;color:${BROWN_M};line-height:1.5;}
 .demo-banner strong{color:${BROWN};font-weight:600;}
 /* property card */
@@ -305,7 +339,7 @@ body{background:${LINEN};font-family:'Inter',sans-serif;color:${BROWN};}
 @keyframes spin{to{transform:rotate(360deg);}}
 /* nav */
 .nav-hdr{background:${WHITE};padding:0 20px 14px;border-bottom:1px solid ${SAND_D};}
-.back{display:flex;align-items:center;gap:5px;color:${BLUE_D};font-size:13px;font-weight:600;cursor:pointer;padding:10px 0 0;border:none;background:none;font-family:'Inter',sans-serif;}
+.back{display:flex;align-items:center;gap:5px;color:${BLUE_D};font-size:13px;font-weight:600;cursor:pointer;padding:10px 0 0;border:none;background:none;font-family:'Neue Haas Unica Pro',sans-serif;}
 .back:active{opacity:.6;}
 /* open home header */
 .prop-hdr{background:${SAND};padding:18px 20px 20px;border-bottom:1px solid ${SAND_D};}
@@ -323,9 +357,9 @@ body{background:${LINEN};font-family:'Inter',sans-serif;color:${BROWN};}
 .sl{font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:${BROWN_L};}
 /* actions */
 .acts{display:flex;gap:8px;padding:14px 14px 0;}
-.btn-blue{background:${BLUE};color:${WHITE};border:none;border-radius:12px;padding:14px 16px;font-family:'Inter',sans-serif;font-size:14px;font-weight:600;cursor:pointer;flex:1;display:flex;align-items:center;justify-content:center;gap:7px;box-shadow:0 3px 12px ${BLUE}45;transition:transform .12s;}
+.btn-blue{background:${BLUE};color:${WHITE};border:none;border-radius:12px;padding:14px 16px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:14px;font-weight:600;cursor:pointer;flex:1;display:flex;align-items:center;justify-content:center;gap:7px;box-shadow:0 3px 12px ${BLUE}45;transition:transform .12s;}
 .btn-blue:active{transform:scale(.97);}
-.btn-outline{background:${WHITE};color:${BLUE_D};border:1.5px solid ${BLUE};border-radius:12px;padding:14px 16px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:transform .12s;}
+.btn-outline{background:${WHITE};color:${BLUE_D};border:1.5px solid ${BLUE};border-radius:12px;padding:14px 16px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:transform .12s;}
 .btn-outline:active{transform:scale(.97);}
 /* buyer list */
 .blist{padding:14px 14px 100px;}
@@ -352,7 +386,7 @@ body{background:${LINEN};font-family:'Inter',sans-serif;color:${BROWN};}
 /* form */
 .fg{padding:0 16px 12px;}
 .fl{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:${BROWN_L};margin-bottom:7px;display:block;}
-.fi{width:100%;background:${LINEN};border:1.5px solid ${SAND_D};border-radius:11px;padding:13px 15px;font-family:'Inter',sans-serif;font-size:16px;color:${BROWN};outline:none;transition:border-color .18s,background .18s;-webkit-appearance:none;}
+.fi{width:100%;background:${LINEN};border:1.5px solid ${SAND_D};border-radius:11px;padding:13px 15px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:16px;color:${BROWN};outline:none;transition:border-color .18s,background .18s;-webkit-appearance:none;}
 .fi:focus{border-color:${BLUE};background:${WHITE};}.fi::placeholder{color:#C0B8A8;}
 .fi.big{font-size:21px;font-weight:600;}
 /* lookup */
@@ -380,12 +414,12 @@ body{background:${LINEN};font-family:'Inter',sans-serif;color:${BROWN};}
 .io.sh{border-color:#C0392B;background:#FDECEA;}.io.sw{border-color:#D4860A;background:#FEF9E7;}.io.sc{border-color:#8E9EAB;background:#F0F0F0;}
 .ie{font-size:20px;margin-bottom:3px;}.il{font-size:12px;font-weight:700;color:${BROWN};}.is{font-size:10px;color:${BROWN_L};margin-top:1px;}
 /* buttons */
-.btn-dark{background:${BROWN};color:${WHITE};border:none;border-radius:12px;padding:14px;font-family:'Inter',sans-serif;font-size:14px;font-weight:600;cursor:pointer;width:100%;transition:transform .12s;-webkit-appearance:none;}
+.btn-dark{background:${BROWN};color:${WHITE};border:none;border-radius:12px;padding:14px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:14px;font-weight:600;cursor:pointer;width:100%;transition:transform .12s;-webkit-appearance:none;}
 .btn-dark:active{transform:scale(.97);}.btn-dark:disabled{opacity:.3;}
-.btn-ghost{background:${LINEN};color:${BROWN_M};border:1px solid ${SAND_D};border-radius:12px;padding:12px;font-family:'Inter',sans-serif;font-size:13px;cursor:pointer;width:100%;}
-.btn-cream{background:${CREAM};color:${BROWN};border:1px solid ${SAND_D};border-radius:12px;padding:13px;font-family:'Inter',sans-serif;font-size:13px;font-weight:500;cursor:pointer;width:100%;transition:transform .12s;}
+.btn-ghost{background:${LINEN};color:${BROWN_M};border:1px solid ${SAND_D};border-radius:12px;padding:12px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:13px;cursor:pointer;width:100%;}
+.btn-cream{background:${CREAM};color:${BROWN};border:1px solid ${SAND_D};border-radius:12px;padding:13px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:13px;font-weight:500;cursor:pointer;width:100%;transition:transform .12s;}
 .btn-cream:active{transform:scale(.97);}
-.btn-grn{background:${GRN};color:${WHITE};border:none;border-radius:12px;padding:14px;font-family:'Inter',sans-serif;font-size:14px;font-weight:600;cursor:pointer;width:100%;transition:transform .12s;}
+.btn-grn{background:${GRN};color:${WHITE};border:none;border-radius:12px;padding:14px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:14px;font-weight:600;cursor:pointer;width:100%;transition:transform .12s;}
 .btn-grn:active{transform:scale(.97);}
 /* detail */
 .det-top{padding:14px 18px 14px;border-bottom:1px solid ${SAND_D};}
@@ -416,10 +450,10 @@ body{background:${LINEN};font-family:'Inter',sans-serif;color:${BROWN};}
 .ctr-box.sent{background:${GRN_BG};border:1px solid #A9DFBF;}.ctr-box.unsent{background:${LINEN};border:1px solid ${SAND_D};}
 .ctr-lbl{font-size:13px;font-weight:600;}.ctr-lbl.sent{color:${GRN};}.ctr-lbl.unsent{color:${BROWN_M};}
 .ctr-sub{font-size:11px;color:${BROWN_L};margin-top:1px;}
-.ctr-send{margin-left:auto;background:${BLUE};color:${WHITE};border:none;border-radius:8px;padding:7px 12px;font-family:'Inter',sans-serif;font-size:12px;font-weight:700;cursor:pointer;}
+.ctr-send{margin-left:auto;background:${BLUE};color:${WHITE};border:none;border-radius:8px;padding:7px 12px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:12px;font-weight:700;cursor:pointer;}
 /* interest change */
 .cgr{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;padding:0 16px 13px;}
-.cb{border:1.5px solid ${SAND_D};background:${LINEN};border-radius:11px;padding:11px 6px;text-align:center;cursor:pointer;font-family:'Inter',sans-serif;transition:all .13s;}
+.cb{border:1.5px solid ${SAND_D};background:${LINEN};border-radius:11px;padding:11px 6px;text-align:center;cursor:pointer;font-family:'Neue Haas Unica Pro',sans-serif;transition:all .13s;}
 .cb:active{transform:scale(.96);}
 .cb.ah{border-color:#C0392B;background:#FDECEA;}.cb.aw{border-color:#D4860A;background:#FEF9E7;}.cb.ac{border-color:#8E9EAB;background:#F0F0F0;}
 /* notes */
@@ -428,13 +462,13 @@ body{background:${LINEN};font-family:'Inter',sans-serif;color:${BROWN};}
 .note-item{background:${LINEN};border-radius:10px;padding:10px 12px;border-left:3px solid ${BLUE}30;}
 .note-txt{font-size:13px;color:${BROWN};line-height:1.45;margin-bottom:3px;}
 .note-ts{font-size:10px;color:#C0B8A8;font-weight:500;}
-.note-area{width:100%;background:${LINEN};border:1.5px solid ${SAND_D};border-radius:11px;padding:11px 13px;font-family:'Inter',sans-serif;font-size:14px;color:${BROWN};outline:none;resize:none;height:76px;line-height:1.5;-webkit-appearance:none;transition:border-color .18s,background .18s;}
+.note-area{width:100%;background:${LINEN};border:1.5px solid ${SAND_D};border-radius:11px;padding:11px 13px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:14px;color:${BROWN};outline:none;resize:none;height:76px;line-height:1.5;-webkit-appearance:none;transition:border-color .18s,background .18s;}
 .note-area:focus{border-color:${BLUE};background:${WHITE};}.note-area::placeholder{color:#C0B8A8;}
 .note-row{display:flex;gap:8px;margin-top:8px;}
-.ns-save{flex:1;background:${BLUE};color:${WHITE};border:none;border-radius:10px;padding:10px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;cursor:pointer;}
+.ns-save{flex:1;background:${BLUE};color:${WHITE};border:none;border-radius:10px;padding:10px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:13px;font-weight:600;cursor:pointer;}
 .ns-save:disabled{opacity:.35;}
-.ns-can{background:${LINEN};color:${BROWN_M};border:1px solid ${SAND_D};border-radius:10px;padding:10px 14px;font-family:'Inter',sans-serif;font-size:13px;cursor:pointer;}
-.add-note-btn{display:flex;align-items:center;gap:10px;padding:11px 13px;border:1.5px dashed ${SAND_D};border-radius:11px;cursor:pointer;background:transparent;width:100%;font-family:'Inter',sans-serif;}
+.ns-can{background:${LINEN};color:${BROWN_M};border:1px solid ${SAND_D};border-radius:10px;padding:10px 14px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:13px;cursor:pointer;}
+.add-note-btn{display:flex;align-items:center;gap:10px;padding:11px 13px;border:1.5px dashed ${SAND_D};border-radius:11px;cursor:pointer;background:transparent;width:100%;font-family:'Neue Haas Unica Pro',sans-serif;}
 .add-note-lbl{font-size:13px;font-weight:500;color:${BROWN_M};}
 .add-note-sub{font-size:11px;color:#C0B8A8;}
 /* history */
@@ -508,7 +542,7 @@ function PinScreen({ onUnlock }) {
     .pg{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;width:100%;max-width:280px;}
     .pb{background:rgba(255,244,213,.07);border:1px solid rgba(255,244,213,.16);border-radius:16px;padding:18px;font-family:'Newsreader',serif;font-size:26px;font-weight:700;color:#FFF4D5;cursor:pointer;text-align:center;transition:transform .1s,background .1s;-webkit-tap-highlight-color:transparent;}
     .pb:active{transform:scale(.93);background:rgba(255,244,213,.16);}
-    .pb.del{font-family:'Inter',sans-serif;font-size:18px;font-weight:600;color:#C9B79A;}
+    .pb.del{font-family:'Neue Haas Unica Pro',sans-serif;font-size:18px;font-weight:600;color:#C9B79A;}
     .pb.empty{background:transparent;border:none;box-shadow:none;cursor:default;}
     .pe{font-size:13px;color:#E86A5C;margin-top:16px;font-weight:500;}
     @keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
@@ -619,6 +653,7 @@ function AddSheet({open,onClose,openHome,onSave}){
 
     let contactId=selected?.id;
     let inspectionId=null;
+    let smsOk=false;
 
     if(!openHome?._demo){
       // Create or use existing Attio person
@@ -636,16 +671,17 @@ function AddSheet({open,onClose,openHome,onSave}){
         });
         if(r.ok) inspectionId=r.id;
       }
-      // Fire SMS
-      if(openHome?.igUrl||openHome?.contractUrl){
-        await MM.send({
+      // Fire the welcome SMS on every registration (walkthrough video link included when the property has one)
+      if(mobile){
+        const sres=await MM.send({
           toPhone:mobile,
           firstName:name.split(" ")[0],
           address:openHome.address,
-          igUrl:openHome.igUrl,
-          contractUrl:openHome.contractUrl,
-        });
-        if(inspectionId) await Attio.updateInspection(inspectionId,{smsSent:true});
+          igUrl:openHome.igUrl||"",
+          contractUrl:openHome.contractUrl||"",
+        }).catch(()=>null);
+        smsOk=!!(sres&&sres.ok);
+        if(inspectionId&&smsOk) await Attio.updateInspection(inspectionId,{smsSent:true});
       }
     }
 
@@ -657,7 +693,7 @@ function AddSheet({open,onClose,openHome,onSave}){
       time:fmtTs(),
       initials:mkI(name),col,
       contractSent:false,contractSentTime:null,offered:false,
-      smsSent:!!(openHome?.igUrl||openHome?.contractUrl),
+      smsSent:smsOk,
       aiProfile:null,notes:[],
       firstSeen:new Date().toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"}),
       _attioInspectionId:inspectionId,
@@ -1228,6 +1264,7 @@ export default function App(){
   const[showCtr,setShowCtr]=useState(false);
   const[ctrBuyer,setCtrBuyer]=useState(null);
   const[allListings,setAllListings]=useState([]);
+  const[propBuyers,setPropBuyers]=useState({});
   const[showQuickContract,setShowQuickContract]=useState(false);
   const[showAddListing,setShowAddListing]=useState(false);
   const[quickContractProp,setQuickContractProp]=useState(null);
@@ -1235,6 +1272,8 @@ export default function App(){
   const today=new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"});
   const visibleOpens = openHomes; // Both agents see all opens
   const pb=openHome?(buyers[openHome.id]||[]):[];
+  const propAll=openHome?(propBuyers[openHome.id]||[]):[];
+  const propExtra=propAll.filter(b=>!pb.some(x=>(x.contactId&&x.contactId===b.contactId)||x.id===b.id));
   const allN=id=>(buyers[id]||[]).length;
 
   // Load open homes on mount
@@ -1263,8 +1302,8 @@ export default function App(){
     setOpenHome(oh);setScreen("open");
     if(!oh._demo&&!buyers[oh.id]){
       setBuyersLoading(true);
-      const r=await Attio.getInspections(oh.id);
-      if(r.ok) setBuyers(p=>({...p,[oh.id]:r.data}));
+      const r=await Attio.getBuyersFor(oh.id, oh.propertyId);
+      if(r.ok){ setBuyers(p=>({...p,[oh.id]:r.open})); setPropBuyers(p=>({...p,[oh.id]:r.property})); }
       setBuyersLoading(false);
     }
   };
@@ -1380,8 +1419,8 @@ export default function App(){
           <div><div className="greeting">Good morning, {agentName}</div><div className="hdate">{today}</div></div>
           {!loading&&<div style={{display:"flex",gap:8,alignItems:"center"}}>
           <div className="opens-chip">{visibleOpens.length} open{visibleOpens.length!==1?"s":""} this week</div>
-          <button onClick={()=>setShowAddListing(true)} style={{background:AMBER,border:"none",borderRadius:"100px",padding:"7px 13px",fontSize:12,fontWeight:700,color:ESPRESSO,cursor:"pointer",fontFamily:"'Inter',sans-serif",whiteSpace:"nowrap"}}>+ Add listing</button>
-          <button onClick={()=>{logout();setAgentName("");}} style={{background:"transparent",border:"1px solid rgba(255,244,213,.28)",borderRadius:"100px",padding:"7px 12px",fontSize:11,fontWeight:600,color:CREAM,cursor:"pointer",fontFamily:"'Inter',sans-serif"}}>Log out</button>
+          <button onClick={()=>setShowAddListing(true)} style={{background:AMBER,border:"none",borderRadius:"100px",padding:"7px 13px",fontSize:12,fontWeight:700,color:ESPRESSO,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",whiteSpace:"nowrap"}}>+ Add listing</button>
+          <button onClick={()=>{logout();setAgentName("");}} style={{background:"transparent",border:"1px solid rgba(255,244,213,.28)",borderRadius:"100px",padding:"7px 12px",fontSize:11,fontWeight:600,color:CREAM,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Log out</button>
         </div>}
         </div>
       </div>
@@ -1510,6 +1549,26 @@ export default function App(){
           </div>
           {(b.notes||[]).length>0&&<div className="row-note">{b.notes[b.notes.length-1].text}</div>}
         </div>)}
+
+        {!buyersLoading&&propExtra.length>0&&<>
+          <div className="sec-lbl" style={{padding:"20px 0 4px"}}>All buyers · this property</div>
+          <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Everyone registered to this property to date — call back, add notes or send a contract any day.</div>
+          {propExtra.map(b=><div key={"pb"+b.id} className="brow" onClick={()=>{setActive(b);setShowDetail(true);}}>
+            <div className="brow-top">
+              <div className="av" style={{background:b.col,width:42,height:42,fontSize:17}}>{b.initials}</div>
+              <div className="bi">
+                <div className="bn">{b.name}</div>
+                <div className="bs">{b.mobile}{b.firstSeen?` · ${b.firstSeen}`:""}</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                  {b.contractSent&&<span className="ctr-badge">📄 Contract sent {b.contractSentTime}</span>}
+                  {b.smsSent&&<span className="sms-badge">📱 SMS sent</span>}
+                </div>
+              </div>
+              <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>
+            </div>
+            {(b.notes||[]).length>0&&<div className="row-note">{b.notes[b.notes.length-1].text}</div>}
+          </div>)}
+        </>}
       </div>
     </div>}
 
