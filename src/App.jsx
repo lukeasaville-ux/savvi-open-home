@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import wordmark from "./assets/savvi-wordmark.png";
 
 
 /* ════════════════════════════════════════════
@@ -238,7 +239,8 @@ const DEMO_HISTORY={c1:[{addr:"34/2 Power Street",suburb:"Hawthorn East",date:"5
 /* ════════════════════════════════════════════
    CSS
 ════════════════════════════════════════════ */
-const BLUE="#8AACE3",BLUE_D="#5A7FBF",BROWN="#2C1A0E",BROWN_M="#7A5C48",BROWN_L="#A89070",
+const BLUE="#8AACE3",BLUE_D="#5A7FBF",BROWN="#311E10",BROWN_M="#7A5C48",BROWN_L="#A89070",
+      ESPRESSO="#311E10",ESPRESSO_2="#3F2817",AMBER="#E59239",AMBER_D="#C9772A",
       WHITE="#FFFFFF",LINEN="#F4F0E8",SAND="#EAE4D8",SAND_D="#DDD6C6",
       GRN="#2D8A5E",GRN_BG="#E8F7EE",CREAM="#FFF4D5";
 
@@ -252,16 +254,17 @@ body{background:${LINEN};font-family:'DM Sans',sans-serif;color:${BROWN};}
 .scr.ol{transform:translateX(-100%);opacity:0;pointer-events:none;}
 .scr.or{transform:translateX(100%);opacity:0;pointer-events:none;}
 /* status */
-.sbar{height:44px;background:${WHITE};display:flex;align-items:center;justify-content:space-between;padding:0 20px;border-bottom:1px solid ${SAND_D};position:sticky;top:0;z-index:50;}
-.sbar-t{color:${BROWN};font-weight:600;font-size:14px;}
-.sbar-i{display:flex;gap:6px;}.sbar-i svg{width:15px;height:15px;fill:${BROWN};}
+.sbar{height:44px;background:${ESPRESSO};display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:50;}
+.sbar-t{color:${CREAM};font-weight:600;font-size:14px;}
+.sbar-i{display:flex;gap:6px;}.sbar-i svg{width:15px;height:15px;fill:${CREAM};}
 /* home */
-.home-hdr{background:${WHITE};padding:24px 20px 20px;border-bottom:1px solid ${SAND_D};}
-.logo{font-family:'Fraunces',serif;font-size:36px;font-weight:900;color:${BLUE};letter-spacing:-1px;margin-bottom:16px;}
-.agent-row{display:flex;align-items:center;justify-content:space-between;}
-.greeting{font-size:11px;font-weight:600;letter-spacing:.9px;text-transform:uppercase;color:${BROWN_L};margin-bottom:3px;}
-.hdate{font-family:'Fraunces',serif;font-size:19px;font-weight:700;color:${BROWN};}
-.opens-chip{background:${CREAM};border:1px solid ${SAND_D};border-radius:100px;padding:7px 14px;font-size:12px;font-weight:600;color:${BROWN};}
+.home-hdr{background:${ESPRESSO};padding:16px 20px 22px;border-radius:0 0 22px 22px;box-shadow:0 8px 24px rgba(49,30,16,.20);}
+.logo{font-family:'Fraunces',serif;font-size:36px;font-weight:900;color:${CREAM};letter-spacing:-1px;margin-bottom:16px;}
+.logo-img{height:29px;width:auto;display:block;margin-bottom:20px;}
+.agent-row{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.greeting{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${AMBER};margin-bottom:4px;}
+.hdate{font-family:'Fraunces',serif;font-size:20px;font-weight:700;color:${CREAM};}
+.opens-chip{background:rgba(255,244,213,.12);border:1px solid rgba(255,244,213,.24);border-radius:100px;padding:7px 14px;font-size:12px;font-weight:600;color:${CREAM};white-space:nowrap;}
 .sec-lbl{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:${BROWN_L};padding:18px 20px 10px;}
 /* loading/error states */
 .state-box{text-align:center;padding:48px 24px;}
@@ -484,19 +487,19 @@ function PinScreen({ onUnlock }) {
   const del = () => setDigits(d => d.slice(0, -1));
 
   const PCSS = `
-    .pw{min-height:100vh;background:#F4F0E8;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;}
-    .pl{font-family:'Fraunces',serif;font-size:44px;font-weight:900;color:#8AACE3;letter-spacing:-1.5px;margin-bottom:6px;}
-    .ps{font-size:14px;color:#A89070;margin-bottom:48px;}
+    .pw{min-height:100vh;background:#311E10;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;}
+    .pl-img{width:154px;height:auto;margin-bottom:14px;}
+    .ps{font-size:14px;color:#C9B79A;margin-bottom:48px;}
     .pd{display:flex;gap:16px;margin-bottom:48px;}
-    .pdot{width:14px;height:14px;border-radius:50%;border:2px solid #DDD6C6;transition:all .15s;}
-    .pdot.f{background:#8AACE3;border-color:#8AACE3;}
-    .pdot.e{background:#C0392B;border-color:#C0392B;}
+    .pdot{width:14px;height:14px;border-radius:50%;border:2px solid rgba(255,244,213,.30);transition:all .15s;}
+    .pdot.f{background:#E59239;border-color:#E59239;}
+    .pdot.e{background:#E86A5C;border-color:#E86A5C;}
     .pg{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;width:100%;max-width:280px;}
-    .pb{background:#fff;border:1px solid #DDD6C6;border-radius:16px;padding:18px;font-family:'Fraunces',serif;font-size:26px;font-weight:700;color:#2C1A0E;cursor:pointer;text-align:center;box-shadow:0 2px 8px rgba(44,26,14,.06);transition:transform .1s,background .1s;-webkit-tap-highlight-color:transparent;}
-    .pb:active{transform:scale(.93);background:#EAE4D8;}
-    .pb.del{font-family:'DM Sans',sans-serif;font-size:18px;font-weight:600;color:#A89070;}
+    .pb{background:rgba(255,244,213,.07);border:1px solid rgba(255,244,213,.16);border-radius:16px;padding:18px;font-family:'Fraunces',serif;font-size:26px;font-weight:700;color:#FFF4D5;cursor:pointer;text-align:center;transition:transform .1s,background .1s;-webkit-tap-highlight-color:transparent;}
+    .pb:active{transform:scale(.93);background:rgba(255,244,213,.16);}
+    .pb.del{font-family:'DM Sans',sans-serif;font-size:18px;font-weight:600;color:#C9B79A;}
     .pb.empty{background:transparent;border:none;box-shadow:none;cursor:default;}
-    .pe{font-size:13px;color:#C0392B;margin-top:16px;font-weight:500;}
+    .pe{font-size:13px;color:#E86A5C;margin-top:16px;font-weight:500;}
     @keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
     .shk{animation:shake .5s ease;}
   `;
@@ -504,7 +507,7 @@ function PinScreen({ onUnlock }) {
   return (
     <div className="pw">
       <style>{PCSS}</style>
-      <div className="pl">Savvi</div>
+      <img className="pl-img" src={wordmark} alt="Savvi"/>
       <div className="ps">Enter your PIN to continue</div>
       <div className={`pd ${shake ? "shk" : ""}`}>
         {[0,1,2,3].map(i => (
@@ -1363,13 +1366,13 @@ export default function App(){
     <div className={`scr ${screen==="home"?"on":"ol"}`}>
       <SBar/>
       <div className="home-hdr">
-        <div className="logo">Savvi</div>
+        <img className="logo-img" src={wordmark} alt="Savvi"/>
         <div className="agent-row">
           <div><div className="greeting">Good morning, {agentName}</div><div className="hdate">{today}</div></div>
           {!loading&&<div style={{display:"flex",gap:8,alignItems:"center"}}>
           <div className="opens-chip">{visibleOpens.length} open{visibleOpens.length!==1?"s":""} this week</div>
-          <button onClick={()=>setShowAddListing(true)} style={{background:BLUE,border:"none",borderRadius:"100px",padding:"7px 12px",fontSize:12,fontWeight:700,color:"#fff",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>+ Add listing</button>
-          <button onClick={()=>setAgentName("")} style={{background:"transparent",border:`1px solid ${SAND_D}`,borderRadius:"100px",padding:"7px 12px",fontSize:11,fontWeight:600,color:BROWN_L,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>Log out</button>
+          <button onClick={()=>setShowAddListing(true)} style={{background:AMBER,border:"none",borderRadius:"100px",padding:"7px 13px",fontSize:12,fontWeight:700,color:ESPRESSO,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",whiteSpace:"nowrap"}}>+ Add listing</button>
+          <button onClick={()=>setAgentName("")} style={{background:"transparent",border:"1px solid rgba(255,244,213,.28)",borderRadius:"100px",padding:"7px 12px",fontSize:11,fontWeight:600,color:CREAM,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>Log out</button>
         </div>}
         </div>
       </div>
