@@ -1344,9 +1344,13 @@ export default function App(){
   const fmtDay = dateStr => {
     if (!dateStr || dateStr === "unknown") return "Scheduled";
     try {
-      const d = new Date(dateStr + "T00:00:00+11:00");
+      // Parse the YYYY-MM-DD as a plain calendar date (local midnight) — do NOT
+      // force a +11:00 offset: in winter Melbourne is AEST (+10), so that offset
+      // rolled the displayed day back by one.
+      const [yy, mm, dd] = dateStr.split("-").map(Number);
+      const d = new Date(yy, (mm || 1) - 1, dd || 1);
       const today = melbToday();
-      const todayFmt = d.toLocaleDateString("en-AU", { weekday:"long", day:"numeric", month:"long", timeZone:"Australia/Melbourne" });
+      const todayFmt = d.toLocaleDateString("en-AU", { weekday:"long", day:"numeric", month:"long" });
       if (dateStr === today) return "Today — " + todayFmt;
       return todayFmt;
     } catch { return dateStr; }
