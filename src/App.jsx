@@ -1295,19 +1295,20 @@ export default function App(){
     if(!agentName) return;
     (async()=>{
       setLoading(true);setLoadErr("");
-      const [r, lr] = await Promise.all([
-        Attio.getOpenHomesThisWeek(),
-        Attio.getAllActiveListings(),
-      ]);
+      // Only this-week opens are needed to render the home screen — fetch them
+      // first and show them immediately. Box+Dice listings load in the
+      // background (they're only used later for the "add from listings" flow),
+      // so the opens list no longer waits on that slower call.
+      const r = await Attio.getOpenHomesThisWeek();
       if(r.ok&&r.data.length>0){
         setOpenHomes(r.data);setIsDemo(false);
-      } else if(!r.ok){
-        setOpenHomes(DEMO_OPENS);setBuyers(DEMO_BUYERS);setIsDemo(true);
       } else {
         setOpenHomes(DEMO_OPENS);setBuyers(DEMO_BUYERS);setIsDemo(true);
       }
-      if(lr.ok) setAllListings(lr.data);
       setLoading(false);
+      Attio.getAllActiveListings()
+        .then(lr=>{ if(lr.ok) setAllListings(lr.data); })
+        .catch(()=>{});
     })();
   },[agentName]);
 
