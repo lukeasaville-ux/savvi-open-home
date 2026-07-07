@@ -236,12 +236,36 @@ const Attio = {
     return matches.map(m => ({ ...(byId[m.id] || { id: m.id, name: "Unknown buyer", mobile: "", email: "" }), reason: m.reason || "" }));
   },
   async findPersonByPhone(phone) {
+    // 1) Backend exact lookup
     const j = await call("lookupBuyer", { phone });
-    if (!j?.ok) return null;
-    let rec = j.data ?? j.person ?? null;
-    if (Array.isArray(rec)) rec = rec[0];
-    if (!rec || !(rec.id ?? rec.contactId)) return null;
-    return { id: rec.id ?? rec.contactId, name: rec.name, mobile: rec.mobile || phone, email: rec.email || "" };
+    if (j?.ok) {
+      let rec = j.data ?? j.person ?? null;
+      if (Array.isArray(rec)) rec = rec[0];
+      if (rec && (rec.id ?? rec.contactId)) {
+        return { id: rec.id ?? rec.contactId, name: rec.name, mobile: rec.mobile || phone, email: rec.email || "" };
+      }
+    }
+    // 2) Format-tolerant fallback — the backend query is an exact match, so a
+    // stored "+61…" won't match a typed "04…". Compare everyone in the CRM by E.164.
+    const target = toE164AU(phone);
+    if (!target || target.length < 8) return null;
+    if (!_buyerRecCache || (Date.now() - _buyerRecCache.t) >= 60000) {
+      await this.getAllBuyers().catch(() => {});
+    }
+    const ppl = (_buyerRecCache && _buyerRecCache.ppl) || [];
+    for (const p of ppl) {
+      const nums = p?.values?.phone_numbers || [];
+      if (nums.some(x => x && x.phone_number && toE164AU(x.phone_number) === target)) {
+        const n = p?.values?.name?.[0];
+        return {
+          id: p?.id?.record_id,
+          name: n ? `${n.first_name || ""} ${n.last_name || ""}`.trim() : "",
+          mobile: nums[0]?.phone_number || phone,
+          email: p?.values?.email_addresses?.[0]?.email_address || "",
+        };
+      }
+    }
+    return null;
   },
   async createPerson({ name, email, mobile }) {
     const j = await call("createPerson", { name, email, mobile });
