@@ -41,6 +41,9 @@ async function login(pin) {
 function logout() { persistSession(null); }
 
 const melbToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Melbourne" });
+// Current hour (0–23) in Melbourne, so greetings/dates follow AEST/AEDT regardless of device time.
+const melbHour = () => parseInt(new Date().toLocaleString("en-GB", { timeZone: "Australia/Melbourne", hour: "2-digit", hour12: false }), 10) % 24;
+const melbGreeting = () => { const h = melbHour(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; };
 
 /* Normalise a backend inspection into the exact shape the UI expects,
    filling any field the backend doesn't send (notes as array, avatar…). */
@@ -905,15 +908,17 @@ Return ONLY valid JSON: {"bio":"...","stage":"Early|Middle|Late"}`;
       <AiProfile profile={buyer.aiProfile} onRegen={()=>{onSetProfile(propId,buyer.id,null);setTimeout(()=>genProfile(buyer,propId),100);}}/>
       <div style={{height:12}}/>
 
-      <div className="crow" onClick={()=>{navigator.clipboard?.writeText(buyer.mobile).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}}>
+      <a className="crow" href={buyer.mobile?`sms:${toE164AU(buyer.mobile)}`:undefined} style={{textDecoration:"none",color:"inherit",cursor:buyer.mobile?"pointer":"default"}}>
         <div className="ci" style={{background:"#FFF4D5"}}>📱</div>
         <div style={{flex:1}}><div className="ci-l">MOBILE</div><div className="ci-v">{buyer.mobile||"—"}</div></div>
-        <span className="ci-cp">{copied?"Copied ✓":"Copy"}</span>
-      </div>
-      <div className="crow" style={{marginBottom:12}}>
+        {buyer.mobile&&<span className="ci-cp" onClick={e=>{e.preventDefault();e.stopPropagation();navigator.clipboard?.writeText(buyer.mobile).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}}>{copied?"Copied ✓":"Copy"}</span>}
+        {buyer.mobile&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:AMBER}}>Text ›</span>}
+      </a>
+      <a className="crow" href={buyer.email?`mailto:${buyer.email}`:undefined} style={{marginBottom:12,textDecoration:"none",color:"inherit",cursor:buyer.email?"pointer":"default"}}>
         <div className="ci" style={{background:"#FFF4D5"}}>✉️</div>
-        <div><div className="ci-l">EMAIL</div><div className="ci-v">{buyer.email||"—"}</div></div>
-      </div>
+        <div style={{flex:1}}><div className="ci-l">EMAIL</div><div className="ci-v">{buyer.email||"—"}</div></div>
+        {buyer.email&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:AMBER}}>Email ›</span>}
+      </a>
 
       <ContractBox buyer={buyer} propId={propId} onSendContract={onSendContract}/>
 
@@ -1283,7 +1288,7 @@ export default function App(){
   const[showAddListing,setShowAddListing]=useState(false);
   const[quickContractProp,setQuickContractProp]=useState(null);
 
-  const today=new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"});
+  const today=new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long",timeZone:"Australia/Melbourne"});
   const visibleOpens = openHomes; // Both agents see all opens
   const pb=openHome?(buyers[openHome.id]||[]):[];
   const propAll=openHome?(propBuyers[openHome.id]||[]):[];
@@ -1431,7 +1436,7 @@ export default function App(){
       <div className="home-hdr">
         <img className="logo-img" src={wordmark} alt="Savvi"/>
         <div className="agent-row">
-          <div><div className="greeting">Good morning, {agentName}</div><div className="hdate">{today}</div></div>
+          <div><div className="greeting">{melbGreeting()}, {agentName}</div><div className="hdate">{today}</div></div>
           {!loading&&<div style={{display:"flex",gap:8,alignItems:"center"}}>
           <div className="opens-chip">{visibleOpens.length} open{visibleOpens.length!==1?"s":""} this week</div>
           <button onClick={()=>setShowAddListing(true)} style={{background:AMBER,border:"none",borderRadius:"100px",padding:"7px 13px",fontSize:12,fontWeight:700,color:ESPRESSO,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",whiteSpace:"nowrap"}}>+ Add listing</button>
