@@ -44,6 +44,11 @@ const melbToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Aust
 // Current hour (0–23) in Melbourne, so greetings/dates follow AEST/AEDT regardless of device time.
 const melbHour = () => parseInt(new Date().toLocaleString("en-GB", { timeZone: "Australia/Melbourne", hour: "2-digit", hour12: false }), 10) % 24;
 const melbGreeting = () => { const h = melbHour(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; };
+// Short-lived cache of the raw inspections+people pull so opening a *second*
+// open home reuses the data instead of re-fetching every record. Invalidated
+// on any write (register / update) so fresh buyers always show.
+let _buyerRecCache = null; // { t, insp, ppl }
+const invalidateBuyerCache = () => { _buyerRecCache = null; };
 
 /* Normalise a backend inspection into the exact shape the UI expects,
    filling any field the backend doesn't send (notes as array, avatar…). */
@@ -137,11 +142,19 @@ const Attio = {
   },
   // One fetch → "at this open" + "all buyers ever registered to this property" (deduped by contact).
   async getBuyersFor(openHomeId, propertyId) {
-    const [inspJ, pplJ] = await Promise.all([
-      call("listRecords", { objectSlug: "inspections" }),
-      call("listRecords", { objectSlug: "people" }),
-    ]);
-    if (!inspJ?.ok) return { ok: false, open: [], property: [] };
+    let inspData, pplData;
+    if (_buyerRecCache && (Date.now() - _buyerRecCache.t) < 60000) {
+      inspData = _buyerRecCache.insp; pplData = _buyerRecCache.ppl;
+    } else {
+      const [inspJ, pplJ] = await Promise.all([
+        call("listRecords", { objectSlug: "inspections" }),
+        call("listRecords", { objectSlug: "people" }),
+      ]);
+      if (!inspJ?.ok) return { ok: false, open: [], property: [] };
+      inspData = inspJ.data || []; pplData = pplJ?.data || [];
+      _buyerRecCache = { t: Date.now(), insp: inspData, ppl: pplData };
+    }
+    const inspJ = { data: inspData }, pplJ = { data: pplData };
     const rid = r => r?.id?.record_id ?? null;
     const rref = (r, f) => r?.values?.[f]?.[0]?.target_record_id ?? null;
     const rval = (r, f) => r?.values?.[f]?.[0]?.value ?? null;
@@ -183,12 +196,14 @@ const Attio = {
   },
   async createInspection({ contactId, propertyId, openHomeId, interest }) {
     const j = await call("createInspection", { contactId, propertyId, openHomeId, interest });
+    if (j?.ok) invalidateBuyerCache();
     return j?.ok ? { ok: true, id: j.id } : { ok: false };
   },
   async updateInspection(id, u) {
     // Backend Code node reads `body.updates`, so nest the fields there to make
     // the PATCH actually persist; keep them flat too for the documented contract.
     const j = await call("updateInspection", { id, ...u, updates: u });
+    if (j?.ok) invalidateBuyerCache();
     return !!j?.ok;
   },
   async createProperty(p) {
@@ -530,6 +545,10 @@ function PinScreen({ onUnlock }) {
   const [digits, setDigits] = useState("");
   const [error,  setError]  = useState(false);
   const [shake,  setShake]  = useState(false);
+
+  // Wake the n8n backend while the agent is typing their PIN, so the login +
+  // opens calls hit a warm container instead of paying a cold-start each.
+  useEffect(() => { call("warmup").catch(() => {}); }, []);
 
   const press = async d => {
     if (digits.length >= 4) return;
