@@ -278,6 +278,21 @@ function toE164AU(raw) {
   return s;
 }
 
+// Compose a new email in Outlook (the app if installed, otherwise Outlook on the
+// web) instead of the OS default handler (Apple Mail). Never falls back to mailto:.
+function openEmail(e, email, subject) {
+  if (e) e.preventDefault();
+  if (!email) return;
+  const to = encodeURIComponent(email);
+  const subj = subject ? "&subject=" + encodeURIComponent(subject) : "";
+  const web = "https://outlook.office.com/mail/deeplink/compose?to=" + to + subj;
+  // Try the native Outlook app; if the page never backgrounds, open Outlook web.
+  const t = setTimeout(() => { window.open(web, "_blank"); }, 600);
+  window.addEventListener("blur", () => clearTimeout(t), { once: true });
+  try { window.location.href = "ms-outlook://compose?to=" + to + subj; }
+  catch (err) { clearTimeout(t); window.open(web, "_blank"); }
+}
+
 const MM = {
   async send({ toPhone, firstName, address, igUrl, contractUrl }) {
     const dest = toE164AU(toPhone);
@@ -704,10 +719,11 @@ function AddSheet({open,onClose,openHome,onSave}){
   const[email,setEmail]=useState("");
   const[interest,setInterest]=useState("");
   const[saving,setSaving]=useState(false);
+  const[err,setErr]=useState("");
   const debounce=useRef(null);
   const ref=useRef(null);
 
-  useEffect(()=>{if(open){setStep("mobile");setMobile("");setMatch(null);setNoMatch(false);setSelected(null);setName("");setEmail("");setInterest("");setSaving(false);setTimeout(()=>ref.current?.focus(),400);}}, [open]);
+  useEffect(()=>{if(open){setStep("mobile");setMobile("");setMatch(null);setNoMatch(false);setSelected(null);setName("");setEmail("");setInterest("");setSaving(false);setErr("");setTimeout(()=>ref.current?.focus(),400);}}, [open]);
 
   useEffect(()=>{
     clearTimeout(debounce.current);
@@ -738,7 +754,7 @@ function AddSheet({open,onClose,openHome,onSave}){
   const save=async()=>{
     if(saving)return;
     const interestVal=interest||"cool";  // interest is optional at registration; set later from the profile
-    setSaving(true);
+    setSaving(true);setErr("");
 
     let contactId=selected?.id;
     let inspectionId=null;
@@ -759,6 +775,13 @@ function AddSheet({open,onClose,openHome,onSave}){
           interest:interestVal,
         });
         if(r.ok) inspectionId=r.id;
+      }
+      // Only claim success if the buyer actually persisted to Attio — otherwise
+      // surface the error instead of showing a buyer that vanishes on reload.
+      if(!contactId||!inspectionId){
+        setErr("Couldn't save this buyer to Attio — please check your connection and try again.");
+        setSaving(false);
+        return;
       }
       // Fire the welcome SMS on every registration (walkthrough video link included when the property has one)
       if(mobile){
@@ -819,6 +842,7 @@ function AddSheet({open,onClose,openHome,onSave}){
       {step==="newdetails"&&<>
         <div className="fg"><label className="fl">Full name</label><input className="fi" type="text" placeholder="e.g. Tom Nguyen" value={name} onChange={e=>setName(e.target.value)} autoFocus/></div>
         <div className="fg"><label className="fl">Email</label><input className="fi" type="email" placeholder="name@email.com" value={email} onChange={e=>setEmail(e.target.value)}/></div>
+        {err&&<div style={{color:AMBER_D,fontSize:13,padding:"0 0 8px",lineHeight:1.4}}>{err}</div>}
         <div className="fg" style={{paddingBottom:0}}><button className="btn-dark" style={{margin:0,width:"100%"}} disabled={!name||saving} onClick={()=>{if(name)save();}}>{saving?<><span className="sp-sm"/>Registering…</>:"Register buyer"}</button></div>
         {openHome?.igUrl&&<p style={{fontSize:12,color:GRN,textAlign:"center",padding:"10px 16px 0"}}>📱 SMS with the walkthrough video link will be sent automatically</p>}
       </>}
@@ -829,6 +853,7 @@ function AddSheet({open,onClose,openHome,onSave}){
           <div style={{flex:1}}><div className="sel-nm">{name}</div><div className="sel-dt">{mobile}{email?` · ${email}`:""}</div></div>
           <span className="sel-ch" onClick={()=>setStep(selected?"mobile":"newdetails")}>Change</span>
         </div>
+        {err&&<div style={{color:AMBER_D,fontSize:13,padding:"0 0 8px",lineHeight:1.4}}>{err}</div>}
         <div className="fg" style={{paddingBottom:0}}>
           <button className="btn-dark" style={{margin:0,width:"100%"}} disabled={saving} onClick={save}>
             {saving?<><span className="sp-sm"/>Registering…</>:"Register buyer"}
@@ -960,10 +985,11 @@ Return ONLY valid JSON: {"bio":"...","stage":"Early|Middle|Late"}`;
   const days=daysSince(buyer.firstSeen);
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-    <div className="sh" onClick={e=>e.stopPropagation()}>
-      <div className="hndl"/>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
+      <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,lineHeight:1,cursor:"pointer",zIndex:5,fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>✕</button>
       <div className="det-top">
-        <div className="det-row">
+        <div className="det-row" style={{paddingRight:40}}>
           <div className="av" style={{background:buyer.col,width:52,height:52,fontSize:20}}>{buyer.initials}</div>
           <div style={{flex:1}}>
             <div className="det-nm">{buyer.name}</div>
@@ -986,7 +1012,7 @@ Return ONLY valid JSON: {"bio":"...","stage":"Early|Middle|Late"}`;
         {buyer.mobile&&<span className="ci-cp" onClick={e=>{e.preventDefault();e.stopPropagation();navigator.clipboard?.writeText(buyer.mobile).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}}>{copied?"Copied ✓":"Copy"}</span>}
         {buyer.mobile&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:AMBER}}>Text ›</span>}
       </a>
-      <a className="crow" href={buyer.email?`mailto:${buyer.email}`:undefined} style={{marginBottom:12,textDecoration:"none",color:"inherit",cursor:buyer.email?"pointer":"default"}}>
+      <a className="crow" href={buyer.email?`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(buyer.email)}`:undefined} onClick={buyer.email?(e=>openEmail(e,buyer.email)):undefined} target="_blank" rel="noreferrer" style={{marginBottom:12,textDecoration:"none",color:"inherit",cursor:buyer.email?"pointer":"default"}}>
         <div className="ci" style={{background:"#FFF4D5"}}>✉️</div>
         <div style={{flex:1}}><div className="ci-l">EMAIL</div><div className="ci-v">{buyer.email||"—"}</div></div>
         {buyer.email&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:AMBER}}>Email ›</span>}
@@ -1382,7 +1408,7 @@ function AskCRM({ propIndex }) {
                   <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                     {b.mobile && <a href={`sms:${toE164AU(b.mobile)}`} style={ASK_ACT}>💬 Text</a>}
                     {b.mobile && <a href={`tel:${toE164AU(b.mobile)}`} style={ASK_ACT}>📞 Call</a>}
-                    {b.email && <a href={`mailto:${b.email}`} style={ASK_ACT}>✉️ Email</a>}
+                    {b.email && <a href={`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(b.email)}`} onClick={e=>openEmail(e,b.email)} target="_blank" rel="noreferrer" style={ASK_ACT}>✉️ Email</a>}
                   </div>
                 </div>
               ))}
