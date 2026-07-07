@@ -182,6 +182,59 @@ const Attio = {
     });
     return { ok: true, open: open.map(normBuyer), property: Object.values(propMap).map(normBuyer) };
   },
+  // One row per buyer (deduped by contact) with every note they have across all
+  // inspections joined together — the corpus the AI query reads over.
+  async getAllBuyers() {
+    let inspData, pplData;
+    if (_buyerRecCache && (Date.now() - _buyerRecCache.t) < 60000) {
+      inspData = _buyerRecCache.insp; pplData = _buyerRecCache.ppl;
+    } else {
+      const [inspJ, pplJ] = await Promise.all([
+        call("listRecords", { objectSlug: "inspections" }),
+        call("listRecords", { objectSlug: "people" }),
+      ]);
+      if (!inspJ?.ok) return [];
+      inspData = inspJ.data || []; pplData = pplJ?.data || [];
+      _buyerRecCache = { t: Date.now(), insp: inspData, ppl: pplData };
+    }
+    const rid = r => r?.id?.record_id ?? null;
+    const rref = (r, f) => r?.values?.[f]?.[0]?.target_record_id ?? null;
+    const rval = (r, f) => r?.values?.[f]?.[0]?.value ?? null;
+    const people = {};
+    pplData.forEach(p => { const id = rid(p); if (id) people[id] = p; });
+    const pnm = p => { const n = p?.values?.name?.[0]; return n ? `${n.first_name || ""} ${n.last_name || ""}`.trim() : ""; };
+    const pph = p => p?.values?.phone_numbers?.[0]?.phone_number ?? "";
+    const pem = p => p?.values?.email_addresses?.[0]?.email_address ?? "";
+    const rank = { hot: 3, watching: 2, cool: 1 };
+    const byC = {};
+    inspData.forEach(insp => {
+      const cid = rref(insp, "contact"); if (!cid) return;
+      const c = people[cid];
+      const note = (rval(insp, "notes") || "").trim();
+      const interest = (rval(insp, "interest") || "cool").toLowerCase();
+      const pr = rref(insp, "property");
+      if (!byC[cid]) byC[cid] = { id: cid, contactId: cid, name: c ? pnm(c) : "Unknown", mobile: c ? pph(c) : "", email: c ? pem(c) : "", notes: [], interest, propertyRefs: [] };
+      const b = byC[cid];
+      if (note) b.notes.push(note);
+      if (pr && !b.propertyRefs.includes(pr)) b.propertyRefs.push(pr);
+      if ((rank[interest] || 0) > (rank[b.interest] || 0)) b.interest = interest;
+    });
+    return Object.values(byC).map(b => ({ ...b, notes: b.notes.join(" • ") }));
+  },
+  // Natural-language search over the whole buyer database. propIndex maps a
+  // property record id → "address, suburb" so location questions work too.
+  async askCRM(question, propIndex = {}) {
+    const buyers = await this.getAllBuyers();
+    const payload = buyers.map(b => ({
+      id: b.contactId, name: b.name, interest: b.interest,
+      properties: (b.propertyRefs || []).map(r => propIndex[r]).filter(Boolean),
+      notes: b.notes,
+    }));
+    const j = await call("aiQuery", { question, buyers: payload });
+    const matches = (j?.ok && Array.isArray(j.data)) ? j.data : [];
+    const byId = {}; buyers.forEach(b => { byId[b.contactId] = b; });
+    return matches.map(m => ({ ...(byId[m.id] || { id: m.id, name: "Unknown buyer", mobile: "", email: "" }), reason: m.reason || "" }));
+  },
   async findPersonByPhone(phone) {
     const j = await call("lookupBuyer", { phone });
     if (!j?.ok) return null;
@@ -1283,6 +1336,62 @@ function QuickContractSheet({ open, prop, agentName, onClose, onSent }) {
 /* ════════════════════════════════════════════
    MAIN APP
 ════════════════════════════════════════════ */
+const ASK_ACT = { textDecoration:"none", background:LINEN, color:ESPRESSO, borderRadius:100, padding:"5px 12px", fontSize:12, fontWeight:600, fontFamily:"'Neue Haas Unica Pro',sans-serif" };
+function AskCRM({ propIndex }) {
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState(null);
+  const [err, setErr] = useState("");
+  const run = async () => {
+    const query = q.trim(); if (!query || busy) return;
+    setBusy(true); setErr(""); setResults(null);
+    try { setResults(await Attio.askCRM(query, propIndex)); }
+    catch (e) { setErr("Search failed — please try again."); }
+    setBusy(false);
+  };
+  const clear = () => { setQ(""); setResults(null); setErr(""); };
+  return (
+    <div style={{ padding:"0 20px 14px" }}>
+      <div style={{ display:"flex", gap:8 }}>
+        <input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") run(); }}
+          placeholder="Ask your CRM — e.g. buyers who want a balcony near a train"
+          style={{ flex:1, background:"rgba(255,255,255,.10)", border:"1px solid rgba(255,244,213,.25)", borderRadius:100, padding:"10px 15px", fontSize:13, color:CREAM, outline:"none", fontFamily:"'Neue Haas Unica Pro',sans-serif" }} />
+        <button onClick={run} disabled={busy||!q.trim()}
+          style={{ background:AMBER, border:"none", borderRadius:100, padding:"0 18px", fontSize:13, fontWeight:700, color:ESPRESSO, cursor:busy?"default":"pointer", opacity:(busy||!q.trim())?.55:1, fontFamily:"'Neue Haas Unica Pro',sans-serif" }}>
+          {busy?"…":"Ask"}
+        </button>
+      </div>
+      {(busy||results!==null||err) && (
+        <div style={{ marginTop:10, background:WHITE, borderRadius:14, padding:14, boxShadow:"0 2px 10px rgba(49,30,16,.10)" }}>
+          {busy && <div style={{ display:"flex", alignItems:"center", gap:10, color:BROWN_M, fontSize:13, padding:"6px 2px" }}><div className="sp" style={{ width:16, height:16 }} /> Reading every buyer's notes…</div>}
+          {err && <div style={{ color:AMBER_D, fontSize:13 }}>{err}</div>}
+          {!busy && results!==null && (results.length===0
+            ? <div style={{ color:BROWN_M, fontSize:13, display:"flex", justifyContent:"space-between", alignItems:"center" }}><span>No buyers matched that.</span><button onClick={clear} style={{ background:"none", border:"none", color:BLUE_D, fontWeight:700, cursor:"pointer", fontSize:12 }}>Clear</button></div>
+            : <>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                <div style={{ fontSize:11, fontWeight:800, letterSpacing:.8, textTransform:"uppercase", color:BLUE_D }}>{results.length} match{results.length!==1?"es":""}</div>
+                <button onClick={clear} style={{ background:"none", border:"none", color:BLUE_D, fontWeight:700, cursor:"pointer", fontSize:12 }}>Clear</button>
+              </div>
+              {results.map((b, i) => (
+                <div key={b.id||i} style={{ borderTop: i? "1px solid "+SAND : "none", padding:"10px 0" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <div style={{ fontWeight:700, color:ESPRESSO, fontSize:15, flex:1 }}>{b.name}</div>
+                    {b.interest && <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>}
+                  </div>
+                  {b.reason && <div style={{ fontSize:13, color:BROWN_M, fontStyle:"italic", margin:"3px 0 8px", lineHeight:1.45 }}>“{b.reason}”</div>}
+                  <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                    {b.mobile && <a href={`sms:${toE164AU(b.mobile)}`} style={ASK_ACT}>💬 Text</a>}
+                    {b.mobile && <a href={`tel:${toE164AU(b.mobile)}`} style={ASK_ACT}>📞 Call</a>}
+                    {b.email && <a href={`mailto:${b.email}`} style={ASK_ACT}>✉️ Email</a>}
+                  </div>
+                </div>
+              ))}
+            </>)}
+        </div>
+      )}
+    </div>
+  );
+}
 export default function App(){
   const[agentName,setAgentName]=useState(()=>{ try { return SESSION_TOKEN ? (sessionStorage.getItem("savvi_who")||"") : ""; } catch(e){ return ""; } });
   const[screen,setScreen]=useState("home");
@@ -1429,6 +1538,10 @@ export default function App(){
 
   // Listings = active properties NOT already in this week's opens
   const openPropIds = new Set(visibleOpens.map(oh => oh.propertyId).filter(Boolean));
+  // property record id → "address, suburb" so AI CRM search can match by location.
+  const propIndex = {};
+  visibleOpens.forEach(oh => { if (oh.propertyId) propIndex[oh.propertyId] = `${oh.address||""}${oh.suburb?", "+oh.suburb:""}`.trim(); });
+  (allListings||[]).forEach(p => { const pid = p.propertyId||p.id; if (pid && !propIndex[pid]) propIndex[pid] = `${p.address||""}${p.suburb?", "+p.suburb:""}`.trim(); });
   const listingsOnly = allListings.filter(p => !openPropIds.has(Attio.id(p)));
 
   const fmtDay = dateStr => {
@@ -1463,6 +1576,8 @@ export default function App(){
         </div>}
         </div>
       </div>
+
+      <AskCRM propIndex={propIndex}/>
 
       {loading&&<div className="state-box">
         <div style={{display:"flex",justifyContent:"center",marginBottom:16}}><div className="sp"/></div>
