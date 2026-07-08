@@ -366,7 +366,7 @@ async function aiVendorSummary(openHome, buyers) {
     address: openHome.address,
     suburb: openHome.suburb,
     time: openHome.time,
-    buyers: buyers.map(b => ({ name: b.name, interest: b.interest, notes: (b.notes || []).map(n => n.text) })),
+    buyers: buyers.map(b => ({ name: b.name, interest: b.interest, contractSent: !!b.contractSent, visits: b.visits || 1, notes: (b.notes || []).map(n => n.text) })),
   });
   if (j?.ok) { const t = j.data?.text || j.text || (typeof j.data === "string" ? j.data : ""); if (t) return t; }
   throw new Error(j?.error || "ai_unavailable");
@@ -397,6 +397,8 @@ const iCol=v=>({hot:"#C0392B",watching:"#B7770D",cool:"#7F8C8D"}[v]||"#5A7FBF");
 const mkI =n=>n.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
 const norm=s=>s.replace(/\s+/g,"");
 const fmtTs=()=>new Date().toLocaleTimeString("en-AU",{hour:"2-digit",minute:"2-digit",hour12:false});
+// Date + time (Melbourne), e.g. "9 Jul, 2:28pm" — used for contract-sent and open events.
+const fmtDateTime=(d)=>{try{return new Date(d||Date.now()).toLocaleString("en-AU",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit",hour12:true,timeZone:"Australia/Melbourne"}).replace(/\s?[AP]M/i,m=>m.trim().toLowerCase());}catch{return "";}};
 const daysSince=d=>{try{return Math.floor((Date.now()-new Date(d))/86400000);}catch{return null;}};
 const STAGE_CFG={"Early":{bg:"#F2EDE3",col:"#7A5C48",dot:"#C4AD8A"},"Middle":{bg:"#FFF4D5",col:"#8B6914",dot:"#C9963A"},"Late":{bg:"#E8F7EE",col:"#2D8A5E",dot:"#2D8A5E"}};
 // Demo open homes shown when Attio has none yet
@@ -1340,7 +1342,7 @@ function QuickContractSheet({ open, prop, agentName, onClose, onSent }) {
       if (!result.ok) throw new Error(result.error || "Email send failed");
       // Mark contract sent in Attio
       if (inspectionId) {
-        const t = fmtTs();
+        const t = fmtDateTime();
         await Attio.updateInspection(inspectionId, {
           contractSent: true, contractSentTime: t,
           ...(result.id ? { resendId: result.id } : {}),
@@ -1461,7 +1463,7 @@ export default function App(){
   const[buyersLoading,setBuyersLoading]=useState(false);
   const[showAdd,setShowAdd]=useState(false);
   const[showDetail,setShowDetail]=useState(false);
-  const[bFilter,setBFilter]=useState("all"); // all | hot | watching | cool | contract | repeat
+  const[bFilters,setBFilters]=useState([]); // active keys: hot|watching|cool|contract|repeat (empty = all)
   const[active,setActive]=useState(null);
   const[showSum,setShowSum]=useState(false);
   const[showOk,setShowOk]=useState(false);
@@ -1480,16 +1482,20 @@ export default function App(){
   const propAll=openHome?(propBuyers[openHome.id]||[]):[];
   const propExtra=propAll.filter(b=>!pb.some(x=>(x.contactId&&x.contactId===b.contactId)||x.id===b.id));
   const allN=id=>(buyers[id]||[]).length;
-  // Filter across everyone registered to this property (for Monday callbacks).
+  // Multi-select filter across everyone registered to this property (for callbacks).
+  // Interest chips OR within interest; contract/repeat AND on top. e.g. "Contract + Hot".
+  const INTEREST_KEYS=["hot","watching","cool"];
+  const selInterests=bFilters.filter(k=>INTEREST_KEYS.includes(k));
   const matchFilter=(b)=>{
-    if(bFilter==="all") return true;
-    if(bFilter==="contract") return !!b.contractSent;
-    if(bFilter==="repeat") return (b.visits||1)>1;
-    return b.interest===bFilter; // hot | watching | cool
+    if(selInterests.length && !selInterests.includes(b.interest)) return false;
+    if(bFilters.includes("contract") && !b.contractSent) return false;
+    if(bFilters.includes("repeat") && !((b.visits||1)>1)) return false;
+    return true;
   };
-  const filterActive=bFilter!=="all";
+  const filterActive=bFilters.length>0;
   const filteredBuyers=propAll.filter(matchFilter);
-  const countFor=(k)=>k==="all"?propAll.length:propAll.filter(b=>k==="contract"?!!b.contractSent:k==="repeat"?(b.visits||1)>1:b.interest===k).length;
+  const countFor=(k)=>k==="contract"?propAll.filter(b=>b.contractSent).length:k==="repeat"?propAll.filter(b=>(b.visits||1)>1).length:propAll.filter(b=>b.interest===k).length;
+  const toggleFilter=(k)=>setBFilters(prev=>prev.includes(k)?prev.filter(x=>x!==k):[...prev,k]);
   const rowOf=(b,kp)=>(
     <div key={kp+b.id} className="brow" onClick={()=>{setActive(b);setShowDetail(true);}}>
       <div className="brow-top">
@@ -1541,7 +1547,7 @@ export default function App(){
 
   // Load buyers when entering an open home
   const enterOpenHome=async oh=>{
-    setOpenHome(oh);setScreen("open");setBFilter("all");
+    setOpenHome(oh);setScreen("open");setBFilters([]);
     if(oh._demo||buyers[oh.id]) return;
     // Instant: hydrate cached buyers for this open so the list shows immediately.
     let hadCache=false;
@@ -1568,7 +1574,7 @@ export default function App(){
 
   const sendContract=useCallback((pid,b)=>{
     if(!pid)return;
-    const t=fmtTs();
+    const t=fmtDateTime();
     // Update local state immediately
     setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===b.id?{...x,contractSent:true,contractSentTime:t}:x);return u;});
     setActive(p=>p?.id===b.id?{...p,contractSent:true,contractSentTime:t}:p);
@@ -1787,9 +1793,11 @@ export default function App(){
         {/* Filter — organise callbacks by interest, contract status, repeat inspectors */}
         {propAll.length>0&&<div style={{display:"flex",gap:7,overflowX:"auto",padding:"4px 0 12px",WebkitOverflowScrolling:"touch"}}>
           {[{k:"all",l:"All"},{k:"hot",l:"🔥 Hot"},{k:"watching",l:"👀 Warm"},{k:"cool",l:"❄️ Cold"},{k:"contract",l:"📄 Contract"},{k:"repeat",l:"🔁 Repeat"}].map(f=>{
-            const n=countFor(f.k), active=bFilter===f.k;
-            if(f.k!=="all"&&n===0&&!active) return null;
-            return <button key={f.k} onClick={()=>setBFilter(f.k)} style={{whiteSpace:"nowrap",flexShrink:0,border:"none",borderRadius:100,padding:"7px 13px",fontSize:12.5,fontWeight:700,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",background:active?ESPRESSO:SAND,color:active?CREAM:BROWN}}>{f.l}{f.k!=="all"?` ${n}`:""}</button>;
+            const chip=(active,label,onClick)=><button key={f.k} onClick={onClick} style={{whiteSpace:"nowrap",flexShrink:0,border:"none",borderRadius:100,padding:"7px 13px",fontSize:12.5,fontWeight:700,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",background:active?ESPRESSO:SAND,color:active?CREAM:BROWN}}>{label}</button>;
+            if(f.k==="all") return chip(bFilters.length===0,"All",()=>setBFilters([]));
+            const n=countFor(f.k), active=bFilters.includes(f.k);
+            if(n===0&&!active) return null;
+            return chip(active,`${f.l} ${n}`,()=>toggleFilter(f.k));
           })}
         </div>}
 
@@ -1829,7 +1837,7 @@ export default function App(){
       openHome={openHome} propId={openHome?.id}
       onUpdateInterest={updateInterest} onSendContract={sendContract}
       onAddNote={addNote} onSetProfile={setProfile}/>
-    <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb}/>
+    <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={propAll.length?propAll:pb}/>
     <QuickContractSheet
       open={showQuickContract}
       prop={quickContractProp}
