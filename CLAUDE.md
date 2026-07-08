@@ -29,7 +29,7 @@ The full secure app is **built and verified on branch `rebuild/vite-secure`**; a
 - This repo is the **Savvi Open Home app** — a mobile web app agents use at open-for-inspections to register buyers, auto-send SMS, email contracts, take notes, and generate AI vendor updates.
 - The app must hold **ZERO secret keys**. All Attio/MessageMedia/Resend/Anthropic calls go through a **secure n8n backend** (a single webhook) that holds the keys server-side and requires a session token.
 - **Current deployed app is a stripped, read-only viewer.** The full-featured version exists as a prototype (`/prototype/savvi-open-home.jsx`) but is built the INSECURE way (keys hardcoded, direct API calls). **The main job is to rebuild the full UI wired to the secure backend.** See §7.
-- Deploy target today: GitHub Pages at `https://lukeasaville-ux.github.io/savvi-open-home/`.
+- Deploy target: GitHub Pages, live at **`https://opens.getsavvi.com.au/`** (custom domain; the old `https://lukeasaville-ux.github.io/savvi-open-home/` 301-redirects here). Vite `base:"/"`.
 - First actions checklist: §11.
 
 ---
@@ -58,8 +58,7 @@ The full secure app is **built and verified on branch `rebuild/vite-secure`**; a
 
 ## 3. Current state (verified 5 Jul 2026)
 ### App
-- Live: `https://lukeasaville-ux.github.io/savvi-open-home/` — repo `lukeasaville-ux/savvi-open-home` (PUBLIC), file `index.html`.
-- **It is READ-ONLY**: only calls `getOpensWeek`, `getListings`, `getInspections`. No add-buyer, no action buttons.
+- Live: **`https://opens.getsavvi.com.au/`** — repo `lukeasaville-ux/savvi-open-home` (PUBLIC), Vite build (`base:"/"`), `public/CNAME` binds the domain. Old `github.io/savvi-open-home/` 301-redirects here. (Note: the full secure app — not the old read-only viewer — is what's deployed; see the top SESSION UPDATE.)
 - Deployed file is **pre-compiled plain JS** (React.createElement), React pinned `18.3.1`, **no in-browser Babel** (an unpinned `@babel/standalone` update once blanked the app — do not reintroduce browser-side JSX compilation).
 - Login is server-side (PIN → token); PINs are NOT in the client anymore.
 - Readable JSX source of THIS deployed version is preserved (see repo `/prototype` or Luke's `index.src.html`).
@@ -250,5 +249,5 @@ git add -A && git commit -m "..." && git push   # auto-deploys via Actions
 - **OneDrive contract filing** → Attio `contract_url`, anyone-with-link (ownership, not security). Build as n8n + Microsoft Graph; needs an Azure app registration (Luke = global admin).
 - **Vendor WhatsApp automation** — group per property via Whapi.Cloud → n8n.
 - **DocuSign end-to-end check** — confirm a signed authority actually lands in Attio.
-- **Custom domain** — Luke wants `getsavvi.com.au/savvi-open-home` (a PATH on the main marketing site → needs a reverse proxy or hosting within that platform; depends on what getsavvi.com.au runs on — ASK). `opens.getsavvi.com.au` (subdomain) is far simpler. Optional.
+- **Custom domain** — ✅ DONE (8 Jul 2026). Live at `https://opens.getsavvi.com.au/`. GoDaddy CNAME `opens` → `lukeasaville-ux.github.io`; GitHub Pages custom domain set + `public/CNAME`; Vite `base` flipped to `/`; SW/manifest/font paths updated; HTTPS cert auto-provisioned. **Remaining n8n-side cleanup:** the contract email HTML (n8n `contractHtml`) references the wordmark/asset by the old `github.io/savvi-open-home/…` path — still works via 301 redirect, but repoint it to `https://opens.getsavvi.com.au/savvi-wordmark.png` when next editing the backend. Blocked on n8n re-login (same as vendor-update wording + contract-open tracking).
 - **Stronger auth** (optional) — 4-digit PINs + per-IP lockout can be brute-forced via IP rotation; longer passwords or global rate-limiting closes it.
