@@ -80,6 +80,7 @@ function normBuyer(b) {
     col: b.col || AVATAR_COLS[Math.abs(name.charCodeAt(0) || 65) % AVATAR_COLS.length],
     time: b.time || fmtTs(),
     firstSeen: b.firstSeen || new Date().toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }),
+    visits: b.visits || 1,
     _attioInspectionId: b.id,
   };
 }
@@ -178,7 +179,12 @@ const Attio = {
     (inspJ.data || []).forEach(insp => {
       const oh = rref(insp, "open_home"), pr = rref(insp, "property"), b = build(insp);
       if (openHomeId && oh === openHomeId) open.push(b);
-      if (propertyId && pr === propertyId) { const k = b.contactId || b.id; if (!propMap[k]) propMap[k] = b; }
+      if (propertyId && pr === propertyId) {
+        const k = b.contactId || b.id;
+        // Dedupe by contact, but count how many times they've inspected this property.
+        if (!propMap[k]) { b.visits = 1; propMap[k] = b; }
+        else { propMap[k].visits = (propMap[k].visits || 1) + 1; }
+      }
     });
     return { ok: true, open: open.map(normBuyer), property: Object.values(propMap).map(normBuyer) };
   },
@@ -1454,6 +1460,7 @@ export default function App(){
   const[buyersLoading,setBuyersLoading]=useState(false);
   const[showAdd,setShowAdd]=useState(false);
   const[showDetail,setShowDetail]=useState(false);
+  const[bFilter,setBFilter]=useState("all"); // all | hot | watching | cool | contract | repeat
   const[active,setActive]=useState(null);
   const[showSum,setShowSum]=useState(false);
   const[showOk,setShowOk]=useState(false);
@@ -1472,6 +1479,34 @@ export default function App(){
   const propAll=openHome?(propBuyers[openHome.id]||[]):[];
   const propExtra=propAll.filter(b=>!pb.some(x=>(x.contactId&&x.contactId===b.contactId)||x.id===b.id));
   const allN=id=>(buyers[id]||[]).length;
+  // Filter across everyone registered to this property (for Monday callbacks).
+  const matchFilter=(b)=>{
+    if(bFilter==="all") return true;
+    if(bFilter==="contract") return !!b.contractSent;
+    if(bFilter==="repeat") return (b.visits||1)>1;
+    return b.interest===bFilter; // hot | watching | cool
+  };
+  const filterActive=bFilter!=="all";
+  const filteredBuyers=propAll.filter(matchFilter);
+  const countFor=(k)=>k==="all"?propAll.length:propAll.filter(b=>k==="contract"?!!b.contractSent:k==="repeat"?(b.visits||1)>1:b.interest===k).length;
+  const rowOf=(b,kp)=>(
+    <div key={kp+b.id} className="brow" onClick={()=>{setActive(b);setShowDetail(true);}}>
+      <div className="brow-top">
+        <div className="av" style={{background:b.col,width:42,height:42,fontSize:17}}>{b.initials}</div>
+        <div className="bi">
+          <div className="bn">{b.name}</div>
+          <div className="bs">{b.mobile}{b.time?` · ${b.time}`:""}</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+            {b.contractSent&&<span className="ctr-badge">📄 Contract sent{b.contractSentTime?` ${b.contractSentTime}`:""}</span>}
+            {b.smsSent&&<span className="sms-badge">📱 SMS sent</span>}
+            {(b.visits||1)>1&&<span className="sms-badge">🔁 {b.visits}× inspected</span>}
+          </div>
+        </div>
+        <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>
+      </div>
+      {(b.notes||[]).length>0&&<div className="row-note">{b.notes[b.notes.length-1].text}</div>}
+    </div>
+  );
 
   // Load open homes on mount
   useEffect(()=>{
@@ -1505,13 +1540,21 @@ export default function App(){
 
   // Load buyers when entering an open home
   const enterOpenHome=async oh=>{
-    setOpenHome(oh);setScreen("open");
-    if(!oh._demo&&!buyers[oh.id]){
-      setBuyersLoading(true);
-      const r=await Attio.getBuyersFor(oh.id, oh.propertyId);
-      if(r.ok){ setBuyers(p=>({...p,[oh.id]:r.open})); setPropBuyers(p=>({...p,[oh.id]:r.property})); }
-      setBuyersLoading(false);
+    setOpenHome(oh);setScreen("open");setBFilter("all");
+    if(oh._demo||buyers[oh.id]) return;
+    // Instant: hydrate cached buyers for this open so the list shows immediately.
+    let hadCache=false;
+    try{
+      const c=localStorage.getItem("savvi_buyers_"+oh.id);
+      if(c){ const parsed=JSON.parse(c); if(parsed&&Array.isArray(parsed.open)){ setBuyers(p=>({...p,[oh.id]:parsed.open})); setPropBuyers(p=>({...p,[oh.id]:parsed.property||[]})); hadCache=true; } }
+    }catch(e){}
+    if(!hadCache) setBuyersLoading(true);
+    const r=await Attio.getBuyersFor(oh.id, oh.propertyId);
+    if(r.ok){
+      setBuyers(p=>({...p,[oh.id]:r.open})); setPropBuyers(p=>({...p,[oh.id]:r.property}));
+      try{ localStorage.setItem("savvi_buyers_"+oh.id, JSON.stringify({open:r.open,property:r.property})); }catch(e){}
     }
+    setBuyersLoading(false);
   };
 
   // All mutations take explicit propId — no stale closure risk
@@ -1740,51 +1783,46 @@ export default function App(){
       </div>
 
       <div className="blist">
-        <div className="sec-lbl" style={{padding:"16px 0 10px"}}>At this open</div>
-        {buyersLoading&&<div style={{textAlign:"center",padding:"24px"}}><div className="sp"/></div>}
-        {!buyersLoading&&pb.length===0&&<div style={{textAlign:"center",padding:"36px 16px",color:"#C0B8A8"}}>
-          <div style={{fontSize:36,marginBottom:10}}>👥</div>
-          <div style={{fontSize:14,lineHeight:1.5}}>No buyers yet — tap Add buyer to register the first.</div>
+        {/* Filter — organise callbacks by interest, contract status, repeat inspectors */}
+        {propAll.length>0&&<div style={{display:"flex",gap:7,overflowX:"auto",padding:"4px 0 12px",WebkitOverflowScrolling:"touch"}}>
+          {[{k:"all",l:"All"},{k:"hot",l:"🔥 Hot"},{k:"watching",l:"👀 Warm"},{k:"cool",l:"❄️ Cold"},{k:"contract",l:"📄 Contract"},{k:"repeat",l:"🔁 Repeat"}].map(f=>{
+            const n=countFor(f.k), active=bFilter===f.k;
+            if(f.k!=="all"&&n===0&&!active) return null;
+            return <button key={f.k} onClick={()=>setBFilter(f.k)} style={{whiteSpace:"nowrap",flexShrink:0,border:"none",borderRadius:100,padding:"7px 13px",fontSize:12.5,fontWeight:700,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",background:active?ESPRESSO:SAND,color:active?CREAM:BROWN}}>{f.l}{f.k!=="all"?` ${n}`:""}</button>;
+          })}
         </div>}
-        {!buyersLoading&&pb.map(b=><div key={b.id} className="brow" onClick={()=>{setActive(b);setShowDetail(true);}}>
-          <div className="brow-top">
-            <div className="av" style={{background:b.col,width:42,height:42,fontSize:17}}>{b.initials}</div>
-            <div className="bi">
-              <div className="bn">{b.name}</div>
-              <div className="bs">{b.mobile} · {b.time}</div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                {b.contractSent&&<span className="ctr-badge">📄 Contract sent {b.contractSentTime}</span>}
-                {b.smsSent&&<span className="sms-badge">📱 SMS sent</span>}
-              </div>
-            </div>
-            <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>
-          </div>
-          {(b.notes||[]).length>0&&<div className="row-note">{b.notes[b.notes.length-1].text}</div>}
-        </div>)}
 
-        {!buyersLoading&&propExtra.length>0&&<>
-          <div className="sec-lbl" style={{padding:"20px 0 4px"}}>All buyers · this property</div>
-          <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Everyone registered to this property to date — call back, add notes or send a contract any day.</div>
-          {propExtra.map(b=><div key={"pb"+b.id} className="brow" onClick={()=>{setActive(b);setShowDetail(true);}}>
-            <div className="brow-top">
-              <div className="av" style={{background:b.col,width:42,height:42,fontSize:17}}>{b.initials}</div>
-              <div className="bi">
-                <div className="bn">{b.name}</div>
-                <div className="bs">{b.mobile}{b.firstSeen?` · ${b.firstSeen}`:""}</div>
-                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                  {b.contractSent&&<span className="ctr-badge">📄 Contract sent {b.contractSentTime}</span>}
-                  {b.smsSent&&<span className="sms-badge">📱 SMS sent</span>}
-                </div>
-              </div>
-              <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>
-            </div>
-            {(b.notes||[]).length>0&&<div className="row-note">{b.notes[b.notes.length-1].text}</div>}
-          </div>)}
+        {buyersLoading&&<div style={{textAlign:"center",padding:"24px"}}><div className="sp"/></div>}
+
+        {!buyersLoading&&filterActive&&<>
+          <div className="sec-lbl" style={{padding:"2px 0 10px"}}>{filteredBuyers.length} {filteredBuyers.length===1?"buyer":"buyers"}</div>
+          {filteredBuyers.length===0
+            ? <div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>No buyers match this filter.</div>
+            : filteredBuyers.map(b=>rowOf(b,"f"))}
         </>}
+
+        {!buyersLoading&&!filterActive&&<>
+          <div className="sec-lbl" style={{padding:"2px 0 10px"}}>At this open</div>
+          {pb.length===0&&<div style={{textAlign:"center",padding:"36px 16px",color:"#C0B8A8"}}>
+            <div style={{fontSize:36,marginBottom:10}}>👥</div>
+            <div style={{fontSize:14,lineHeight:1.5}}>No buyers yet — tap Add buyer to register the first.</div>
+          </div>}
+          {pb.map(b=>rowOf(b,"o"))}
+          {propExtra.length>0&&<>
+            <div className="sec-lbl" style={{padding:"20px 0 4px"}}>All buyers · this property</div>
+            <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Everyone registered to this property to date — call back, add notes or send a contract any day.</div>
+            {propExtra.map(b=>rowOf(b,"p"))}
+          </>}
+        </>}
+        <div style={{height:80}}/>
       </div>
     </div>}
 
     {/* ── SHEETS ── */}
+    {/* Thumb-reachable Add buyer — pinned to the frame on the open screen */}
+    {screen==="open"&&<button onClick={()=>setShowAdd(true)} aria-label="Add buyer" style={{position:"absolute",right:18,bottom:`calc(18px + env(safe-area-inset-bottom,0px))`,zIndex:45,width:58,height:58,borderRadius:"50%",border:"none",background:BLUE_D,color:"#fff",boxShadow:"0 6px 18px rgba(49,30,16,.30)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="white"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+    </button>}
     <AddSheet open={showAdd} onClose={()=>setShowAdd(false)} openHome={openHome} onSave={handleSave}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id}
