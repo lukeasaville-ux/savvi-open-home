@@ -1097,36 +1097,34 @@ function SummarySheet({open,onClose,openHome,buyers}){
   const[loading,setLoading]=useState(false);
   const[copied,setCopied]=useState(false);
 
-  const buildMock=useCallback(()=>{
-    if(!openHome||!buyers.length){setSumText("No buyers registered yet.");return;}
-    const hot=buyers.filter(b=>b.interest==="hot"),wat=buyers.filter(b=>b.interest==="watching");
-    const allNotes=buyers.flatMap(b=>b.notes||[]).map(n=>n.text).join(" ");
-    const hasFHB=/first home/i.test(allNotes),hasInv=/investor/i.test(allNotes),hasPA=/pre.?approval/i.test(allNotes);
-    setSumText([
-      `Hi — wrapped up the open at ${openHome.address}. Good turnout with ${buyers.length} group${buyers.length!==1?"s":""} through.`,
-      `${hot.length>0?`${hot.map(b=>b.name.split(" ")[0]).join(" and ")} ${hot.length===1?"was":"were"} our strongest lead${hot.length>1?"s":""}${hasFHB?" — a first home buyer who engaged strongly with the property and was happy with the price guide":hasPA?" — with pre-approval confirmed and ready to move":""}.`:""} ${wat.length>0?`We also had ${wat.length} group${wat.length!==1?"s":""} watching closely${hasInv?", including an investor running their numbers":""}.`:""}`.trim(),
-      `${hasPA?"With finance confirmed on at least one lead, we're in a strong position. ":""}Will follow up with all parties this week.\n\n— Luke, Savvi`,
-    ].filter(Boolean).join("\n\n"));
+  // Detailed, casual vendor wrap: a recap line (keen / contracts / repeat visits)
+  // plus a by-line for every buyer built from their notes, interest, visit count
+  // and contract status. Reads like Luke firing off a quick SMS to the vendor,
+  // and is built client-side so it's always detailed and reliable. (An AI-polished
+  // version in Luke's exact voice returns once the n8n prompt is updated — #22.)
+  const build=useCallback(()=>{
+    if(!openHome||!buyers.length){setSumText(`No one's come through ${openHome?.address||"the open"} yet — I'll send the wrap-up as soon as we've had a few groups.`);return;}
+    const first=n=>{const p=String(n||"").trim().split(/\s+/);return p[0]||"They";};
+    const ordinal=n=>n===2?"2nd":n===3?"3rd":`${n}th`;
+    const keen=buyers.filter(b=>b.interest==="hot"||b.interest==="watching");
+    const contracts=buyers.filter(b=>b.contractSent);
+    const repeats=buyers.filter(b=>(b.visits||1)>1);
+    const lines=buyers.map(b=>{
+      const ctx=[b.interest==="hot"?"very keen":b.interest==="watching"?"warm":"just looking"];
+      if((b.visits||1)>1) ctx.push(`back for a ${ordinal(b.visits)} look`);
+      if(b.contractSent) ctx.push("has the contract");
+      const notes=(b.notes||[]).map(n=>n.text).join(" ").replace(/\s+/g," ").trim();
+      return `• ${first(b.name)} (${ctx.join(", ")})${notes?` — ${notes}`:" — no notes taken this time"}`;
+    });
+    const rc=[`${buyers.length} group${buyers.length!==1?"s":""} through`];
+    if(keen.length) rc.push(`${keen.length} keen (hot/warm)`);
+    if(contracts.length) rc.push(`${contracts.length} took a contract`);
+    if(repeats.length) rc.push(`${repeats.length} back for another look`);
+    setSumText(`Hey — quick wrap from today's open at ${openHome.address}.\n\n${rc.join(", ")}.\n\n${lines.join("\n")}\n\nI'll chase everyone up this week and let you know how they're tracking.\n\n— Luke, Savvi`);
   },[openHome,buyers]);
 
-  const gen=useCallback(async()=>{
-    if(!openHome)return;
-    setLoading(true);setSumText("");
-    const lines=buyers.map(b=>{const nl=(b.notes||[]).map(n=>n.text).join(" | ");return `• ${b.name} (${b.interest.toUpperCase()})${nl?` — ${nl}`:""}`; }).join("\n");
-    const prompt=`You are a real estate assistant for Savvi, a boutique Melbourne apartment agency. Write a warm vendor SMS after an open for inspection.
-
-Property: ${openHome.address}, ${openHome.suburb}
-Open: ${openHome.time}
-Total: ${buyers.length} | Hot: ${buyers.filter(b=>b.interest==="hot").length} | Watching: ${buyers.filter(b=>b.interest==="watching").length} | Cool: ${buyers.filter(b=>b.interest==="cool").length}
-
-${lines||"No notes recorded."}
-
-2–3 short paragraphs. Warm, direct, no bullet points, no emojis. Sign off "— Luke, Savvi". Under 200 words. Return only the message.`;
-    try{const t=await aiVendorSummary(openHome,buyers);setSumText(t);}catch{buildMock();}
-    setLoading(false);
-  },[openHome,buyers,buildMock]);
-
-  useEffect(()=>{if(open)gen();},[open]);
+  const gen=build;
+  useEffect(()=>{if(open)build();},[open,build]);
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
     <div className="sh" onClick={e=>e.stopPropagation()}>
