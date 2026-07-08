@@ -665,7 +665,7 @@ function PinScreen({ onUnlock }) {
     .ps{font-size:14px;color:#C9B79A;margin-bottom:48px;}
     .pd{display:flex;gap:16px;margin-bottom:48px;}
     .pdot{width:14px;height:14px;border-radius:50%;border:2px solid rgba(255,244,213,.30);transition:all .15s;}
-    .pdot.f{background:#E59239;border-color:#E59239;}
+    .pdot.f{background:#FE5310;border-color:#FE5310;}
     .pdot.e{background:#E86A5C;border-color:#E86A5C;}
     .pg{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;width:100%;max-width:280px;}
     .pb{background:rgba(255,244,213,.07);border:1px solid rgba(255,244,213,.16);border-radius:16px;padding:18px;font-family:'Newsreader',serif;font-size:26px;font-weight:700;color:#FFF4D5;cursor:pointer;text-align:center;transition:transform .1s,background .1s;-webkit-tap-highlight-color:transparent;}
