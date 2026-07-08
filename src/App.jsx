@@ -813,20 +813,9 @@ function AddSheet({open,onClose,openHome,onSave}){
         setSaving(false);
         return;
       }
-      // Fire the welcome SMS on every registration (walkthrough video link included when the property has one)
-      if(mobile){
-        const sres=await MM.send({
-          toPhone:mobile,
-          firstName:name.split(" ")[0],
-          address:openHome.address,
-          igUrl:openHome.igUrl||"",
-          contractUrl:openHome.contractUrl||"",
-        }).catch(()=>null);
-        smsOk=!!(sres&&sres.ok);
-        if(inspectionId&&smsOk) await Attio.updateInspection(inspectionId,{smsSent:true});
-      }
     }
 
+    // Register the buyer in the UI immediately — don't make it wait on the SMS.
     const col=selected?.col||AVATAR_COLS[Math.abs((name.charCodeAt(0)||65)%AVATAR_COLS.length)];
     onSave({
       id:inspectionId||"b"+Date.now(),
@@ -835,12 +824,24 @@ function AddSheet({open,onClose,openHome,onSave}){
       time:fmtTs(),
       initials:mkI(name),col,
       contractSent:false,contractSentTime:null,offered:false,
-      smsSent:smsOk,
+      smsSent:false,
       aiProfile:null,notes:[],
       firstSeen:new Date().toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"}),
       _attioInspectionId:inspectionId,
     });
     setSaving(false);
+
+    // Fire the welcome SMS in the background — the buyer is already registered,
+    // so the UI never waits on the (slow) send. Marks smsSent on the record if it lands.
+    if(mobile && !openHome?._demo){
+      MM.send({
+        toPhone:mobile,
+        firstName:name.split(" ")[0],
+        address:openHome.address,
+        igUrl:openHome.igUrl||"",
+        contractUrl:openHome.contractUrl||"",
+      }).then(sres=>{ if(sres&&sres.ok&&inspectionId) Attio.updateInspection(inspectionId,{smsSent:true}).catch(()=>{}); }).catch(()=>{});
+    }
   };
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
