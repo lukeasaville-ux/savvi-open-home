@@ -1477,15 +1477,23 @@ export default function App(){
   useEffect(()=>{
     if(!agentName) return;
     (async()=>{
-      setLoading(true);setLoadErr("");
+      // Instant open: show the last-known opens from cache while we refresh, so
+      // the home screen never opens to a blank spinner (the n8n round-trip is slow).
+      let hadCache=false;
+      try{
+        const c=localStorage.getItem("savvi_opens");
+        if(c){ const arr=JSON.parse(c); if(Array.isArray(arr)&&arr.length){ setOpenHomes(arr);setIsDemo(false);setLoading(false);hadCache=true; } }
+      }catch(e){}
+      if(!hadCache) setLoading(true);
+      setLoadErr("");
       // Only this-week opens are needed to render the home screen — fetch them
-      // first and show them immediately. Box+Dice listings load in the
-      // background (they're only used later for the "add from listings" flow),
-      // so the opens list no longer waits on that slower call.
+      // first. Box+Dice listings load in the background (only used later for the
+      // "add from listings" flow), so the opens list no longer waits on them.
       const r = await Attio.getOpenHomesThisWeek();
       if(r.ok&&r.data.length>0){
         setOpenHomes(r.data);setIsDemo(false);
-      } else {
+        try{ localStorage.setItem("savvi_opens",JSON.stringify(r.data)); }catch(e){}
+      } else if(!hadCache){
         setOpenHomes(DEMO_OPENS);setBuyers(DEMO_BUYERS);setIsDemo(true);
       }
       setLoading(false);

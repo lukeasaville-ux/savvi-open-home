@@ -1,0 +1,16 @@
+{
+  "name": "Savvi Open Home",
+  "short_name": "Savvi",
+  "description": "Register buyers, send contracts and follow up — Savvi's open-home tool.",
+  "start_url": "/savvi-open-home/",
+  "scope": "/savvi-open-home/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#311E10",
+  "theme_color": "#311E10",
+  "icons": [
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
