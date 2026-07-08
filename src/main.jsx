@@ -8,6 +8,6 @@ createRoot(document.getElementById("root")).render(<App />);
 // loads instantly from cache on repeat opens.
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/savvi-open-home/sw.js").catch(() => {});
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
   });
 }

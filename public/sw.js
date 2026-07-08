@@ -3,8 +3,8 @@
    - Navigations (the HTML): network-first (always try fresh), fall back to cache offline.
    - Hashed static assets (JS/CSS/fonts/images): cache-first (they're immutable).
    - The n8n API + any cross-origin request: left untouched (never cached). */
-const CACHE = "savvi-shell-v1";
-const HTML = "/savvi-open-home/";
+const CACHE = "savvi-shell-v2";
+const HTML = "/";
 
 self.addEventListener("install", (e) => { self.skipWaiting(); });
 self.addEventListener("activate", (e) => {
