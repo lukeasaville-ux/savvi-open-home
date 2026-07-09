@@ -72,7 +72,14 @@ function normBuyer(b) {
       ? { id: `n${i}`, text: n, ts: "" }
       : { id: n.id || `n${i}`, text: n.text || "", ts: n.ts || "" });
   } else if (typeof b.notes === "string" && b.notes.trim()) {
-    notes = b.notes.split("\n---\n").map((t, i) => ({ id: `n${i}`, text: t, ts: "" }));
+    // Notes persist to Attio as "<ISO timestamp>\t<text>" joined by \n---\n so the
+    // date + time survive a reload. Older notes have no timestamp prefix.
+    notes = b.notes.split("\n---\n").map((t, i) => {
+      const tab = t.indexOf("\t");
+      return (tab > 0 && /^\d{4}-\d\d-\d\dT/.test(t))
+        ? { id: `n${i}`, text: t.slice(tab + 1), ts: t.slice(0, tab) }
+        : { id: `n${i}`, text: t, ts: "" };
+    });
   }
   return {
     id: b.id,
@@ -1135,7 +1142,7 @@ Return ONLY valid JSON: {"bio":"...","stage":"Early|Middle|Late"}`;
   const saveNote=()=>{
     if(!noteText.trim())return;
     onAddNote(propId,buyer.id,noteText.trim());
-    const updated={...buyer,notes:[...(buyer.notes||[]),{id:"n"+Date.now(),text:noteText.trim(),ts:fmtTs()}]};
+    const updated={...buyer,notes:[...(buyer.notes||[]),{id:"n"+Date.now(),text:noteText.trim(),ts:new Date().toISOString()}]};
     onSetProfile(propId,buyer.id,null);
     setNoteText("");setShowNote(false);
     setTimeout(()=>genProfile(updated,propId),200);
@@ -1207,7 +1214,7 @@ Return ONLY valid JSON: {"bio":"...","stage":"Early|Middle|Late"}`;
       <div className="sec-w"><div className="sec-i">Notes</div></div>
       <div className="notes-w">
         {(buyer.notes||[]).length>0&&<div className="note-feed">{(buyer.notes||[]).map(n=><div key={n.id} className="note-item">
-          <div className="note-txt">{n.text}</div><div className="note-ts">{n.ts}</div>
+          <div className="note-txt">{n.text}</div><div className="note-ts">{n.ts?(/^\d{4}-/.test(n.ts)?fmtDateTime(n.ts):n.ts):""}</div>
         </div>)}</div>}
         {showNote?<>
           <textarea className="note-area" placeholder="Price feedback, buyer profile, who they inspect with…" value={noteText} onChange={e=>setNoteText(e.target.value)} autoFocus/>
@@ -1230,6 +1237,11 @@ Return ONLY valid JSON: {"bio":"...","stage":"Early|Middle|Late"}`;
           <div className="hc-row"><span className="hc-lbl">Contract</span><span className="hc-val" style={{color:h.contractSent?GRN:"#C0B8A8"}}>{h.contractSent?"Sent ✓":"No"}</span></div>
           <div className="hc-row"><span className="hc-lbl">Offered</span><span className="hc-val" style={{color:h.offered?"#B7770D":"#C0B8A8"}}>{h.offered?h.offerAmt:"No"}</span></div>
         </div>)}</div>}
+
+      {/* Thumb-reachable close — easier one-handed than the top-right ✕ */}
+      <div style={{padding:"16px 16px 4px"}}>
+        <button className="btn-cream" onClick={onClose} style={{padding:"15px"}}>Close</button>
+      </div>
       <div style={{height:12}}/>
     </div>
   </div>;
@@ -1756,6 +1768,30 @@ function ContactSearch(){
     </div>
   );
 }
+/* ════ BUYER FILTER — single dropdown (replaces the row of chips) ════ */
+function BuyerFilter({ options, active, onSelect }){
+  const [open,setOpen]=useState(false);
+  const cur=options.find(o=>o.k===active)||options[0];
+  return (
+    <div style={{position:"relative",padding:"4px 0 12px"}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{display:"flex",alignItems:"center",gap:9,background:SAND,border:`1px solid ${SAND_D}`,borderRadius:100,padding:"9px 16px",fontSize:13,fontWeight:700,color:BROWN,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>
+        <span>Filter: {cur.l}{cur.n!=null?` · ${cur.n}`:""}</span>
+        <span style={{fontSize:9,opacity:.55,transform:open?"rotate(180deg)":"none",transition:"transform .15s"}}>▼</span>
+      </button>
+      {open&&<>
+        <div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:20}}/>
+        <div style={{position:"absolute",top:"100%",left:0,zIndex:21,marginTop:2,background:WHITE,border:`1px solid ${SAND_D}`,borderRadius:12,boxShadow:"0 8px 24px rgba(49,30,16,.16)",overflow:"hidden",minWidth:210,maxWidth:280}}>
+          {options.map((o,i)=>(
+            <button key={o.k} onClick={()=>{onSelect(o.k);setOpen(false);}} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,width:"100%",border:"none",borderTop:i?`1px solid ${SAND}`:"none",background:o.k===active?LINEN:"#fff",padding:"12px 16px",fontSize:14,fontWeight:o.k===active?700:500,color:BROWN,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",textAlign:"left"}}>
+              <span>{o.l}</span>
+              {o.n!=null&&<span style={{fontSize:12.5,color:o.k===active?BLUE_D:BROWN_L,fontWeight:700}}>{o.n}</span>}
+            </button>
+          ))}
+        </div>
+      </>}
+    </div>
+  );
+}
 export default function App(){
   const[agentName,setAgentName]=useState(()=>{ try { return SESSION_TOKEN ? (sessionStorage.getItem("savvi_who")||"") : ""; } catch(e){ return ""; } });
   const[screen,setScreen]=useState("home");
@@ -1944,14 +1980,15 @@ export default function App(){
 
   const addNote=useCallback((pid,id,text)=>{
     if(!pid)return;
-    const note={id:"n"+Date.now(),text,ts:fmtTs()};
+    const note={id:"n"+Date.now(),text,ts:new Date().toISOString()};
     setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(b=>b.id===id?{...b,notes:[...(b.notes||[]),note]}:b);return u;});
     setActive(p=>p?.id===id?{...p,notes:[...(p.notes||[]),note]}:p);
-    // Write all notes as one concatenated string to Attio
+    // Write all notes to Attio as "<ISO>\t<text>" joined by \n---\n so the timestamp survives reload.
     if(!isDemo){
       const allNotes=(buyers[pid]||[]).find(b=>b.id===id);
       if(allNotes&&allNotes._attioInspectionId){
-        const combined=[...(allNotes.notes||[]),note].map(n=>n.text).join("\n---\n");
+        const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.text}`:n.text;
+        const combined=[...(allNotes.notes||[]),note].map(enc).join("\n---\n");
         Attio.updateInspection(allNotes._attioInspectionId,{notes:combined}).catch(()=>{});
       }
     }
@@ -2138,16 +2175,15 @@ export default function App(){
       </div>}
 
       <div className="blist">
-        {/* Filter — organise callbacks by interest, contract status, repeat inspectors */}
-        {propAll.length>0&&<div style={{display:"flex",gap:7,overflowX:"auto",padding:"4px 0 12px",WebkitOverflowScrolling:"touch"}}>
-          {[{k:"all",l:"All"},{k:"hot",l:"🔥 Hot"},{k:"watching",l:"👀 Warm"},{k:"cool",l:"❄️ Cold"},{k:"contract",l:"📄 Contract"},{k:"repeat",l:"🔁 Repeat"}].map(f=>{
-            const chip=(active,label,onClick)=><button key={f.k} onClick={onClick} style={{whiteSpace:"nowrap",flexShrink:0,border:"none",borderRadius:100,padding:"7px 13px",fontSize:12.5,fontWeight:700,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",background:active?ESPRESSO:SAND,color:active?CREAM:BROWN}}>{label}</button>;
-            if(f.k==="all") return chip(bFilters.length===0,"All",()=>setBFilters([]));
-            const n=countFor(f.k), active=bFilters.includes(f.k);
-            if(n===0&&!active) return null;
-            return chip(active,`${f.l} ${n}`,()=>toggleFilter(f.k));
-          })}
-        </div>}
+        {/* Filter — a single dropdown to organise callbacks by interest / contract / repeat */}
+        {propAll.length>0&&<BuyerFilter
+          active={bFilters[0]||"all"}
+          onSelect={k=>setBFilters(k==="all"?[]:[k])}
+          options={[{k:"all",l:"All buyers",n:propAll.length}].concat(
+            [{k:"hot",l:"🔥 Hot"},{k:"watching",l:"👀 Warm"},{k:"cool",l:"❄️ Cold"},{k:"contract",l:"📄 Contract sent"},{k:"repeat",l:"🔁 Repeat visit"}]
+              .map(f=>({...f,n:countFor(f.k)})).filter(o=>o.n>0)
+          )}
+        />}
 
         {buyersLoading&&<div style={{textAlign:"center",padding:"24px"}}><div className="sp"/></div>}
 
