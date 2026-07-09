@@ -1103,24 +1103,26 @@ function SummarySheet({open,onClose,openHome,buyers}){
   // and is built client-side so it's always detailed and reliable. (An AI-polished
   // version in Luke's exact voice returns once the n8n prompt is updated — #22.)
   const build=useCallback(()=>{
-    if(!openHome||!buyers.length){setSumText(`No one's come through ${openHome?.address||"the open"} yet — I'll send the wrap-up as soon as we've had a few groups.`);return;}
+    if(!openHome||!buyers.length){setSumText(`Hi [Vendor],\n\nNo groups have come through ${openHome?.address||"the open"} just yet — I'll send the wrap-up as soon as we've had some numbers.\n\n— Luke, Savvi`);return;}
     const first=n=>{const p=String(n||"").trim().split(/\s+/);return p[0]||"They";};
-    const ordinal=n=>n===2?"2nd":n===3?"3rd":`${n}th`;
+    const nw=n=>["","one","two","three","four","five","six","seven","eight","nine","ten"][n]||String(n);
+    const joinNat=a=>a.length<=1?(a[0]||""):`${a.slice(0,-1).join(", ")} and ${a[a.length-1]}`;
     const keen=buyers.filter(b=>b.interest==="hot"||b.interest==="watching");
     const contracts=buyers.filter(b=>b.contractSent);
     const repeats=buyers.filter(b=>(b.visits||1)>1);
+    // Natural-language recap that weaves in the counts, like a quick note to the vendor.
+    const extra=[];
+    if(keen.length) extra.push(`${nw(keen.length)} ${keen.length===1?"is":"are"} keen`);
+    if(contracts.length) extra.push(`${nw(contracts.length)} asked for a contract`);
+    if(repeats.length) extra.push(`${nw(repeats.length)} came back for a repeat look`);
+    const recap=`We had ${buyers.length} ${buyers.length===1?"group":"groups"} come through today${extra.length?`, ${joinNat(extra)}`:""}.`;
+    // A line per buyer, their notes as the detail (falls back to a light default).
     const lines=buyers.map(b=>{
-      const ctx=[b.interest==="hot"?"very keen":b.interest==="watching"?"warm":"just looking"];
-      if((b.visits||1)>1) ctx.push(`back for a ${ordinal(b.visits)} look`);
-      if(b.contractSent) ctx.push("has the contract");
       const notes=(b.notes||[]).map(n=>n.text).join(" ").replace(/\s+/g," ").trim();
-      return `• ${first(b.name)} (${ctx.join(", ")})${notes?` — ${notes}`:" — no notes taken this time"}`;
+      const detail=notes||`had a good look through${b.contractSent?" and took a contract":(b.visits||1)>1?" — a repeat visitor":""}`;
+      return `${first(b.name)} — ${detail}`;
     });
-    const rc=[`${buyers.length} group${buyers.length!==1?"s":""} through`];
-    if(keen.length) rc.push(`${keen.length} keen (hot/warm)`);
-    if(contracts.length) rc.push(`${contracts.length} took a contract`);
-    if(repeats.length) rc.push(`${repeats.length} back for another look`);
-    setSumText(`Hey — quick wrap from today's open at ${openHome.address}.\n\n${rc.join(", ")}.\n\n${lines.join("\n")}\n\nI'll chase everyone up this week and let you know how they're tracking.\n\n— Luke, Savvi`);
+    setSumText(`Hi [Vendor],\n\n${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow all of the buyers up and be in touch early next week.\n\n— Luke, Savvi`);
   },[openHome,buyers]);
 
   const gen=build;
