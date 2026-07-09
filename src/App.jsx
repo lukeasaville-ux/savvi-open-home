@@ -347,6 +347,13 @@ const MM = {
     const j = await call("sendSms", { toPhone: dest, firstName, address, igUrl, contractUrl });
     return { ok: !!j?.ok, error: j?.error };
   },
+  // Send an arbitrary custom message (used by the bulk personalised composer).
+  // The backend sendSms now honours `message` when provided, else builds the welcome text.
+  async sendMessage({ toPhone, message }) {
+    const dest = toE164AU(toPhone);
+    const j = await call("sendSms", { toPhone: dest, message });
+    return { ok: !!j?.ok, error: j?.error };
+  },
 };
 
 const Resend = {
@@ -654,6 +661,23 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 .sttl{font-family:'Newsreader',serif;font-size:21px;font-weight:700;color:${BROWN};margin-bottom:6px;}
 .ssub{font-size:13px;color:${BROWN_L};line-height:1.5;margin-bottom:18px;}
 .sflex{display:flex;flex-direction:column;gap:8px;}
+/* segmented tabs (Opens | Buyer Match) */
+.seg{display:flex;gap:4px;background:${ESPRESSO_2};margin:0 14px;border-radius:100px;padding:4px;}
+.seg-b{flex:1;border:none;background:transparent;color:${CREAM};opacity:.6;border-radius:100px;padding:9px 8px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:all .16s;display:flex;align-items:center;justify-content:center;gap:6px;}
+.seg-b.on{background:${CREAM};color:${ESPRESSO};opacity:1;box-shadow:0 2px 8px rgba(0,0,0,.18);}
+/* buyer match */
+.bm-wrap{padding:14px 14px 40px;}
+.bm-intro{font-size:13px;color:${BROWN_M};line-height:1.5;margin:2px 4px 12px;}
+.bm-ex{display:block;margin:6px 0 0;font-size:12px;color:${BLUE_D};font-style:italic;cursor:pointer;}
+.bm-card{background:${WHITE};border:1px solid ${SAND_D};border-radius:14px;padding:12px 13px;margin-bottom:10px;box-shadow:0 1px 4px rgba(44,26,14,.05);}
+.bm-mrow{display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-top:1px solid ${SAND};cursor:pointer;}
+.bm-mrow:first-child{border-top:none;}
+.bm-ck{width:22px;height:22px;border-radius:6px;border:2px solid ${SAND_D};flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;margin-top:1px;transition:all .13s;}
+.bm-ck.on{background:${BLUE};border-color:${BLUE};}
+.bm-ck.dis{opacity:.4;}
+.bm-count{font-size:11px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:${BLUE_D};margin-bottom:2px;}
+.bm-tok{display:inline-flex;align-items:center;gap:5px;background:${CREAM};border:1px solid ${SAND_D};border-radius:100px;padding:4px 11px;font-size:12px;font-weight:600;color:${BROWN};cursor:pointer;font-family:inherit;}
+.bm-prev{background:${LINEN};border:1px solid ${SAND_D};border-left:3px solid ${BLUE};border-radius:10px;padding:11px 13px;font-size:13px;color:${BROWN};line-height:1.5;white-space:pre-wrap;}
 `;
 
 /* ════════════════════════════════════════════
@@ -1464,64 +1488,170 @@ function QuickContractSheet({ open, prop, agentName, onClose, onSent }) {
    MAIN APP
 ════════════════════════════════════════════ */
 const ASK_ACT = { textDecoration:"none", background:LINEN, color:ESPRESSO, borderRadius:100, padding:"5px 12px", fontSize:12, fontWeight:600, fontFamily:"'Neue Haas Unica Pro',sans-serif" };
-function AskCRM({ propIndex }) {
+// Swap {first_name}/{name} tokens for a buyer's actual name when personalising a bulk text.
+const personalize = (tmpl, b) => String(tmpl||"")
+  .replace(/\{\s*first[\s_]*name\s*\}/gi, ((b?.name||"").trim().split(/\s+/)[0]) || "there")
+  .replace(/\{\s*name\s*\}/gi, (b?.name||"").trim() || "there");
+
+const BM_DEFAULT = "Hi {first_name}, Luke here from Savvi. A new listing just came up that looks right up your alley — want me to send you the details or line up a private look? — Luke, Savvi";
+const BM_EXAMPLES = [
+  "buyers wanting an art deco 2-bed in Hawthorn around $700k",
+  "anyone after an apartment with parking and a balcony",
+  "buyers looking $600k–$700k who need a second bedroom",
+];
+
+/* ════════════════════════════════════════════
+   BUYER MATCH — natural-language buyer search + bulk personalised SMS.
+   Replaces the old "Ask your CRM" bar: describe the buyer you want, it reads
+   every buyer's notes/history (aiQuery backend), pulls the matches, then you
+   pick who's in and send each a personalised text about a new listing.
+════════════════════════════════════════════ */
+function BuyerMatch({ propIndex }) {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
-  const [results, setResults] = useState(null);
+  const [matches, setMatches] = useState(null);
   const [err, setErr] = useState("");
-  const run = async () => {
-    const query = q.trim(); if (!query || busy) return;
-    setBusy(true); setErr(""); setResults(null);
-    try { setResults(await Attio.askCRM(query, propIndex)); }
-    catch (e) { setErr("Search failed — please try again."); }
+  const [sel, setSel] = useState({});
+  const [msg, setMsg] = useState(BM_DEFAULT);
+  const [sending, setSending] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [done, setDone] = useState(null);
+  const msgRef = useRef(null);
+
+  const run = async (query) => {
+    const qq = (query ?? q).trim(); if (!qq || busy) return;
+    if (query) setQ(query);
+    setBusy(true); setErr(""); setMatches(null); setDone(null); setProgress(null);
+    try {
+      const res = await Attio.askCRM(qq, propIndex);
+      setMatches(res);
+      const s = {}; res.forEach(b => { s[b.id] = !!b.mobile; }); // preselect everyone we can actually text
+      setSel(s);
+    } catch (e) { setErr("Search failed — please try again."); }
     setBusy(false);
   };
-  const clear = () => { setQ(""); setResults(null); setErr(""); };
+
+  const toggle = id => setSel(s => ({ ...s, [id]: !s[id] }));
+  const selected = (matches || []).filter(b => sel[b.id] && b.mobile);
+  const noMobile = (matches || []).filter(b => !b.mobile).length;
+  const selectable = (matches || []).filter(b => b.mobile);
+  const allOn = selectable.length > 0 && selectable.every(b => sel[b.id]);
+  const toggleAll = () => { const s = {}; (matches || []).forEach(b => { s[b.id] = !allOn && !!b.mobile; }); setSel(s); };
+
+  const insertToken = () => {
+    const el = msgRef.current;
+    if (!el) { setMsg(m => m + "{first_name}"); return; }
+    const a = el.selectionStart ?? msg.length, b = el.selectionEnd ?? msg.length;
+    const next = msg.slice(0, a) + "{first_name}" + msg.slice(b);
+    setMsg(next);
+    setTimeout(() => { el.focus(); el.selectionStart = el.selectionEnd = a + 12; }, 0);
+  };
+
+  const send = async () => {
+    if (sending || !selected.length || !msg.trim()) return;
+    setSending(true); setDone(null);
+    let ok = 0, fail = 0; const total = selected.length;
+    setProgress({ done: 0, total });
+    for (let i = 0; i < selected.length; i++) {
+      const b = selected[i];
+      try { const r = await MM.sendMessage({ toPhone: b.mobile, message: personalize(msg, b) }); if (r.ok) ok++; else fail++; }
+      catch { fail++; }
+      setProgress({ done: i + 1, total });
+    }
+    setSending(false); setDone({ ok, fail }); setProgress(null);
+  };
+
+  const previewBuyer = selected[0] || (matches || [])[0] || { name: "Sarah Chen" };
+  const preview = personalize(msg, previewBuyer);
+  const segs = Math.max(1, Math.ceil(preview.length / 153));
+
   return (
-    <div style={{ padding:"0 20px 14px" }}>
+    <div className="bm-wrap">
+      <div className="bm-intro">
+        Describe the buyer you're after in plain English — I'll read every buyer's notes and history, pull together the matches, then you can send them all a personalised text about a new listing.
+      </div>
+
       <div style={{ display:"flex", gap:8 }}>
         <input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") run(); }}
-          placeholder="Ask your CRM — e.g. buyers who want a balcony near a train"
-          style={{ flex:1, background:"rgba(255,255,255,.10)", border:"1px solid rgba(255,244,213,.25)", borderRadius:100, padding:"10px 15px", fontSize:13, color:CREAM, outline:"none", fontFamily:"'Neue Haas Unica Pro',sans-serif" }} />
-        <button onClick={run} disabled={busy||!q.trim()}
-          style={{ background:AMBER, border:"none", borderRadius:100, padding:"0 18px", fontSize:13, fontWeight:700, color:ESPRESSO, cursor:busy?"default":"pointer", opacity:(busy||!q.trim())?.55:1, fontFamily:"'Neue Haas Unica Pro',sans-serif" }}>
-          {busy?"…":"Ask"}
+          placeholder="e.g. buyers wanting an art deco 2-bed in Hawthorn $600k–$700k"
+          style={{ flex:1, background:WHITE, border:`1.5px solid ${SAND_D}`, borderRadius:100, padding:"12px 16px", fontSize:14, color:BROWN, outline:"none", fontFamily:"'Neue Haas Unica Pro',sans-serif" }} />
+        <button onClick={()=>run()} disabled={busy||!q.trim()}
+          style={{ background:AMBER, border:"none", borderRadius:100, padding:"0 20px", fontSize:14, fontWeight:700, color:ESPRESSO, cursor:busy?"default":"pointer", opacity:(busy||!q.trim())?.55:1, fontFamily:"'Neue Haas Unica Pro',sans-serif", whiteSpace:"nowrap" }}>
+          {busy?"…":"Find"}
         </button>
       </div>
-      {(busy||results!==null||err) && (
-        <div style={{ marginTop:10, background:WHITE, borderRadius:14, padding:14, boxShadow:"0 2px 10px rgba(49,30,16,.10)" }}>
-          {busy && <div style={{ display:"flex", alignItems:"center", gap:10, color:BROWN_M, fontSize:13, padding:"6px 2px" }}><div className="sp" style={{ width:16, height:16 }} /> Reading every buyer's notes…</div>}
-          {err && <div style={{ color:AMBER_D, fontSize:13 }}>{err}</div>}
-          {!busy && results!==null && (results.length===0
-            ? <div style={{ color:BROWN_M, fontSize:13, display:"flex", justifyContent:"space-between", alignItems:"center" }}><span>No buyers matched that.</span><button onClick={clear} style={{ background:"none", border:"none", color:BLUE_D, fontWeight:700, cursor:"pointer", fontSize:12 }}>Clear</button></div>
-            : <>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-                <div style={{ fontSize:11, fontWeight:800, letterSpacing:.8, textTransform:"uppercase", color:BLUE_D }}>{results.length} match{results.length!==1?"es":""}</div>
-                <button onClick={clear} style={{ background:"none", border:"none", color:BLUE_D, fontWeight:700, cursor:"pointer", fontSize:12 }}>Clear</button>
-              </div>
-              {results.map((b, i) => (
-                <div key={b.id||i} style={{ borderTop: i? "1px solid "+SAND : "none", padding:"10px 0" }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                    <div style={{ fontWeight:700, color:ESPRESSO, fontSize:15, flex:1 }}>{b.name}</div>
-                    {b.interest && <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>}
-                  </div>
-                  {b.reason && <div style={{ fontSize:13, color:BROWN_M, fontStyle:"italic", margin:"3px 0 8px", lineHeight:1.45 }}>“{b.reason}”</div>}
-                  <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                    {b.mobile && <a href={`sms:${toE164AU(b.mobile)}`} style={ASK_ACT}>💬 Text</a>}
-                    {b.mobile && <a href={`tel:${toE164AU(b.mobile)}`} style={ASK_ACT}>📞 Call</a>}
-                    {b.email && <a href={`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(b.email)}`} onClick={e=>openEmail(e,b.email)} target="_blank" rel="noreferrer" style={ASK_ACT}>✉️ Email</a>}
-                  </div>
-                </div>
-              ))}
-            </>)}
+
+      {matches===null && !busy && !err && (
+        <div style={{ margin:"8px 4px 0" }}>
+          <div style={{ fontSize:11, fontWeight:700, letterSpacing:.6, textTransform:"uppercase", color:BROWN_L, marginBottom:2 }}>Try</div>
+          {BM_EXAMPLES.map((ex,i)=><span key={i} className="bm-ex" onClick={()=>run(ex)}>“{ex}”</span>)}
         </div>
       )}
+
+      {busy && <div className="bm-card" style={{ display:"flex", alignItems:"center", gap:11, marginTop:12, color:BROWN_M, fontSize:13 }}><div className="sp" style={{ width:18, height:18 }}/> Reading every buyer's notes…</div>}
+      {err && <div style={{ marginTop:12, color:AMBER_D, fontSize:13 }}>{err}</div>}
+
+      {!busy && matches!==null && matches.length===0 &&
+        <div className="bm-card" style={{ marginTop:12, color:BROWN_M, fontSize:13 }}>No buyers matched that. Try describing the criteria a different way.</div>}
+
+      {!busy && matches!==null && matches.length>0 && <>
+        <div className="bm-card" style={{ marginTop:12 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:2 }}>
+            <div className="bm-count">{matches.length} match{matches.length!==1?"es":""} · {selected.length} selected</div>
+            {selectable.length>0 && <button onClick={toggleAll} style={{ background:"none", border:"none", color:BLUE_D, fontWeight:700, cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>{allOn?"Clear all":"Select all"}</button>}
+          </div>
+          {matches.map((b,i)=>(
+            <div key={b.id||i} className="bm-mrow" onClick={()=>b.mobile&&toggle(b.id)} style={{ cursor:b.mobile?"pointer":"default" }}>
+              <div className={`bm-ck ${sel[b.id]?"on":""} ${!b.mobile?"dis":""}`}>{sel[b.id]?"✓":""}</div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                  <div style={{ fontWeight:700, color:ESPRESSO, fontSize:14.5, flex:1 }}>{b.name}</div>
+                  {b.interest && <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>}
+                </div>
+                {b.reason && <div style={{ fontSize:12.5, color:BROWN_M, fontStyle:"italic", margin:"3px 0 0", lineHeight:1.45 }}>“{b.reason}”</div>}
+                <div style={{ fontSize:11.5, color:b.mobile?BROWN_L:"#C0392B", marginTop:4 }}>{b.mobile || "⚠ No mobile on file — can't text"}</div>
+              </div>
+            </div>
+          ))}
+          {noMobile>0 && <div style={{ fontSize:11.5, color:BROWN_L, marginTop:8, lineHeight:1.4 }}>{noMobile} match{noMobile!==1?"es have":" has"} no mobile — add one from their profile to include them.</div>}
+        </div>
+
+        <div className="bm-card">
+          <div className="bm-count" style={{ marginBottom:8 }}>Personalised message</div>
+          <textarea ref={msgRef} className="note-area" style={{ height:110 }} value={msg} onChange={e=>setMsg(e.target.value)} placeholder="Write your message… use {first_name} to drop in each buyer's name."/>
+          <div style={{ display:"flex", alignItems:"center", gap:10, margin:"9px 0 2px", flexWrap:"wrap" }}>
+            <button className="bm-tok" onClick={insertToken}>+ {"{first_name}"}</button>
+            <span style={{ fontSize:11.5, color:BROWN_L }}>{preview.length} chars · {segs} SMS{segs>1?" segments":""}</span>
+          </div>
+          <div style={{ fontSize:10, fontWeight:800, letterSpacing:1, color:BROWN_L, margin:"11px 0 5px" }}>PREVIEW{selected[0]?` · to ${(selected[0].name||"").split(" ")[0]}`:""}</div>
+          <div className="bm-prev">{preview}</div>
+
+          {done && <div style={{ marginTop:12, background:GRN_BG, border:"1px solid #A9DFBF", borderRadius:11, padding:"11px 13px", fontSize:13, color:GRN, fontWeight:600 }}>
+            ✅ Sent to {done.ok} buyer{done.ok!==1?"s":""}{done.fail?` · ${done.fail} failed`:""}.
+          </div>}
+
+          {!done
+            ? <button className="btn-dark" style={{ marginTop:12 }} disabled={sending||!selected.length||!msg.trim()} onClick={send}>
+                {sending ? <><span className="sp-sm"/>Sending {progress?`${progress.done}/${progress.total}`:""}…</> : `📲 Send to ${selected.length} buyer${selected.length!==1?"s":""}`}
+              </button>
+            : <button className="btn-cream" style={{ marginTop:8 }} onClick={()=>{ setDone(null); setProgress(null); }}>Send another message</button>}
+        </div>
+      </>}
     </div>
   );
 }
 export default function App(){
   const[agentName,setAgentName]=useState(()=>{ try { return SESSION_TOKEN ? (sessionStorage.getItem("savvi_who")||"") : ""; } catch(e){ return ""; } });
   const[screen,setScreen]=useState("home");
+  const[homeTab,setHomeTab]=useState("opens"); // opens | match — swipeable tabs on the home screen
+  const swipeRef=useRef(null);
+  const onHomeTouchStart=e=>{const t=e.touches[0];swipeRef.current={x:t.clientX,y:t.clientY};};
+  const onHomeTouchEnd=e=>{
+    if(!swipeRef.current)return;
+    const t=e.changedTouches[0];const dx=t.clientX-swipeRef.current.x,dy=t.clientY-swipeRef.current.y;
+    if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.4) setHomeTab(dx<0?"match":"opens");
+    swipeRef.current=null;
+  };
   const[openHome,setOpenHome]=useState(null);
   const[openHomes,setOpenHomes]=useState([]);
   const[loading,setLoading]=useState(true);
@@ -1750,7 +1880,7 @@ export default function App(){
     <style>{CSS}</style>
 
     {/* ── HOME ── */}
-    <div className={`scr ${screen==="home"?"on":"ol"}`}>
+    <div className={`scr ${screen==="home"?"on":"ol"}`} onTouchStart={onHomeTouchStart} onTouchEnd={onHomeTouchEnd}>
       <SBar/>
       <div className="home-hdr">
         <img className="logo-img" src={wordmark} alt="Savvi"/>
@@ -1764,14 +1894,17 @@ export default function App(){
         </div>
       </div>
 
-      <AskCRM propIndex={propIndex}/>
+      {!loading&&<div className="seg" style={{marginTop:14,marginBottom:6}}>
+        <button className={`seg-b ${homeTab==="opens"?"on":""}`} onClick={()=>setHomeTab("opens")}>🏠 Opens</button>
+        <button className={`seg-b ${homeTab==="match"?"on":""}`} onClick={()=>setHomeTab("match")}>🎯 Buyer Match</button>
+      </div>}
 
       {loading&&<div className="state-box">
         <div style={{display:"flex",justifyContent:"center",marginBottom:16}}><div className="sp"/></div>
         <div className="state-sub">Loading from Attio…</div>
       </div>}
 
-      {!loading&&<>
+      {!loading&&homeTab==="opens"&&<>
         {isDemo&&<div className="demo-banner">
           <strong>Demo mode</strong> — Attio connected but no opens scheduled this week. Add open homes in Attio to see live data here.
         </div>}
@@ -1843,6 +1976,8 @@ export default function App(){
           })}
         </>}
       </>}
+
+      {!loading&&homeTab==="match"&&<BuyerMatch propIndex={propIndex}/>}
       <div style={{height:40}}/>
     </div>
 
