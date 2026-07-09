@@ -333,6 +333,12 @@ const Attio = {
     const j = await call("createProperty", p);
     return j?.ok ? { ok: true, id: j.id } : { ok: false, err: j?.error };
   },
+  async updateProperty({ id, igUrl }) {
+    // Save the Instagram walkthrough reel link onto the property (instagram_video_url).
+    // Every registration SMS for this property then picks it up automatically.
+    const j = await call("updateProperty", { propertyId: id, igUrl });
+    return !!j?.ok;
+  },
 };
 
 // Normalise an Australian mobile to E.164 (+61…) so the SMS gateway accepts it.
@@ -429,6 +435,20 @@ async function aiAddressLookup(address) {
    CONSTANTS + HELPERS
 ════════════════════════════════════════════ */
 const AVATAR_COLS=["#C75B3A","#5A7FBF","#8B4513","#2B5F3A","#6B4EAF","#1A5276","#7D6608","#1A5276"];
+// Soft Launch Club — Savvi's Instagram broadcast channel for off-market listings.
+// Same link for every buyer.
+const SOFT_LAUNCH_URL="https://www.instagram.com/channel/AbaX4MTIDSizmiyT/";
+// Build the post-registration welcome SMS: greeting → walkthrough reel (only if the
+// property has one on file) → Soft Launch Club link → sign-off. Built client-side and
+// sent via the sendSms custom-message path, so no property = no walkthrough line.
+function buildWelcomeSms({ firstName, address, igUrl, agent }){
+  return [
+    `Hi ${firstName||"there"}, great to meet you at ${address||"the open"} today.`,
+    igUrl ? `Here's the walkthrough video: ${igUrl}` : null,
+    SOFT_LAUNCH_URL ? `Want first look at our off-market listings before they hit realestate.com or Domain? Join our Soft Launch Club: ${SOFT_LAUNCH_URL}` : null,
+    `— ${agent||"Luke"}, Savvi`,
+  ].filter(Boolean).join(" ");
+}
 const CONTACTS_CACHE=[
   {id:"c1",name:"Sarah Chen",      mobile:"0412 345 678",email:"sarah.chen@gmail.com",  col:"#C75B3A"},
   {id:"c2",name:"James Whitfield", mobile:"0423 456 789",email:"j.whitfield@me.com",     col:"#5A7FBF"},
@@ -804,7 +824,7 @@ function AiProfile({profile,onRegen}){
 /* ════════════════════════════════════════════
    ADD BUYER SHEET — with live Attio lookup
 ════════════════════════════════════════════ */
-function AddSheet({open,onClose,openHome,onSave}){
+function AddSheet({open,onClose,openHome,onSave,propContactIds=[]}){
   const[step,setStep]=useState("mobile");
   const[mobile,setMobile]=useState("");
   const[searching,setSearching]=useState(false);
@@ -897,15 +917,14 @@ function AddSheet({open,onClose,openHome,onSave}){
     });
     setSaving(false);
 
-    // Fire the welcome SMS in the background — the buyer is already registered,
-    // so the UI never waits on the (slow) send. Marks smsSent on the record if it lands.
-    if(mobile && !openHome?._demo){
-      MM.send({
+    // Fire the welcome SMS in the background — but ONLY the first time this buyer
+    // inspects this property. A repeat inspector already got the walkthrough + club
+    // link, so we don't text them again.
+    const alreadyInspected = (propContactIds||[]).includes(contactId);
+    if(mobile && !openHome?._demo && !alreadyInspected){
+      MM.sendMessage({
         toPhone:mobile,
-        firstName:name.split(" ")[0],
-        address:openHome.address,
-        igUrl:openHome.igUrl||"",
-        contractUrl:openHome.contractUrl||"",
+        message: buildWelcomeSms({ firstName:name.split(" ")[0], address:openHome.address, igUrl:openHome.igUrl||"", agent:openHome.agent }),
       }).then(sres=>{ if(sres&&sres.ok&&inspectionId) Attio.updateInspection(inspectionId,{smsSent:true}).catch(()=>{}); }).catch(()=>{});
     }
   };
@@ -962,6 +981,40 @@ function AddSheet({open,onClose,openHome,onSave}){
       <div style={{height:20}}/>
     </div>
   </div>;
+}
+
+/* ════ INSTAGRAM WALKTHROUGH LINK — paste per property; feeds the registration SMS ════ */
+function ReelLink({ propertyId, value, onSaved }){
+  const [editing,setEditing]=useState(false);
+  const [url,setUrl]=useState(value||"");
+  const [saving,setSaving]=useState(false);
+  useEffect(()=>{ setUrl(value||""); },[value]);
+  const save=async()=>{
+    if(saving)return;
+    setSaving(true);
+    const ok=await Attio.updateProperty({ id:propertyId, igUrl:url.trim() }).catch(()=>false);
+    setSaving(false);
+    if(ok){ onSaved(url.trim()); setEditing(false); }
+  };
+  if(editing){
+    return (
+      <div style={{display:"flex",gap:6,marginTop:8}} onClick={e=>e.stopPropagation()}>
+        <input value={url} onChange={e=>setUrl(e.target.value)} placeholder="Paste Instagram reel link…" type="url" autoFocus
+          style={{flex:1,minWidth:0,background:WHITE,border:`1.5px solid ${SAND_D}`,borderRadius:9,padding:"9px 11px",fontSize:13,color:BROWN,outline:"none",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}/>
+        <button onClick={save} disabled={saving} style={{background:BLUE,color:"#fff",border:"none",borderRadius:9,padding:"0 13px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>{saving?"…":"Save"}</button>
+        <button onClick={()=>{setEditing(false);setUrl(value||"");}} style={{background:LINEN,color:BROWN_M,border:`1px solid ${SAND_D}`,borderRadius:9,padding:"0 11px",fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>✕</button>
+      </div>
+    );
+  }
+  return (
+    <button onClick={e=>{e.stopPropagation();setEditing(true);}} style={{display:"flex",alignItems:"center",gap:8,width:"100%",marginTop:8,background:value?GRN_BG:LINEN,border:`1px solid ${value?"#A9DFBF":SAND_D}`,borderRadius:9,padding:"9px 11px",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",textAlign:"left"}}>
+      <span style={{fontSize:15}}>🎬</span>
+      <span style={{flex:1,minWidth:0,fontSize:12.5,fontWeight:600,color:value?GRN:BROWN_M,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+        {value ? "Walkthrough link added — texted to new buyers" : "Add Instagram walkthrough link"}
+      </span>
+      <span style={{fontSize:11,color:BLUE_D,fontWeight:700,flexShrink:0}}>{value?"Edit":"Add"}</span>
+    </button>
+  );
 }
 
 /* ════ CONTRACT BOX WITH TRACKING ════ */
@@ -1844,6 +1897,17 @@ export default function App(){
       await Attio.updatePerson({id:b.contactId, name:d.name, email:d.email, mobile:d.mobile}).catch(()=>{});
   },[isDemo,buyers]);
 
+  // Reel link saved on the open screen — reflect it on the open in state + cache so
+  // the very next registration SMS includes it (Attio write already done in ReelLink).
+  const updateOpenReel=useCallback((openId,url)=>{
+    setOpenHome(p=>p&&p.id===openId?{...p,igUrl:url}:p);
+    setOpenHomes(prev=>{const u=prev.map(o=>o.id===openId?{...o,igUrl:url}:o); try{localStorage.setItem("savvi_opens",JSON.stringify(u));}catch(e){} return u;});
+  },[]);
+  // Reel link saved on a listing card — reflect it on the listing in state.
+  const updateListingReel=useCallback((pid,url)=>{
+    setAllListings(prev=>prev.map(p=>((p.propertyId||p.id)===pid?{...p,igUrl:url}:p)));
+  },[]);
+
   const sendContract=useCallback((pid,b)=>{
     if(!pid)return;
     const t=fmtDateTime();
@@ -2012,7 +2076,7 @@ export default function App(){
             const price  = p.price || "";
             const contUrl= p.contractUrl || "";
             const pid    = p.id;
-            const synthOh = { id:`listing_${pid}`, propertyId:pid, address:addr, suburb, beds, baths, car, price, igUrl:"", contractUrl:contUrl, time:"", date:"", agent:agentName, _listing:true };
+            const synthOh = { id:`listing_${pid}`, propertyId:pid, address:addr, suburb, beds, baths, car, price, igUrl:p.igUrl||"", contractUrl:contUrl, time:"", date:"", agent:agentName, _listing:true };
             return (
               <div key={pid} className="pc" style={{borderLeft:`4px solid ${SAND_D}`,cursor:"default"}}>
                 <div className="pc-bar" style={{background:SAND_D}}/>
@@ -2035,6 +2099,7 @@ export default function App(){
                       📄 Send contract
                     </button>
                   </div>
+                  <ReelLink propertyId={pid} value={p.igUrl||""} onSaved={u=>updateListingReel(pid,u)}/>
                 </div>
               </div>
             );
@@ -2067,6 +2132,10 @@ export default function App(){
         </button>
         <button className="btn-outline" onClick={()=>setShowSum(true)}>📩 Vendor update</button>
       </div>
+
+      {!isDemo&&openHome?.propertyId&&<div style={{padding:"10px 14px 0"}}>
+        <ReelLink propertyId={openHome.propertyId} value={openHome.igUrl} onSaved={u=>updateOpenReel(openHome.id,u)}/>
+      </div>}
 
       <div className="blist">
         {/* Filter — organise callbacks by interest, contract status, repeat inspectors */}
@@ -2111,7 +2180,7 @@ export default function App(){
     {screen==="open"&&<button onClick={()=>setShowAdd(true)} aria-label="Add buyer" style={{position:"absolute",right:18,bottom:`calc(18px + env(safe-area-inset-bottom,0px))`,zIndex:45,width:58,height:58,borderRadius:"50%",border:"none",background:BLUE_D,color:"#fff",boxShadow:"0 6px 18px rgba(49,30,16,.30)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
       <svg width="26" height="26" viewBox="0 0 24 24" fill="white"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
     </button>}
-    <AddSheet open={showAdd} onClose={()=>setShowAdd(false)} openHome={openHome} onSave={handleSave}/>
+    <AddSheet open={showAdd} onClose={()=>setShowAdd(false)} openHome={openHome} onSave={handleSave} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id}
       onUpdateInterest={updateInterest} onSendContract={sendContract}
