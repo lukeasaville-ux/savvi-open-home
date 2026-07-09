@@ -50,6 +50,18 @@ const melbGreeting = () => { const h = melbHour(); return h < 12 ? "Good morning
 let _buyerRecCache = null; // { t, insp, ppl }
 const invalidateBuyerCache = () => { _buyerRecCache = null; };
 
+// Parse the inspection's contract_opens text field — a newline list of
+// "opened <ISO>" / "clicked <ISO>" written by the Resend webhook — into
+// [{kind, at}] for the running open-history display (#23).
+function parseContractOpens(str){
+  if(Array.isArray(str)) return str;
+  if(!str||typeof str!=="string") return [];
+  return str.split("\n").map(l=>l.trim()).filter(Boolean).map(l=>{
+    const i=l.indexOf(" ");
+    return i<0 ? {kind:"opened",at:l} : {kind:l.slice(0,i),at:l.slice(i+1)};
+  });
+}
+
 /* Normalise a backend inspection into the exact shape the UI expects,
    filling any field the backend doesn't send (notes as array, avatar…). */
 function normBuyer(b) {
@@ -74,6 +86,7 @@ function normBuyer(b) {
     offered: !!b.offered,
     smsSent: !!b.smsSent,
     resendId: b.resendId || null,
+    contractOpens: parseContractOpens(b.contractOpens),
     notes,
     aiProfile: null,
     initials: b.initials || mkI(name),
@@ -136,6 +149,7 @@ const Attio = {
         contractSentTime: rval(insp, "contract_sent_time") || null,
         smsSent: !!rval(insp, "sms_sent"),
         resendId: rval(insp, "resend_id") || null,
+        contractOpens: rval(insp, "contract_opens") || "",
         notes: rval(insp, "notes") || "",
       });
     });
@@ -172,6 +186,7 @@ const Attio = {
         interest: (rval(insp, "interest") || "cool").toLowerCase(),
         contractSent: !!rval(insp, "contract_sent"), contractSentTime: rval(insp, "contract_sent_time") || null,
         smsSent: !!rval(insp, "sms_sent"), resendId: rval(insp, "resend_id") || null,
+        contractOpens: rval(insp, "contract_opens") || "",
         notes: rval(insp, "notes") || "", _createdAt: insp?.created_at || null,
       };
     };
@@ -938,6 +953,17 @@ function ContractBox({ buyer, propId, onSendContract }) {
           <div className="ctr-sub">{loadingTrack ? "Checking status…" : tracking ? `${statusIcon(tracking.status)} ${statusLabel(tracking.status)}` : "Email delivered"}</div>
         </div>
       </div>
+      {(buyer.contractOpens||[]).length>0 && (
+        <div style={{background:"#F0FBF5",border:"1px solid #A9DFBF",borderTop:"none",padding:"9px 13px"}}>
+          <div style={{fontSize:10,fontWeight:800,letterSpacing:1,color:GRN,marginBottom:6}}>👁 CONTRACT OPENED {(buyer.contractOpens||[]).length}×</div>
+          {(buyer.contractOpens||[]).slice().reverse().map((o,i)=>(
+            <div key={i} style={{fontSize:11.5,color:BROWN_M,display:"flex",gap:7,marginBottom:3,lineHeight:1.4}}>
+              <span>{o.kind==="clicked"?"🔗":"👁"}</span>
+              <span>{o.kind==="clicked"?"Clicked the contract link":"Opened the email"} · <strong style={{color:BROWN,fontWeight:600}}>{fmtDateTime(o.at)}</strong></span>
+            </div>
+          ))}
+        </div>
+      )}
       {tracking && (
         <div style={{background:"#F0FBF5",border:"1px solid #A9DFBF",borderTop:"none",borderRadius:"0 0 13px 13px",padding:"10px 13px"}}>
           {tracking.status === "clicked" && (
