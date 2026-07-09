@@ -190,18 +190,40 @@ const Attio = {
         notes: rval(insp, "notes") || "", _createdAt: insp?.created_at || null,
       };
     };
-    const open = [], propMap = {};
+    // A buyer can have several inspections for the same property (repeat visits,
+    // or test re-registrations). Merge each contact's inspections into ONE card so
+    // the contract + its open/click tracking always surface on the buyer you see —
+    // even if the send landed on a different inspection than the one first listed.
+    const mergeGroup = list => {
+      // Union every contract_opens line across the group (dedup identical events).
+      const lines = new Set();
+      list.forEach(b => String(b.contractOpens || "").split("\n").map(s => s.trim()).filter(Boolean).forEach(l => lines.add(l)));
+      // Contract source = the inspection that actually carries the tracking (non-empty
+      // contract_opens), else the most recent one marked sent, else the first.
+      const src = list.find(b => String(b.contractOpens || "").trim())
+                || [...list].reverse().find(b => b.contractSent)
+                || list[0];
+      return {
+        ...src,
+        contractSent: list.some(b => b.contractSent),
+        contractSentTime: src.contractSentTime || (list.find(b => b.contractSentTime) || {}).contractSentTime || null,
+        resendId: src.resendId || (list.find(b => b.resendId) || {}).resendId || null,
+        contractOpens: [...lines].join("\n"),
+        visits: list.length,
+      };
+    };
+    const openGroups = {}, propGroups = {};
     (inspJ.data || []).forEach(insp => {
       const oh = rref(insp, "open_home"), pr = rref(insp, "property"), b = build(insp);
-      if (openHomeId && oh === openHomeId) open.push(b);
-      if (propertyId && pr === propertyId) {
-        const k = b.contactId || b.id;
-        // Dedupe by contact, but count how many times they've inspected this property.
-        if (!propMap[k]) { b.visits = 1; propMap[k] = b; }
-        else { propMap[k].visits = (propMap[k].visits || 1) + 1; }
-      }
+      const k = b.contactId || b.id;
+      if (openHomeId && oh === openHomeId) (openGroups[k] = openGroups[k] || []).push(b);
+      if (propertyId && pr === propertyId) (propGroups[k] = propGroups[k] || []).push(b);
     });
-    return { ok: true, open: open.map(normBuyer), property: Object.values(propMap).map(normBuyer) };
+    return {
+      ok: true,
+      open: Object.values(openGroups).map(mergeGroup).map(normBuyer),
+      property: Object.values(propGroups).map(mergeGroup).map(normBuyer),
+    };
   },
   // One row per buyer (deduped by contact) with every note they have across all
   // inspections joined together — the corpus the AI query reads over.
@@ -974,43 +996,31 @@ function ContractBox({ buyer, propId, onSendContract }) {
     );
   }
 
+  // We care about CONTRACT-LINK CLICKS (them viewing the contract), not just email opens.
+  const clicks = (buyer.contractOpens || []).filter(o => o.kind === "clicked")
+    .slice().sort((a, b) => new Date(a.at) - new Date(b.at));
+  // Fall back to Resend's live last-event if the per-event list hasn't synced yet.
+  const trackingClicked = tracking && tracking.status === "clicked";
+  const viewed = clicks.length > 0 || trackingClicked;
+  const lastViewedAt = clicks.length > 0 ? clicks[clicks.length - 1].at : (trackingClicked ? tracking.updatedAt : null);
+  const viewCount = clicks.length;
+  const viewedLine = `Last viewed ${fmtDateTime(lastViewedAt).replace(", ", " at ")}${viewCount > 1 ? ` (×${viewCount})` : ""}`;
+
   return (
     <div style={{margin:"0 16px 10px"}}>
-      <div className="ctr-box sent" style={{marginBottom:0,borderRadius:tracking?"13px 13px 0 0":"13px",borderBottom:tracking?"none":"1px solid #A9DFBF"}}>
-        <span style={{fontSize:20}}>📄</span>
+      <div className="ctr-box sent" style={{marginBottom:0}}>
+        <span style={{fontSize:20}}>{viewed ? "👀" : "📄"}</span>
         <div style={{flex:1}}>
-          <div className="ctr-lbl sent">Contract sent {buyer.contractSentTime}</div>
-          <div className="ctr-sub">{loadingTrack ? "Checking status…" : tracking ? `${statusIcon(tracking.status)} ${statusLabel(tracking.status)}` : "Email delivered"}</div>
+          {viewed ? <>
+            <div className="ctr-lbl sent">{viewedLine}</div>
+            <div className="ctr-sub">Contract sent {buyer.contractSentTime}</div>
+          </> : <>
+            <div className="ctr-lbl sent">Contract sent {buyer.contractSentTime}</div>
+            <div className="ctr-sub">{loadingTrack ? "Checking status…" : "Email delivered"}</div>
+          </>}
         </div>
         <button className="ctr-send" onClick={()=>onSendContract(propId,buyer)}>Resend</button>
       </div>
-      {(buyer.contractOpens||[]).length>0 && (
-        <div style={{background:"#F0FBF5",border:"1px solid #A9DFBF",borderTop:"none",padding:"9px 13px"}}>
-          <div style={{fontSize:10,fontWeight:800,letterSpacing:1,color:GRN,marginBottom:6}}>👁 CONTRACT OPENED {(buyer.contractOpens||[]).length}×</div>
-          {(buyer.contractOpens||[]).slice().reverse().map((o,i)=>(
-            <div key={i} style={{fontSize:11.5,color:BROWN_M,display:"flex",gap:7,marginBottom:3,lineHeight:1.4}}>
-              <span>{o.kind==="clicked"?"🔗":"👁"}</span>
-              <span>{o.kind==="clicked"?"Clicked the contract link":"Opened the email"} · <strong style={{color:BROWN,fontWeight:600}}>{fmtDateTime(o.at)}</strong></span>
-            </div>
-          ))}
-        </div>
-      )}
-      {tracking && (
-        <div style={{background:"#F0FBF5",border:"1px solid #A9DFBF",borderTop:"none",borderRadius:"0 0 13px 13px",padding:"10px 13px"}}>
-          {tracking.status === "clicked" && (
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-              <span style={{fontSize:11,fontWeight:700,color:GRN}}>🔗 CONTRACT LINK CLICKED</span>
-            </div>
-          )}
-          {tracking.status === "opened" && (
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-              <span style={{fontSize:11,fontWeight:700,color:GRN}}>👁 EMAIL OPENED</span>
-            </div>
-          )}
-          <div style={{fontSize:11,color:BROWN_L}}>Last activity: {fmtTime(tracking.updatedAt)}</div>
-          <div style={{fontSize:11,color:BROWN_L}}>Sent: {fmtTime(tracking.sentAt)}</div>
-        </div>
-      )}
     </div>
   );
 }
