@@ -242,14 +242,11 @@ const Attio = {
     return matches.map(m => ({ ...(byId[m.id] || { id: m.id, name: "Unknown buyer", mobile: "", email: "" }), reason: m.reason || "" }));
   },
   async findPersonByPhone(phone) {
-    // 1) Backend exact lookup
+    // 1) Backend server-side phone query. The backend returns {found:true,id,name,mobile,email}
+    //    (NOT the {ok,data} shape) — read that exact shape so the known-buyer card actually shows.
     const j = await call("lookupBuyer", { phone });
-    if (j?.ok) {
-      let rec = j.data ?? j.person ?? null;
-      if (Array.isArray(rec)) rec = rec[0];
-      if (rec && (rec.id ?? rec.contactId)) {
-        return { id: rec.id ?? rec.contactId, name: rec.name, mobile: rec.mobile || phone, email: rec.email || "" };
-      }
+    if (j && j.found && j.id) {
+      return { id: j.id, name: j.name || "", mobile: j.mobile || phone, email: j.email || "" };
     }
     // 2) Format-tolerant fallback — the backend query is an exact match, so a
     // stored "+61…" won't match a typed "04…". Compare everyone in the CRM by E.164.
@@ -1125,8 +1122,17 @@ function SummarySheet({open,onClose,openHome,buyers}){
     setSumText(`Hi [Vendor],\n\n${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow all of the buyers up and be in touch early next week.\n\n— Luke, Savvi`);
   },[openHome,buyers]);
 
-  const gen=build;
-  useEffect(()=>{if(open)build();},[open,build]);
+  // Try the AI vendor summary (backend now writes it in Luke's voice: greeting →
+  // prose recap → a line per buyer → sign-off). Fall back to the detailed
+  // client-built version if the AI is unavailable.
+  const gen=useCallback(async()=>{
+    if(!openHome)return;
+    setLoading(true);setSumText("");
+    try{ const t=await aiVendorSummary(openHome,buyers); if(t&&t.trim()) setSumText(t); else build(); }
+    catch{ build(); }
+    setLoading(false);
+  },[openHome,buyers,build]);
+  useEffect(()=>{if(open)gen();},[open]);
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
     <div className="sh" onClick={e=>e.stopPropagation()}>
