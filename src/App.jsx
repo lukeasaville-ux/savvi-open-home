@@ -1640,6 +1640,59 @@ function BuyerMatch({ propIndex }) {
     </div>
   );
 }
+/* ════════════════════════════════════════════
+   CONTACT SEARCH — simple lookup over every contact by name / mobile / email.
+   For quickly finding someone to call, text, or check their notes. (Distinct
+   from Buyer Match, which is AI criteria-matching + bulk SMS.)
+════════════════════════════════════════════ */
+function ContactSearch(){
+  const [q,setQ]=useState("");
+  const [all,setAll]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const load=()=>{ if(all!==null||loading)return; setLoading(true); Attio.getAllBuyers().then(b=>{setAll(b||[]);setLoading(false);}).catch(()=>{setAll([]);setLoading(false);}); };
+  const t=q.trim().toLowerCase(), tn=norm(q);
+  const show=t.length>=2;
+  const results=(show&&all)?all.filter(b=>
+    (b.name||"").toLowerCase().includes(t) ||
+    (tn.length>=3 && norm(b.mobile||"").includes(tn)) ||
+    (b.email||"").toLowerCase().includes(t)
+  ).slice(0,15):[];
+  const avCol=b=>b.col||AVATAR_COLS[Math.abs((b.name||"x").charCodeAt(0)||65)%AVATAR_COLS.length];
+  return (
+    <div style={{padding:"12px 14px 2px"}}>
+      <div style={{position:"relative"}}>
+        <input value={q} onFocus={load} onChange={e=>setQ(e.target.value)}
+          placeholder="🔍 Find a contact — name or mobile"
+          style={{width:"100%",background:WHITE,border:`1.5px solid ${SAND_D}`,borderRadius:100,padding:"11px 40px 11px 16px",fontSize:14,color:BROWN,outline:"none",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}/>
+        {q&&<button onClick={()=>setQ("")} aria-label="Clear" style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",width:26,height:26,borderRadius:"50%",background:SAND,border:"none",color:BROWN_M,fontSize:13,cursor:"pointer"}}>✕</button>}
+      </div>
+      {show&&(
+        <div style={{marginTop:8,background:WHITE,borderRadius:14,border:`1px solid ${SAND_D}`,boxShadow:"0 2px 12px rgba(49,30,16,.12)",overflow:"hidden"}}>
+          {loading&&<div style={{display:"flex",alignItems:"center",gap:10,color:BROWN_M,fontSize:13,padding:"14px"}}><div className="sp" style={{width:16,height:16}}/> Loading contacts…</div>}
+          {!loading&&results.length===0&&<div style={{color:BROWN_M,fontSize:13,padding:"14px"}}>No one found for “{q.trim()}”.</div>}
+          {!loading&&results.map((b,i)=>(
+            <div key={b.id||i} style={{padding:"11px 13px",borderTop:i?`1px solid ${SAND}`:"none"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div className="av" style={{background:avCol(b),width:36,height:36,fontSize:14}}>{mkI(b.name||"?")}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,color:ESPRESSO,fontSize:14.5}}>{b.name||"Unknown"}</div>
+                  <div style={{fontSize:12,color:BROWN_L,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.mobile||b.email||"No contact details on file"}</div>
+                </div>
+                {b.interest&&<span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>}
+              </div>
+              {b.notes&&<div style={{marginTop:7,background:LINEN,borderRadius:8,padding:"7px 10px",fontSize:12,color:BROWN_M,lineHeight:1.45,borderLeft:`2.5px solid ${BLUE}35`}}>{b.notes.length>220?b.notes.slice(0,220)+"…":b.notes}</div>}
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
+                {b.mobile&&<a href={`sms:${toE164AU(b.mobile)}`} style={ASK_ACT}>💬 Text</a>}
+                {b.mobile&&<a href={`tel:${toE164AU(b.mobile)}`} style={ASK_ACT}>📞 Call</a>}
+                {b.email&&<a href={`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(b.email)}`} onClick={e=>openEmail(e,b.email)} target="_blank" rel="noreferrer" style={ASK_ACT}>✉️ Email</a>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 export default function App(){
   const[agentName,setAgentName]=useState(()=>{ try { return SESSION_TOKEN ? (sessionStorage.getItem("savvi_who")||"") : ""; } catch(e){ return ""; } });
   const[screen,setScreen]=useState("home");
@@ -1894,7 +1947,9 @@ export default function App(){
         </div>
       </div>
 
-      {!loading&&<div className="seg" style={{marginTop:14,marginBottom:6}}>
+      <ContactSearch/>
+
+      {!loading&&<div className="seg" style={{marginTop:8,marginBottom:6}}>
         <button className={`seg-b ${homeTab==="opens"?"on":""}`} onClick={()=>setHomeTab("opens")}>🏠 Opens</button>
         <button className={`seg-b ${homeTab==="match"?"on":""}`} onClick={()=>setHomeTab("match")}>🎯 Buyer Match</button>
       </div>}
