@@ -289,6 +289,12 @@ const Attio = {
     const j = await call("createPerson", { name, email, mobile });
     return j?.ok ? { ok: true, id: j.id } : { ok: false };
   },
+  async updatePerson({ id, name, email, mobile }) {
+    // Patch the Attio person record so edited name/mobile/email sync back to the CRM.
+    const j = await call("updatePerson", { id, name, email, mobile });
+    if (j?.ok) invalidateBuyerCache();
+    return !!j?.ok;
+  },
   async createInspection({ contactId, propertyId, openHomeId, interest }) {
     const j = await call("createInspection", { contactId, propertyId, openHomeId, interest });
     if (j?.ok) invalidateBuyerCache();
@@ -952,6 +958,7 @@ function ContractBox({ buyer, propId, onSendContract }) {
           <div className="ctr-lbl sent">Contract sent {buyer.contractSentTime}</div>
           <div className="ctr-sub">{loadingTrack ? "Checking status…" : tracking ? `${statusIcon(tracking.status)} ${statusLabel(tracking.status)}` : "Email delivered"}</div>
         </div>
+        <button className="ctr-send" onClick={()=>onSendContract(propId,buyer)}>Resend</button>
       </div>
       {(buyer.contractOpens||[]).length>0 && (
         <div style={{background:"#F0FBF5",border:"1px solid #A9DFBF",borderTop:"none",padding:"9px 13px"}}>
@@ -987,12 +994,23 @@ function ContractBox({ buyer, propId, onSendContract }) {
 /* ════════════════════════════════════════════
    BUYER DETAIL SHEET
 ════════════════════════════════════════════ */
-function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSendContract,onAddNote,onSetProfile}){
+function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSendContract,onAddNote,onSetProfile,onUpdateDetails}){
   const[noteText,setNoteText]=useState("");
   const[showNote,setShowNote]=useState(false);
   const[copied,setCopied]=useState(false);
+  const[editing,setEditing]=useState(false);
+  const[eName,setEName]=useState("");const[eMobile,setEMobile]=useState("");const[eEmail,setEEmail]=useState("");
+  const[savingEdit,setSavingEdit]=useState(false);
 
-  useEffect(()=>{if(open){setNoteText("");setShowNote(false);}}, [open]);
+  useEffect(()=>{if(open){setNoteText("");setShowNote(false);setEditing(false);}}, [open]);
+
+  const startEdit=()=>{setEName(buyer?.name||"");setEMobile(buyer?.mobile||"");setEEmail(buyer?.email||"");setEditing(true);};
+  const saveDetails=async()=>{
+    if(!eName.trim()||savingEdit)return;
+    setSavingEdit(true);
+    await onUpdateDetails(propId,buyer.id,{name:eName.trim(),mobile:eMobile.trim(),email:eEmail.trim()});
+    setSavingEdit(false);setEditing(false);
+  };
 
   const genProfile=async(b,pid)=>{
     if(!b||!pid)return;
@@ -1062,17 +1080,35 @@ Return ONLY valid JSON: {"bio":"...","stage":"Early|Middle|Late"}`;
       <AiProfile profile={buyer.aiProfile} onRegen={()=>{onSetProfile(propId,buyer.id,null);setTimeout(()=>genProfile(buyer,propId),100);}}/>
       <div style={{height:12}}/>
 
+      {editing ? (
+      <div style={{padding:"0 16px 14px"}}>
+        <div style={{marginBottom:10}}><label className="fl">Full name</label>
+          <input className="fi" value={eName} onChange={e=>setEName(e.target.value)} placeholder="Full name" autoFocus/></div>
+        <div style={{marginBottom:10}}><label className="fl">Mobile</label>
+          <input className="fi" type="tel" value={eMobile} onChange={e=>setEMobile(e.target.value)} placeholder="04XX XXX XXX"/></div>
+        <div style={{marginBottom:10}}><label className="fl">Email</label>
+          <input className="fi" type="email" value={eEmail} onChange={e=>setEEmail(e.target.value)} placeholder="name@email.com"/></div>
+        <div className="note-row">
+          <button className="ns-save" disabled={savingEdit||!eName.trim()} onClick={saveDetails}>{savingEdit?"Saving…":"Save details"}</button>
+          <button className="ns-can" onClick={()=>setEditing(false)}>Cancel</button>
+        </div>
+      </div>
+      ) : (<>
       <a className="crow" href={buyer.mobile?`sms:${toE164AU(buyer.mobile)}`:undefined} style={{textDecoration:"none",color:"inherit",cursor:buyer.mobile?"pointer":"default"}}>
         <div className="ci" style={{background:"#FFF4D5"}}>📱</div>
         <div style={{flex:1}}><div className="ci-l">MOBILE</div><div className="ci-v">{buyer.mobile||"—"}</div></div>
         {buyer.mobile&&<span className="ci-cp" onClick={e=>{e.preventDefault();e.stopPropagation();navigator.clipboard?.writeText(buyer.mobile).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}}>{copied?"Copied ✓":"Copy"}</span>}
         {buyer.mobile&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:AMBER}}>Text ›</span>}
       </a>
-      <a className="crow" href={buyer.email?`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(buyer.email)}`:undefined} onClick={buyer.email?(e=>openEmail(e,buyer.email)):undefined} target="_blank" rel="noreferrer" style={{marginBottom:12,textDecoration:"none",color:"inherit",cursor:buyer.email?"pointer":"default"}}>
+      <a className="crow" href={buyer.email?`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(buyer.email)}`:undefined} onClick={buyer.email?(e=>openEmail(e,buyer.email)):undefined} target="_blank" rel="noreferrer" style={{marginBottom:8,textDecoration:"none",color:"inherit",cursor:buyer.email?"pointer":"default"}}>
         <div className="ci" style={{background:"#FFF4D5"}}>✉️</div>
         <div style={{flex:1}}><div className="ci-l">EMAIL</div><div className="ci-v">{buyer.email||"—"}</div></div>
         {buyer.email&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:AMBER}}>Email ›</span>}
       </a>
+      <div style={{padding:"0 16px 12px"}}>
+        <button className="btn-ghost" style={{margin:0}} onClick={startEdit}>✏️ Edit name, mobile or email</button>
+      </div>
+      </>)}
 
       <ContractBox buyer={buyer} propId={propId} onSendContract={onSendContract}/>
 
@@ -1604,6 +1640,17 @@ export default function App(){
     if(!isDemo&&openHome?.id) Attio.updateInspection(id,{interest:val}).catch(()=>{});
   },[isDemo,openHome]);
 
+  // Edit a buyer's name / mobile / email and sync it back to their Attio person record.
+  const updateDetails=useCallback(async(pid,id,d)=>{
+    if(!pid)return;
+    const b=(buyers[pid]||[]).find(x=>x.id===id);
+    const patch=x=>({...x,name:d.name,mobile:d.mobile,email:d.email,initials:mkI(d.name||x.name)});
+    setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===id?patch(x):x);return u;});
+    setActive(p=>p?.id===id?patch(p):p);
+    if(!isDemo && b?.contactId && !String(b.contactId).startsWith("local"))
+      await Attio.updatePerson({id:b.contactId, name:d.name, email:d.email, mobile:d.mobile}).catch(()=>{});
+  },[isDemo,buyers]);
+
   const sendContract=useCallback((pid,b)=>{
     if(!pid)return;
     const t=fmtDateTime();
@@ -1868,7 +1915,7 @@ export default function App(){
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id}
       onUpdateInterest={updateInterest} onSendContract={sendContract}
-      onAddNote={addNote} onSetProfile={setProfile}/>
+      onAddNote={addNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}/>
     <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={propAll.length?propAll:pb}/>
     <QuickContractSheet
       open={showQuickContract}
