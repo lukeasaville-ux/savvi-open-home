@@ -846,7 +846,7 @@ function AiProfile({profile,onRegen}){
     <div className="ai-hdr"><span className="ai-lbl">Buyer profile</span>
       {profile&&!profile.loading&&<span className="ai-regen" onClick={onRegen}>Refresh ↻</span>}
     </div>
-    {!profile&&<span className="ai-empty">Add notes to build this buyer's profile.</span>}
+    {!profile&&<span className="ai-empty">No notes on this contact yet — add one at any listing to build their profile.</span>}
     {profile?.loading&&<div className="ai-loading"><div className="sp-sm"/>Building profile…</div>}
     {profile&&!profile.loading&&<>
       {cfg&&<div className="stage-pill" style={{background:cfg.bg,color:cfg.col,border:`1px solid ${cfg.dot}40`}}>
@@ -1106,10 +1106,32 @@ function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSend
   const[showNote,setShowNote]=useState(false);
   const[copied,setCopied]=useState(false);
   const[editing,setEditing]=useState(false);
+  // The buyer profile is a CONTACT-level summary: it reads this person's notes across
+  // EVERY property they've inspected, not just the listing you're viewing. crossNotes
+  // holds that aggregated note set (null = not loaded yet).
+  const[crossNotes,setCrossNotes]=useState(null);
   const[eName,setEName]=useState("");const[eMobile,setEMobile]=useState("");const[eEmail,setEEmail]=useState("");
   const[savingEdit,setSavingEdit]=useState(false);
 
   useEffect(()=>{if(open){setNoteText("");setShowNote(false);setEditing(false);}}, [open]);
+
+  // Load this contact's notes from EVERY property (by contactId) so the profile
+  // summarises the whole relationship, not just this listing. For a not-yet-synced
+  // local buyer (no contactId) fall back to their own notes.
+  useEffect(()=>{
+    if(!open){setCrossNotes(null);return;}
+    if(!buyer?.contactId||String(buyer.contactId).startsWith("local")){
+      setCrossNotes((buyer?.notes||[]).map(n=>n.text));return;
+    }
+    let cancelled=false;
+    Attio.getAllContacts().then(list=>{
+      if(cancelled)return;
+      const me=(list||[]).find(x=>x.contactId===buyer.contactId);
+      const arr=me&&me.notes?String(me.notes).split(" • ").map(s=>s.trim()).filter(Boolean):[];
+      setCrossNotes(arr);
+    }).catch(()=>{if(!cancelled)setCrossNotes((buyer?.notes||[]).map(n=>n.text));});
+    return()=>{cancelled=true;};
+  },[open,buyer?.contactId]);
 
   const startEdit=()=>{setEName(buyer?.name||"");setEMobile(buyer?.mobile||"");setEEmail(buyer?.email||"");setEditing(true);};
   const saveDetails=async()=>{
@@ -1119,46 +1141,40 @@ function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSend
     setSavingEdit(false);setEditing(false);
   };
 
-  const genProfile=async(b,pid)=>{
+  // noteTexts = the contact's notes across ALL properties (falls back to b.notes).
+  const genProfile=async(b,pid,noteTexts)=>{
     if(!b||!pid)return;
+    const texts=(noteTexts&&noteTexts.length)?noteTexts:(b.notes||[]).map(n=>n.text);
     onSetProfile(pid,b.id,{loading:true});
-    const days=daysSince(b.firstSeen);
-    const prompt=`You are a real estate CRM assistant for Savvi, a boutique Melbourne apartment agency. Write a 2-sentence buyer profile and classify readiness.
-
-Buyer: ${b.name}
-First seen: ${b.firstSeen}${days!==null?` (${days} days ago)`:""}
-Notes: ${(b.notes||[]).map(n=>n.text).join(" | ")||"None"}
-Contracts sent: ${b.contractSent?1:0}
-
-2 sentences: buyer type, who they inspect with if mentioned, finance signals, key preferences.
-Stage: Early / Middle / Late.
-
-Return ONLY valid JSON: {"bio":"...","stage":"Early|Middle|Late"}`;
-
+    const bForAi={...b,notes:texts.map(t=>({text:t}))};
     try{
-      const parsed=await aiBuyerProfile(b);
+      const parsed=await aiBuyerProfile(bForAi);
       onSetProfile(pid,b.id,{loading:false,bio:parsed.bio,stage:parsed.stage||"Early"});
     }catch{
-      // Smart fallback from notes
-      const notes=(b.notes||[]).map(n=>n.text).join(" ");
+      // Smart fallback from the aggregated notes
+      const notes=texts.join(" ");
       const isFHB=/first home/i.test(notes),isInv=/investor/i.test(notes),isUp=/upgrader/i.test(notes);
       const hasPA=/pre.?approval/i.test(notes),hasOff=/offer/i.test(notes);
-      const bio=`${isFHB?"First home buyer":isInv?"Property investor":isUp?"Upgrader":"Active buyer"} with ${(b.notes||[]).length} inspection note${(b.notes||[]).length!==1?"s":""}. ${hasPA?"Pre-approval confirmed.":hasOff?"Has made prior offers.":"Following up to assess finance and timeline."}`;
+      const bio=`${isFHB?"First home buyer":isInv?"Property investor":isUp?"Upgrader":"Active buyer"} with ${texts.length} note${texts.length!==1?"s":""} across ${(b.visits||1)>1?"multiple visits":"the file"}. ${hasPA?"Pre-approval confirmed.":hasOff?"Has made prior offers.":"Following up to assess finance and timeline."}`;
       onSetProfile(pid,b.id,{loading:false,bio,stage:hasPA||hasOff?"Late":isFHB||isInv?"Middle":"Early"});
     }
   };
 
+  // Generate once the cross-property notes have loaded (and there's at least one, anywhere).
   useEffect(()=>{
-    if(open&&buyer&&propId&&(buyer.notes||[]).length>0&&!buyer.aiProfile) genProfile(buyer,propId);
-  },[open,buyer?.id]);
+    if(open&&buyer&&propId&&Array.isArray(crossNotes)&&crossNotes.length>0&&!buyer.aiProfile)
+      genProfile(buyer,propId,crossNotes);
+  },[open,buyer?.id,crossNotes]);
 
   const saveNote=()=>{
     if(!noteText.trim())return;
-    onAddNote(propId,buyer.id,noteText.trim());
-    const updated={...buyer,notes:[...(buyer.notes||[]),{id:"n"+Date.now(),text:noteText.trim(),ts:new Date().toISOString()}]};
+    const txt=noteText.trim();
+    onAddNote(propId,buyer.id,txt);
+    const newCross=[...(crossNotes||[]),txt];
+    setCrossNotes(newCross);
     onSetProfile(propId,buyer.id,null);
     setNoteText("");setShowNote(false);
-    setTimeout(()=>genProfile(updated,propId),200);
+    setTimeout(()=>genProfile(buyer,propId,newCross),200);
   };
 
   if(!buyer)return null;
@@ -1184,7 +1200,7 @@ Return ONLY valid JSON: {"bio":"...","stage":"Early|Middle|Late"}`;
         </div>
       </div>
 
-      <AiProfile profile={buyer.aiProfile} onRegen={()=>{onSetProfile(propId,buyer.id,null);setTimeout(()=>genProfile(buyer,propId),100);}}/>
+      <AiProfile profile={buyer.aiProfile} onRegen={()=>{onSetProfile(propId,buyer.id,null);setTimeout(()=>genProfile(buyer,propId,crossNotes),100);}}/>
       <div style={{height:12}}/>
 
       {editing ? (
