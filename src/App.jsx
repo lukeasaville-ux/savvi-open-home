@@ -286,31 +286,14 @@ const Attio = {
     return matches.map(m => ({ ...(byId[m.id] || { id: m.id, name: "Unknown buyer", mobile: "", email: "" }), reason: m.reason || "" }));
   },
   async findPersonByPhone(phone) {
-    // 1) Backend server-side phone query. The backend returns {found:true,id,name,mobile,email}
-    //    (NOT the {ok,data} shape) — read that exact shape so the known-buyer card actually shows.
-    const j = await call("lookupBuyer", { phone });
+    // ONE fast server-side phone query — send E.164 so it matches the stored "+61…".
+    // No fallback scan of the whole CRM: that fetched every inspection + every person
+    // (~20s) and only ran for NEW buyers (the common case at an open). If lookupBuyer
+    // misses a returning buyer we simply don't show their card — createPerson still
+    // dedups by phone at save, so it can never create a duplicate.
+    const j = await call("lookupBuyer", { phone: toE164AU(phone) });
     if (j && j.found && j.id) {
       return { id: j.id, name: j.name || "", mobile: j.mobile || phone, email: j.email || "" };
-    }
-    // 2) Format-tolerant fallback — the backend query is an exact match, so a
-    // stored "+61…" won't match a typed "04…". Compare everyone in the CRM by E.164.
-    const target = toE164AU(phone);
-    if (!target || target.length < 8) return null;
-    if (!_buyerRecCache || (Date.now() - _buyerRecCache.t) >= 60000) {
-      await this.getAllBuyers().catch(() => {});
-    }
-    const ppl = (_buyerRecCache && _buyerRecCache.ppl) || [];
-    for (const p of ppl) {
-      const nums = p?.values?.phone_numbers || [];
-      if (nums.some(x => x && x.phone_number && toE164AU(x.phone_number) === target)) {
-        const n = p?.values?.name?.[0];
-        return {
-          id: p?.id?.record_id,
-          name: n ? `${n.first_name || ""} ${n.last_name || ""}`.trim() : "",
-          mobile: nums[0]?.phone_number || phone,
-          email: p?.values?.email_addresses?.[0]?.email_address || "",
-        };
-      }
     }
     return null;
   },
@@ -831,7 +814,7 @@ function AiProfile({profile,onRegen}){
 /* ════════════════════════════════════════════
    ADD BUYER SHEET — with live Attio lookup
 ════════════════════════════════════════════ */
-function AddSheet({open,onClose,openHome,onSave,propContactIds=[]}){
+function AddSheet({open,onClose,openHome,onSave,onReconcile,propContactIds=[]}){
   const[step,setStep]=useState("mobile");
   const[mobile,setMobile]=useState("");
   const[searching,setSearching]=useState(false);
@@ -846,7 +829,7 @@ function AddSheet({open,onClose,openHome,onSave,propContactIds=[]}){
   const debounce=useRef(null);
   const ref=useRef(null);
 
-  useEffect(()=>{if(open){setStep("mobile");setMobile("");setMatch(null);setNoMatch(false);setSelected(null);setName("");setEmail("");setInterest("");setSaving(false);setErr("");setTimeout(()=>ref.current?.focus(),400);}}, [open]);
+  useEffect(()=>{if(open){setStep("mobile");setMobile("");setMatch(null);setNoMatch(false);setSelected(null);setName("");setEmail("");setInterest("");setSaving(false);setErr("");call("warmup").catch(()=>{});setTimeout(()=>ref.current?.focus(),400);}}, [open]);
 
   useEffect(()=>{
     clearTimeout(debounce.current);
@@ -874,66 +857,50 @@ function AddSheet({open,onClose,openHome,onSave,propContactIds=[]}){
 
   const pick=c=>{setSelected(c);setName(c.name);setEmail(c.email||"");setStep("confirm");};
 
-  const save=async()=>{
-    if(saving)return;
+  const save=()=>{
+    const nm=name.trim(), em=email.trim(), mob=mobile.trim(), sel=selected;
+    if(!nm) return;
     const interestVal=interest||"cool";  // interest is optional at registration; set later from the profile
-    setSaving(true);setErr("");
+    const col=sel?.col||AVATAR_COLS[Math.abs((nm.charCodeAt(0)||65)%AVATAR_COLS.length)];
+    const tempId="tmp"+Date.now();
+    const pid=openHome?.id;
 
-    let contactId=selected?.id;
-    let inspectionId=null;
-    let smsOk=false;
-
-    if(!openHome?._demo){
-      // Create or use existing Attio person
-      if(!contactId){
-        const r=await Attio.createPerson({name,email,mobile});
-        if(r.ok) contactId=r.id;
-      }
-      // Create inspection record
-      if(contactId){
-        const r=await Attio.createInspection({
-          contactId,
-          propertyId:openHome?.propertyId,
-          openHomeId:openHome?.id,
-          interest:interestVal,
-        });
-        if(r.ok) inspectionId=r.id;
-      }
-      // Only claim success if the buyer actually persisted to Attio — otherwise
-      // surface the error instead of showing a buyer that vanishes on reload.
-      if(!contactId||!inspectionId){
-        setErr("Couldn't save this buyer to Attio — please check your connection and try again.");
-        setSaving(false);
-        return;
-      }
-    }
-
-    // Register the buyer in the UI immediately — don't make it wait on the SMS.
-    const col=selected?.col||AVATAR_COLS[Math.abs((name.charCodeAt(0)||65)%AVATAR_COLS.length)];
+    // OPTIMISTIC: show the buyer + success overlay INSTANTLY. At an open with a queue
+    // of people we must never block on Attio/SMS — those run in the background below.
     onSave({
-      id:inspectionId||"b"+Date.now(),
-      contactId:contactId||"local_"+Date.now(),
-      name,email,mobile,interest:interestVal,
+      id:tempId,
+      contactId:sel?.id||("local_"+Date.now()),
+      name:nm,email:em,mobile:mob,interest:interestVal,
       time:fmtTs(),
-      initials:mkI(name),col,
+      initials:mkI(nm),col,
       contractSent:false,contractSentTime:null,offered:false,
       smsSent:false,
       aiProfile:null,notes:[],
       firstSeen:new Date().toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"}),
-      _attioInspectionId:inspectionId,
+      _attioInspectionId:null,
+      _pending: !openHome?._demo,
     });
-    setSaving(false);
 
-    // Fire the welcome SMS in the background — but ONLY the first time this buyer
-    // inspects this property. A repeat inspector already got the walkthrough + club
-    // link, so we don't text them again.
-    const alreadyInspected = (propContactIds||[]).includes(contactId);
-    if(mobile && !openHome?._demo && !alreadyInspected){
-      MM.sendMessage({
-        toPhone:mobile,
-        message: buildWelcomeSms({ firstName:name.split(" ")[0], address:openHome.address, igUrl:openHome.igUrl||"", agent:openHome.agent }),
-      }).then(sres=>{ if(sres&&sres.ok&&inspectionId) Attio.updateInspection(inspectionId,{smsSent:true}).catch(()=>{}); }).catch(()=>{});
-    }
+    if(openHome?._demo) return;
+
+    // Persist to Attio + fire the SMS entirely in the background; reconcile the row's
+    // real ids when done, or flag it so the agent knows if a save actually failed.
+    (async()=>{
+      let contactId=sel?.id, inspectionId=null;
+      if(!contactId){ const r=await Attio.createPerson({name:nm,email:em,mobile:mob}).catch(()=>({ok:false})); if(r.ok) contactId=r.id; }
+      if(contactId){ const r=await Attio.createInspection({contactId,propertyId:openHome?.propertyId,openHomeId:openHome?.id,interest:interestVal}).catch(()=>({ok:false})); if(r.ok) inspectionId=r.id; }
+      if(contactId&&inspectionId){
+        onReconcile&&onReconcile(pid,tempId,{id:inspectionId,contactId,_attioInspectionId:inspectionId,_pending:false});
+        // Welcome SMS — first inspection of this property only.
+        const alreadyInspected=(propContactIds||[]).includes(contactId);
+        if(mob && !alreadyInspected){
+          MM.sendMessage({ toPhone:mob, message: buildWelcomeSms({ firstName:nm.split(" ")[0], address:openHome.address, igUrl:openHome.igUrl||"", agent:openHome.agent }) })
+            .then(sres=>{ if(sres&&sres.ok) Attio.updateInspection(inspectionId,{smsSent:true}).catch(()=>{}); }).catch(()=>{});
+        }
+      } else {
+        onReconcile&&onReconcile(pid,tempId,{_pending:false,_error:true});
+      }
+    })();
   };
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
@@ -1854,6 +1821,8 @@ export default function App(){
           <div className="bn">{b.name}</div>
           <div className="bs">{b.mobile}{b.time?` · ${b.time}`:""}</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+            {b._error&&<span className="sms-badge" style={{background:"#FDECEA",color:"#C0392B"}}>⚠ Not saved — re-add</span>}
+            {b._pending&&!b._error&&<span className="sms-badge" style={{background:LINEN,color:BROWN_L}}>Saving…</span>}
             {b.contractSent&&<span className="ctr-badge">📄 Contract sent{b.contractSentTime?` ${b.contractSentTime}`:""}</span>}
             {b.smsSent&&<span className="sms-badge">📱 SMS sent</span>}
             {(b.visits||1)>1&&<span className="sms-badge">🔁 {b.visits}× inspected</span>}
@@ -1898,6 +1867,7 @@ export default function App(){
   // Load buyers when entering an open home
   const enterOpenHome=async oh=>{
     setOpenHome(oh);setScreen("open");setBFilters([]);
+    call("warmup").catch(()=>{}); // wake n8n so the first buyer-save at this open is fast
     if(oh._demo||buyers[oh.id]) return;
     // Instant: hydrate cached buyers for this open so the list shows immediately.
     let hadCache=false;
@@ -2005,6 +1975,14 @@ export default function App(){
     setLastAdded(b);setShowAdd(false);
     setTimeout(()=>setShowOk(true),220);
   };
+  // Patch an optimistically-added buyer once its Attio write finishes (real ids), or
+  // flag it if the write failed — keyed by the temp id used at registration.
+  const reconcileBuyer=useCallback((pid,tempId,patch)=>{
+    if(!pid)return;
+    setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(b=>b.id===tempId?{...b,...patch}:b);return u;});
+    setActive(p=>p?.id===tempId?{...p,...patch}:p);
+    setLastAdded(la=>la&&la.id===tempId?{...la,...patch}:la);
+  },[]);
 
   if (!agentName) return <PinScreen onUnlock={name => { setAgentName(name); }} />;
 
@@ -2216,7 +2194,7 @@ export default function App(){
     {screen==="open"&&<button onClick={()=>setShowAdd(true)} aria-label="Add buyer" style={{position:"absolute",right:18,bottom:`calc(18px + env(safe-area-inset-bottom,0px))`,zIndex:45,width:58,height:58,borderRadius:"50%",border:"none",background:BLUE_D,color:"#fff",boxShadow:"0 6px 18px rgba(49,30,16,.30)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
       <svg width="26" height="26" viewBox="0 0 24 24" fill="white"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
     </button>}
-    <AddSheet open={showAdd} onClose={()=>setShowAdd(false)} openHome={openHome} onSave={handleSave} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)}/>
+    <AddSheet open={showAdd} onClose={()=>setShowAdd(false)} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id}
       onUpdateInterest={updateInterest} onSendContract={sendContract}
