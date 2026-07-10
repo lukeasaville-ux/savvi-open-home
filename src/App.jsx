@@ -442,7 +442,7 @@ function buildWelcomeSms({ firstName, address, igUrl, agent }){
   ];
   if(igUrl) parts.push(`Here's a walkthrough video should you need to retrace your steps: ${igUrl}`);
   if(SOFT_LAUNCH_URL) parts.push(`Also, if you want first look at our off-market listings before they hit realestate.com or Domain, join our Soft Launch Club: ${SOFT_LAUNCH_URL}`);
-  parts.push(sig);
+  parts.push(`Thanks :)\n${sig}`);
   return parts.join("\n\n");
 }
 const CONTACTS_CACHE=[
