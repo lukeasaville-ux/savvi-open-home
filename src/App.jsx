@@ -271,6 +271,46 @@ const Attio = {
     });
     return Object.values(byC).map(b => ({ ...b, notes: b.notes.join(" • ") }));
   },
+  // EVERY person in Attio People (the full CRM contacts list) — not just those who've
+  // inspected — each enriched with any notes/interest from their inspections. This is
+  // what the contact search reads, so you can find anyone, not only registered buyers.
+  async getAllContacts() {
+    let inspData, pplData;
+    if (_buyerRecCache && (Date.now() - _buyerRecCache.t) < 60000) {
+      inspData = _buyerRecCache.insp; pplData = _buyerRecCache.ppl;
+    } else {
+      const [inspJ, pplJ] = await Promise.all([
+        call("listRecords", { objectSlug: "inspections" }),
+        call("listRecords", { objectSlug: "people" }),
+      ]);
+      if (!pplJ?.ok) return [];
+      inspData = inspJ?.data || []; pplData = pplJ.data || [];
+      _buyerRecCache = { t: Date.now(), insp: inspData, ppl: pplData };
+    }
+    const rid = r => r?.id?.record_id ?? null;
+    const rref = (r, f) => r?.values?.[f]?.[0]?.target_record_id ?? null;
+    const rval = (r, f) => r?.values?.[f]?.[0]?.value ?? null;
+    const pnm = p => { const n = p?.values?.name?.[0]; return n ? `${n.first_name || ""} ${n.last_name || ""}`.trim() : ""; };
+    const pph = p => p?.values?.phone_numbers?.[0]?.phone_number ?? "";
+    const pem = p => p?.values?.email_addresses?.[0]?.email_address ?? "";
+    const rank = { hot: 3, watching: 2, cool: 1 };
+    // Strip the "<ISO>\t<text>" timestamp encoding from stored notes for display.
+    const cleanNotes = s => String(s || "").split("\n---\n").map(t => {
+      const tab = t.indexOf("\t"); return (tab > 0 && /^\d{4}-\d\d-\d\dT/.test(t)) ? t.slice(tab + 1) : t;
+    }).map(t => t.trim()).filter(Boolean);
+    const ext = {};
+    inspData.forEach(insp => {
+      const cid = rref(insp, "contact"); if (!cid) return;
+      const interest = (rval(insp, "interest") || "").toLowerCase();
+      if (!ext[cid]) ext[cid] = { notes: [], interest: "" };
+      ext[cid].notes.push(...cleanNotes(rval(insp, "notes")));
+      if ((rank[interest] || 0) > (rank[ext[cid].interest] || 0)) ext[cid].interest = interest;
+    });
+    return pplData.map(p => {
+      const id = rid(p); const e = ext[id] || {};
+      return { id, contactId: id, name: pnm(p) || "Unknown", mobile: pph(p), email: pem(p), interest: e.interest || "", notes: (e.notes || []).join(" • ") };
+    });
+  },
   // Natural-language search over the whole buyer database. propIndex maps a
   // property record id → "address, suburb" so location questions work too.
   async askCRM(question, propIndex = {}) {
@@ -1697,7 +1737,7 @@ function ContactSearch(){
   const [q,setQ]=useState("");
   const [all,setAll]=useState(null);
   const [loading,setLoading]=useState(false);
-  const load=()=>{ if(all!==null||loading)return; setLoading(true); Attio.getAllBuyers().then(b=>{setAll(b||[]);setLoading(false);}).catch(()=>{setAll([]);setLoading(false);}); };
+  const load=()=>{ if(all!==null||loading)return; setLoading(true); Attio.getAllContacts().then(b=>{setAll(b||[]);setLoading(false);}).catch(()=>{setAll([]);setLoading(false);}); };
   const t=q.trim().toLowerCase(), tn=norm(q);
   const show=t.length>=2;
   const results=(show&&all)?all.filter(b=>
