@@ -428,16 +428,22 @@ const AVATAR_COLS=["#C75B3A","#5A7FBF","#8B4513","#2B5F3A","#6B4EAF","#1A5276","
 // Soft Launch Club — Savvi's Instagram broadcast channel for off-market listings.
 // Same link for every buyer.
 const SOFT_LAUNCH_URL="https://www.instagram.com/channel/AbaX4MTIDSizmiyT/";
-// Build the post-registration welcome SMS: greeting → walkthrough reel (only if the
-// property has one on file) → Soft Launch Club link → sign-off. Built client-side and
-// sent via the sendSms custom-message path, so no property = no walkthrough line.
+// Full agent name for the sign-off (backend `who` may be a first name only).
+const AGENT_FULL={ "Luke":"Luke Saville", "Sam":"Sam Robinson" };
+// Build the post-registration welcome SMS: personal greeting → walkthrough reel (only
+// if the property has one on file) → Soft Launch Club invite → full-name sign-off.
+// Blank lines between each part so it reads clean. Built client-side + sent via the
+// sendSms custom-message path, so no reel on the property = no walkthrough line.
 function buildWelcomeSms({ firstName, address, igUrl, agent }){
-  return [
-    `Hi ${firstName||"there"}, great to meet you at ${address||"the open"} today.`,
-    igUrl ? `Here's the walkthrough video: ${igUrl}` : null,
-    SOFT_LAUNCH_URL ? `Want first look at our off-market listings before they hit realestate.com or Domain? Join our Soft Launch Club: ${SOFT_LAUNCH_URL}` : null,
-    `— ${agent||"Luke"}, Savvi`,
-  ].filter(Boolean).join(" ");
+  const sig = AGENT_FULL[agent] || agent || "Luke Saville";
+  const parts = [
+    `Hi ${firstName||"there"},`,
+    `Great to meet you at ${address||"the open"} today.`,
+  ];
+  if(igUrl) parts.push(`Here's a walkthrough video should you need to retrace your steps: ${igUrl}`);
+  if(SOFT_LAUNCH_URL) parts.push(`Also, if you want first look at our off-market listings before they hit realestate.com or Domain, join our Soft Launch Club: ${SOFT_LAUNCH_URL}`);
+  parts.push(sig);
+  return parts.join("\n\n");
 }
 const CONTACTS_CACHE=[
   {id:"c1",name:"Sarah Chen",      mobile:"0412 345 678",email:"sarah.chen@gmail.com",  col:"#C75B3A"},
@@ -814,7 +820,7 @@ function AiProfile({profile,onRegen}){
 /* ════════════════════════════════════════════
    ADD BUYER SHEET — with live Attio lookup
 ════════════════════════════════════════════ */
-function AddSheet({open,onClose,openHome,onSave,onReconcile,propContactIds=[]}){
+function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContactIds=[]}){
   const[step,setStep]=useState("mobile");
   const[mobile,setMobile]=useState("");
   const[searching,setSearching]=useState(false);
@@ -894,7 +900,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,propContactIds=[]}){
         // Welcome SMS — first inspection of this property only.
         const alreadyInspected=(propContactIds||[]).includes(contactId);
         if(mob && !alreadyInspected){
-          MM.sendMessage({ toPhone:mob, message: buildWelcomeSms({ firstName:nm.split(" ")[0], address:openHome.address, igUrl:openHome.igUrl||"", agent:openHome.agent }) })
+          MM.sendMessage({ toPhone:mob, message: buildWelcomeSms({ firstName:nm.split(" ")[0], address:openHome.address, igUrl:openHome.igUrl||"", agent:agentName||openHome.agent }) })
             .then(sres=>{ if(sres&&sres.ok) Attio.updateInspection(inspectionId,{smsSent:true}).catch(()=>{}); }).catch(()=>{});
         }
       } else {
@@ -2194,7 +2200,7 @@ export default function App(){
     {screen==="open"&&<button onClick={()=>setShowAdd(true)} aria-label="Add buyer" style={{position:"absolute",right:18,bottom:`calc(18px + env(safe-area-inset-bottom,0px))`,zIndex:45,width:58,height:58,borderRadius:"50%",border:"none",background:BLUE_D,color:"#fff",boxShadow:"0 6px 18px rgba(49,30,16,.30)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
       <svg width="26" height="26" viewBox="0 0 24 24" fill="white"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
     </button>}
-    <AddSheet open={showAdd} onClose={()=>setShowAdd(false)} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)}/>
+    <AddSheet open={showAdd} onClose={()=>setShowAdd(false)} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id}
       onUpdateInterest={updateInterest} onSendContract={sendContract}
