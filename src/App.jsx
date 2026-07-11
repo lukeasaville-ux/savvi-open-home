@@ -100,6 +100,9 @@ function normBuyer(b) {
     resendId: b.resendId || null,
     contractOpens: parseContractOpens(b.contractOpens),
     notes,
+    // Online portal enquiries (REA/Domain) are auto-created with a note prefixed
+    // "<portal> enquiry:" — flag them so the app can show them separately.
+    isEnquiry: notes.some(n=>/^\s*(REA|Domain|Portal)\s+enquiry/i.test(n.text||"")),
     aiProfile: null,
     initials: b.initials || mkI(name),
     col: b.col || AVATAR_COLS[Math.abs(name.charCodeAt(0) || 65) % AVATAR_COLS.length],
@@ -1924,6 +1927,14 @@ export default function App(){
   const pb=openHome?(buyers[openHome.id]||[]):[];
   const propAll=openHome?(propBuyers[openHome.id]||[]):[];
   const propExtra=propAll.filter(b=>!pb.some(x=>(x.contactId&&x.contactId===b.contactId)||x.id===b.id));
+  // Online enquiries (REA/Domain) are lower-priority than people who've physically
+  // inspected — split them into their own subsection + filter, and keep them out of
+  // the main buyer lists and counts.
+  const enquiries=propAll.filter(b=>b.isEnquiry);
+  const propReal=propAll.filter(b=>!b.isEnquiry);
+  const pbReal=pb.filter(b=>!b.isEnquiry);
+  const propExtraReal=propExtra.filter(b=>!b.isEnquiry);
+  const enqActive=bFilters[0]==="enquiry";
   const allN=id=>(buyers[id]||[]).length;
   // Multi-select filter across everyone registered to this property (for callbacks).
   // Interest chips OR within interest; contract/repeat AND on top. e.g. "Contract + Hot".
@@ -1936,8 +1947,8 @@ export default function App(){
     return true;
   };
   const filterActive=bFilters.length>0;
-  const filteredBuyers=propAll.filter(matchFilter);
-  const countFor=(k)=>k==="contract"?propAll.filter(b=>b.contractSent).length:k==="repeat"?propAll.filter(b=>(b.visits||1)>1).length:propAll.filter(b=>b.interest===k).length;
+  const filteredBuyers=enqActive?enquiries:propReal.filter(matchFilter);
+  const countFor=(k)=>k==="enquiry"?enquiries.length:k==="contract"?propReal.filter(b=>b.contractSent).length:k==="repeat"?propReal.filter(b=>(b.visits||1)>1).length:propReal.filter(b=>b.interest===k).length;
   const toggleFilter=(k)=>setBFilters(prev=>prev.includes(k)?prev.filter(x=>x!==k):[...prev,k]);
   const rowOf=(b,kp)=>(
     <div key={kp+b.id} className="brow" onClick={()=>{setActive(b);setShowDetail(true);}}>
@@ -1947,6 +1958,7 @@ export default function App(){
           <div className="bn">{b.name}</div>
           <div className="bs">{b.mobile}{b.time?` · ${b.time}`:""}</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+            {b.isEnquiry&&<span className="sms-badge" style={{background:"#E8EEFB",color:"#5A7FBF"}}>📨 Online enquiry</span>}
             {b._error&&<span className="sms-badge" style={{background:"#FDECEA",color:"#C0392B"}}>⚠ Not saved — re-add</span>}
             {b._pending&&!b._error&&<span className="sms-badge" style={{background:LINEN,color:BROWN_L}}>Saving…</span>}
             {b.contractSent&&<span className="ctr-badge">📄 Contract sent{b.contractSentTime?` ${b.contractSentTime}`:""}</span>}
@@ -2301,8 +2313,8 @@ export default function App(){
         {propAll.length>0&&<BuyerFilter
           active={bFilters[0]||"all"}
           onSelect={k=>setBFilters(k==="all"?[]:[k])}
-          options={[{k:"all",l:"All buyers",n:propAll.length}].concat(
-            [{k:"hot",l:"🔥 Hot"},{k:"watching",l:"👀 Warm"},{k:"cool",l:"❄️ Cold"},{k:"contract",l:"📄 Contract sent"},{k:"repeat",l:"🔁 Repeat visit"}]
+          options={[{k:"all",l:"All buyers",n:propReal.length}].concat(
+            [{k:"hot",l:"🔥 Hot"},{k:"watching",l:"👀 Warm"},{k:"cool",l:"❄️ Cold"},{k:"contract",l:"📄 Contract sent"},{k:"repeat",l:"🔁 Repeat visit"},{k:"enquiry",l:"📨 Enquiries"}]
               .map(f=>({...f,n:countFor(f.k)})).filter(o=>o.n>0)
           )}
         />}
@@ -2310,23 +2322,28 @@ export default function App(){
         {buyersLoading&&<div style={{textAlign:"center",padding:"24px"}}><div className="sp"/></div>}
 
         {!buyersLoading&&filterActive&&<>
-          <div className="sec-lbl" style={{padding:"2px 0 10px"}}>{filteredBuyers.length} {filteredBuyers.length===1?"buyer":"buyers"}</div>
+          <div className="sec-lbl" style={{padding:"2px 0 10px"}}>{filteredBuyers.length} {enqActive?(filteredBuyers.length===1?"enquiry":"enquiries"):(filteredBuyers.length===1?"buyer":"buyers")}</div>
           {filteredBuyers.length===0
-            ? <div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>No buyers match this filter.</div>
+            ? <div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>{enqActive?"No enquiries yet.":"No buyers match this filter."}</div>
             : filteredBuyers.map(b=>rowOf(b,"f"))}
         </>}
 
         {!buyersLoading&&!filterActive&&<>
           <div className="sec-lbl" style={{padding:"2px 0 10px"}}>At this open</div>
-          {pb.length===0&&<div style={{textAlign:"center",padding:"36px 16px",color:"#C0B8A8"}}>
+          {pbReal.length===0&&<div style={{textAlign:"center",padding:"36px 16px",color:"#C0B8A8"}}>
             <div style={{fontSize:36,marginBottom:10}}>👥</div>
             <div style={{fontSize:14,lineHeight:1.5}}>No buyers yet — tap Add buyer to register the first.</div>
           </div>}
-          {pb.map(b=>rowOf(b,"o"))}
-          {propExtra.length>0&&<>
+          {pbReal.map(b=>rowOf(b,"o"))}
+          {propExtraReal.length>0&&<>
             <div className="sec-lbl" style={{padding:"20px 0 4px"}}>All buyers · this property</div>
             <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Everyone registered to this property to date — call back, add notes or send a contract any day.</div>
-            {propExtra.map(b=>rowOf(b,"p"))}
+            {propExtraReal.map(b=>rowOf(b,"p"))}
+          </>}
+          {enquiries.length>0&&<>
+            <div className="sec-lbl" style={{padding:"24px 0 4px"}}>📨 Enquiries · {enquiries.length}</div>
+            <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Online enquiries from realestate.com.au &amp; Domain — lower priority than buyers who've inspected.</div>
+            {enquiries.map(b=>rowOf(b,"e"))}
           </>}
         </>}
         <div style={{height:80}}/>
