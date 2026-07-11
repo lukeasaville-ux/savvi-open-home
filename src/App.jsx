@@ -549,10 +549,24 @@ const BLUE="#8AACE3",BLUE_D="#5A7FBF",BROWN="#311E10",BROWN_M="#7A5C48",BROWN_L=
 function useSheetDrag(onClose){
   const [dy,setDy]=useState(0);
   const startY=useRef(null);
-  const cur=useRef(0); // live delta — read on release so the close decision never sees a stale render
-  const onTouchStart=e=>{ startY.current=e.touches?.[0]?.clientY ?? null; cur.current=0; };
-  const onTouchMove=e=>{ if(startY.current==null)return; const d=(e.touches?.[0]?.clientY ?? startY.current)-startY.current; cur.current=d>0?d:0; setDy(cur.current); };
-  const onTouchEnd=()=>{ if(cur.current>90) onClose(); cur.current=0; setDy(0); startY.current=null; };
+  const cur=useRef(0);       // live delta — read on release so the close decision never sees a stale render
+  const engaged=useRef(false); // whether this gesture has become a dismiss-drag (vs a normal scroll)
+  const sheet=useRef(null);    // the .sh element the handlers sit on (also the scroll container)
+  const onTouchStart=e=>{ startY.current=e.touches?.[0]?.clientY ?? null; cur.current=0; engaged.current=false; sheet.current=e.currentTarget; };
+  // Grab-anywhere: start following the finger the moment they drag DOWN while the
+  // sheet is scrolled to the top. If they're scrolled into the content, let it scroll.
+  const onTouchMove=e=>{
+    if(startY.current==null) return;
+    const y=e.touches?.[0]?.clientY ?? startY.current;
+    if(!engaged.current){
+      if((y-startY.current)>4 && (sheet.current?.scrollTop ?? 0)<=0){ engaged.current=true; startY.current=y; }
+      else return;
+    }
+    const d=y-startY.current;
+    cur.current=d>0?d:0;
+    setDy(cur.current);
+  };
+  const onTouchEnd=()=>{ if(cur.current>70) onClose(); cur.current=0; engaged.current=false; setDy(0); startY.current=null; };
   return {
     handlers:{ onTouchStart, onTouchMove, onTouchEnd },
     style: dy>0 ? { transform:`translateY(${dy}px)`, transition:"none" } : undefined,
@@ -1219,10 +1233,10 @@ function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSend
   const days=daysSince(buyer.firstSeen);
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}}>
-      <div className="hndl" onClick={onClose} style={{cursor:"pointer",padding:"8px 0",margin:"4px auto 0"}} {...drag.handlers}/>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}} {...drag.handlers}>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer",padding:"8px 0",margin:"4px auto 0"}}/>
       <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,lineHeight:1,cursor:"pointer",zIndex:5,fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>✕</button>
-      <div className="det-top" {...drag.handlers}>
+      <div className="det-top">
         <div className="det-row" style={{paddingRight:40}}>
           <div className="av" style={{background:buyer.col,width:52,height:52,fontSize:20}}>{buyer.initials}</div>
           <div style={{flex:1}}>
@@ -1363,11 +1377,11 @@ function SummarySheet({open,onClose,openHome,buyers}){
   useEffect(()=>{if(open)gen();},[open]);
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}}>
-      <div className="hndl" onClick={onClose} style={{cursor:"pointer",padding:"8px 0",margin:"4px auto 0"}} {...drag.handlers}/>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}} {...drag.handlers}>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer",padding:"8px 0",margin:"4px auto 0"}}/>
       <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,lineHeight:1,cursor:"pointer",zIndex:5,fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>✕</button>
-      <div className="sh-ttl" {...drag.handlers} style={{paddingRight:44}}>Vendor update</div>
-      <div className="sh-sub" {...drag.handlers}>{openHome?.address} · {openHome?.time}</div>
+      <div className="sh-ttl" style={{paddingRight:44}}>Vendor update</div>
+      <div className="sh-sub">{openHome?.address} · {openHome?.time}</div>
       <div className="sum-body">
         <div className="sum-stats">
           <div className="ss"><div className="ss-n">{buyers.length}</div><div className="ss-l">Total</div></div>
