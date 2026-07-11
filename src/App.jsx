@@ -443,13 +443,24 @@ async function aiBuyerProfile(buyer) {
   if (j?.ok) { const d = j.data || j; if (d.bio) return { bio: d.bio, stage: d.stage || "Early" }; }
   throw new Error(j?.error || "ai_unavailable");
 }
+// Vendor updates only ever use a buyer's FIRST name (privacy — never surface a full
+// name to the vendor). When there's nothing noted for a buyer, we say we didn't get
+// a proper chat and will follow up, rather than inventing detail.
+const VENDOR_NO_NOTE = "we didn't get the chance to have much of a conversation — I'll follow them up early next week";
 async function aiVendorSummary(openHome, buyers) {
   const j = await call("aiVendorSummary", {
     openHomeId: openHome.id,
     address: openHome.address,
     suburb: openHome.suburb,
     time: openHome.time,
-    buyers: buyers.map(b => ({ name: b.name, interest: b.interest, contractSent: !!b.contractSent, visits: b.visits || 1, notes: (b.notes || []).map(n => n.text) })),
+    buyers: buyers.map(b => {
+      const firstName = String(b.name || "").trim().split(/\s+/)[0] || "They";
+      const noteTexts = (b.notes || []).map(n => n.text).filter(t => t && t.trim());
+      // Only feed the "no chat" line when there's genuinely nothing else to say —
+      // a contract-taker's story is the contract, so leave that to the flag.
+      const notes = noteTexts.length ? noteTexts : (b.contractSent ? [] : [VENDOR_NO_NOTE]);
+      return { name: firstName, interest: b.interest, contractSent: !!b.contractSent, visits: b.visits || 1, notes };
+    }),
   });
   if (j?.ok) { const t = j.data?.text || j.text || (typeof j.data === "string" ? j.data : ""); if (t) return t; }
   throw new Error(j?.error || "ai_unavailable");
@@ -1306,7 +1317,7 @@ function SummarySheet({open,onClose,openHome,buyers}){
     // A line per buyer, their notes as the detail (falls back to a light default).
     const lines=buyers.map(b=>{
       const notes=(b.notes||[]).map(n=>n.text).join(" ").replace(/\s+/g," ").trim();
-      const detail=notes||`had a good look through${b.contractSent?" and took a contract":(b.visits||1)>1?" — a repeat visitor":""}`;
+      const detail=notes||(b.contractSent?"took a contract — I'll follow them up early next week":VENDOR_NO_NOTE);
       return `${first(b.name)} — ${detail}`;
     });
     setSumText(`Hi [Vendor],\n\n${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow all of the buyers up and be in touch early next week.\n\n— Luke, Savvi`);
