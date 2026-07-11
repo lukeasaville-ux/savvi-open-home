@@ -1234,7 +1234,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSend
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
     <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}} {...drag.handlers}>
-      <div className="hndl" onClick={onClose} style={{cursor:"pointer",padding:"8px 0",margin:"4px auto 0"}}/>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
       <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,lineHeight:1,cursor:"pointer",zIndex:5,fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>✕</button>
       <div className="det-top">
         <div className="det-row" style={{paddingRight:40}}>
@@ -1378,7 +1378,7 @@ function SummarySheet({open,onClose,openHome,buyers}){
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
     <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}} {...drag.handlers}>
-      <div className="hndl" onClick={onClose} style={{cursor:"pointer",padding:"8px 0",margin:"4px auto 0"}}/>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
       <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,lineHeight:1,cursor:"pointer",zIndex:5,fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>✕</button>
       <div className="sh-ttl" style={{paddingRight:44}}>Vendor update</div>
       <div className="sh-sub">{openHome?.address} · {openHome?.time}</div>
