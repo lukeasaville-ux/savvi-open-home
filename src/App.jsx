@@ -777,6 +777,8 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 .sum-box{background:${LINEN};border-radius:14px;padding:15px;margin-bottom:13px;border:1px solid ${SAND_D};min-height:100px;}
 .sum-lbl{font-size:9px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:${BROWN_L};margin-bottom:10px;}
 .sum-txt{font-size:14px;color:${BROWN};line-height:1.72;white-space:pre-wrap;overflow-wrap:anywhere;}
+.sum-edit{width:100%;min-height:230px;border:1px solid ${SAND_D};border-radius:12px;padding:14px;background:${WHITE};color:${BROWN};font-family:'Neue Haas Unica Pro',sans-serif;font-size:14px;line-height:1.72;resize:vertical;-webkit-appearance:none;}
+.sum-edit:focus{outline:none;border-color:${BROWN_L};}
 .sum-loading{display:flex;flex-direction:column;align-items:center;gap:11px;padding:18px 0;}
 .sp-txt{font-size:13px;font-style:italic;color:${BROWN_L};}
 .cpy-row{display:flex;gap:8px;margin-bottom:8px;}
@@ -1354,14 +1356,14 @@ function SummarySheet({open,onClose,openHome,buyers}){
     if(keen.length) extra.push(`${nw(keen.length)} ${keen.length===1?"is":"are"} keen`);
     if(contracts.length) extra.push(`${nw(contracts.length)} asked for a contract`);
     if(repeats.length) extra.push(`${nw(repeats.length)} came back for a repeat look`);
-    const recap=`We had ${buyers.length} ${buyers.length===1?"group":"groups"} come through today${extra.length?`, ${joinNat(extra)}`:""}.`;
+    const recap=`We had ${buyers.length} ${buyers.length===1?"group":"groups"} through${extra.length?`, ${joinNat(extra)}`:""}.`;
     // A line per buyer, their notes as the detail (falls back to a light default).
     const lines=buyers.map(b=>{
       const notes=(b.notes||[]).map(n=>n.text).join(" ").replace(/\s+/g," ").trim();
       const detail=notes||(b.contractSent?"took a contract — I'll follow them up early next week":VENDOR_NO_NOTE);
       return `${first(b.name)} — ${detail}`;
     });
-    setSumText(`Hi [Vendor],\n\n${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow all of the buyers up and be in touch early next week.\n\n— Luke, Savvi`);
+    setSumText(`Hi [Vendor],\n\nQuick wrap from today's open at ${openHome?.address||"the property"}. ${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow these buyers up and be in touch early next week.\n\n— Luke, Savvi`);
   },[openHome,buyers]);
 
   // Try the AI vendor summary (backend now writes it in Luke's voice: greeting →
@@ -1376,6 +1378,14 @@ function SummarySheet({open,onClose,openHome,buyers}){
   },[openHome,buyers,build]);
   useEffect(()=>{if(open)gen();},[open]);
 
+  // Send the (edited) update via WhatsApp: opens WhatsApp with the text pre-filled
+  // so you pick the listing's group and hit send — a chance to eyeball it first.
+  const waSend=useCallback(()=>{
+    const t=(sumText||"").trim(); if(!t) return;
+    const url="https://wa.me/?text="+encodeURIComponent(t);
+    const w=window.open(url,"_blank"); if(!w) window.location.href=url;
+  },[sumText]);
+
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
     <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}} {...drag.handlers}>
       <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
@@ -1389,13 +1399,13 @@ function SummarySheet({open,onClose,openHome,buyers}){
           <div className="ss"><div className="ss-n w">{buyers.filter(b=>b.interest==="watching").length}</div><div className="ss-l">Watching</div></div>
         </div>
         <div className="sum-box">
-          <div className="sum-lbl">Vendor summary · ready to copy as SMS</div>
+          <div className="sum-lbl">Update for today's open · edit before sending</div>
           {loading&&<div className="sum-loading"><div className="sp"/><div className="sp-txt">Writing your vendor update…</div></div>}
-          {sumText&&!loading&&<div className="sum-txt">{sumText}</div>}
+          {!loading&&<textarea className="sum-edit" value={sumText} onChange={e=>setSumText(e.target.value)} onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()} spellCheck={true}/>}
         </div>
         <div className="cpy-row">
-          {sumText&&!loading&&<button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} onClick={()=>{navigator.clipboard?.writeText(sumText).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),2000);}}>{copied?"✓ Copied!":"Copy for SMS"}</button>}
-          <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 14px",fontSize:13,whiteSpace:"nowrap"}} onClick={gen}>↻ Regenerate</button>
+          <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 16px",fontSize:13,whiteSpace:"nowrap"}} onClick={()=>{navigator.clipboard?.writeText(sumText).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),2000);}}>{copied?"✓ Copied":"Copy"}</button>
+          <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} onClick={waSend} disabled={!sumText.trim()}>📱 Send via WhatsApp</button>
         </div>
         <div style={{height:8}}/>
       </div>
@@ -2333,7 +2343,7 @@ export default function App(){
       openHome={openHome} propId={openHome?.id}
       onUpdateInterest={updateInterest} onSendContract={sendContract}
       onAddNote={addNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}/>
-    <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={propAll.length?propAll:pb}/>
+    <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb}/>
     <QuickContractSheet
       open={showQuickContract}
       prop={quickContractProp}
