@@ -20,6 +20,9 @@ function persistSession(token, who) {
   } catch (e) {}
 }
 
+// Set by the app so an expired/invalid session (e.g. after the backend restarts)
+// drops the agent straight to the PIN screen instead of a silent, empty app.
+let onUnauthorized = null;
 async function call(action, params = {}) {
   try {
     const r = await fetch(API_BASE, {
@@ -27,7 +30,9 @@ async function call(action, params = {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, token: SESSION_TOKEN, ...params }),
     });
-    return await r.json();
+    const j = await r.json();
+    if (j && j.ok === false && j.error === "unauthorized" && action !== "login" && onUnauthorized) onUnauthorized();
+    return j;
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -189,6 +194,10 @@ const Attio = {
       const cid = rref(insp, "contact"); const c = cid ? people[cid] : null;
       return {
         id: rid(insp), contactId: cid,
+        // Carry the real Attio inspection id on every loaded buyer so writes
+        // (contract sent, notes, interest) actually persist — not just on
+        // just-registered buyers that happen to have _attioInspectionId set.
+        _attioInspectionId: rid(insp),
         name: c ? pnm(c) : "Unknown", mobile: c ? pph(c) : "", email: c ? pem(c) : "",
         interest: (rval(insp, "interest") || "cool").toLowerCase(),
         contractSent: !!rval(insp, "contract_sent"), contractSentTime: rval(insp, "contract_sent_time") || null,
@@ -534,6 +543,22 @@ const BLUE="#8AACE3",BLUE_D="#5A7FBF",BROWN="#311E10",BROWN_M="#7A5C48",BROWN_L=
       WHITE="#FFFFFF",LINEN="#F4F0E8",SAND="#EAE4D8",SAND_D="#DDD6C6",
       GRN="#2D8A5E",GRN_BG="#E8F7EE",CREAM="#FFF4D5";
 
+// Pull-down-to-dismiss for bottom sheets. Attach `handlers` to the sheet's grab
+// zone (handle + header) and spread `style` onto the `.sh` element. Drag the sheet
+// down past ~90px and release to close; anything less snaps back.
+function useSheetDrag(onClose){
+  const [dy,setDy]=useState(0);
+  const startY=useRef(null);
+  const cur=useRef(0); // live delta — read on release so the close decision never sees a stale render
+  const onTouchStart=e=>{ startY.current=e.touches?.[0]?.clientY ?? null; cur.current=0; };
+  const onTouchMove=e=>{ if(startY.current==null)return; const d=(e.touches?.[0]?.clientY ?? startY.current)-startY.current; cur.current=d>0?d:0; setDy(cur.current); };
+  const onTouchEnd=()=>{ if(cur.current>90) onClose(); cur.current=0; setDy(0); startY.current=null; };
+  return {
+    handlers:{ onTouchStart, onTouchMove, onTouchEnd },
+    style: dy>0 ? { transform:`translateY(${dy}px)`, transition:"none" } : undefined,
+  };
+}
+
 const CSS=`
 @import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700;6..72,800&display=swap');
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
@@ -624,7 +649,7 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 /* overlay + sheet */
 .ov{position:fixed;inset:0;background:rgba(20,10,4,.4);z-index:100;display:flex;align-items:flex-end;justify-content:center;transition:opacity .25s ease;}
 .ov.h{opacity:0;pointer-events:none;}.ov.s{opacity:1;}
-.sh{background:${WHITE};border-radius:22px 22px 0 0;width:100%;max-width:460px;transform:translateY(100%);transition:transform .33s cubic-bezier(.4,0,.2,1);max-height:92dvh;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding-bottom:calc(28px + env(safe-area-inset-bottom,0px));}
+.sh{background:${WHITE};border-radius:22px 22px 0 0;width:100%;max-width:460px;transform:translateY(100%);transition:transform .33s cubic-bezier(.4,0,.2,1);max-height:92dvh;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding-bottom:calc(28px + env(safe-area-inset-bottom,0px));}
 .ov.s .sh{transform:translateY(0);}
 .hndl{width:36px;height:4px;background:${SAND_D};border-radius:2px;margin:12px auto 0;}
 .sh-ttl{font-family:'Newsreader',serif;font-size:22px;font-weight:700;color:${BROWN};padding:15px 20px 2px;}
@@ -737,7 +762,7 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 .ss-l{font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:${BROWN_L};margin-top:2px;}
 .sum-box{background:${LINEN};border-radius:14px;padding:15px;margin-bottom:13px;border:1px solid ${SAND_D};min-height:100px;}
 .sum-lbl{font-size:9px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:${BROWN_L};margin-bottom:10px;}
-.sum-txt{font-size:14px;color:${BROWN};line-height:1.72;white-space:pre-wrap;}
+.sum-txt{font-size:14px;color:${BROWN};line-height:1.72;white-space:pre-wrap;overflow-wrap:anywhere;}
 .sum-loading{display:flex;flex-direction:column;align-items:center;gap:11px;padding:18px 0;}
 .sp-txt{font-size:13px;font-style:italic;color:${BROWN_L};}
 .cpy-row{display:flex;gap:8px;margin-bottom:8px;}
@@ -1121,6 +1146,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSend
   // EVERY property they've inspected, not just the listing you're viewing. crossNotes
   // holds that aggregated note set (null = not loaded yet).
   const[crossNotes,setCrossNotes]=useState(null);
+  const drag=useSheetDrag(onClose);
   const[eName,setEName]=useState("");const[eMobile,setEMobile]=useState("");const[eEmail,setEEmail]=useState("");
   const[savingEdit,setSavingEdit]=useState(false);
 
@@ -1193,10 +1219,10 @@ function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSend
   const days=daysSince(buyer.firstSeen);
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
-      <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}}>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer",padding:"8px 0",margin:"4px auto 0"}} {...drag.handlers}/>
       <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,lineHeight:1,cursor:"pointer",zIndex:5,fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>✕</button>
-      <div className="det-top">
+      <div className="det-top" {...drag.handlers}>
         <div className="det-row" style={{paddingRight:40}}>
           <div className="av" style={{background:buyer.col,width:52,height:52,fontSize:20}}>{buyer.initials}</div>
           <div style={{flex:1}}>
@@ -1294,6 +1320,7 @@ function SummarySheet({open,onClose,openHome,buyers}){
   const[sumText,setSumText]=useState("");
   const[loading,setLoading]=useState(false);
   const[copied,setCopied]=useState(false);
+  const drag=useSheetDrag(onClose);
 
   // Detailed, casual vendor wrap: a recap line (keen / contracts / repeat visits)
   // plus a by-line for every buyer built from their notes, interest, visit count
@@ -1336,10 +1363,11 @@ function SummarySheet({open,onClose,openHome,buyers}){
   useEffect(()=>{if(open)gen();},[open]);
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-    <div className="sh" onClick={e=>e.stopPropagation()}>
-      <div className="hndl"/>
-      <div className="sh-ttl">Vendor update</div>
-      <div className="sh-sub">{openHome?.address} · {openHome?.time}</div>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}}>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer",padding:"8px 0",margin:"4px auto 0"}} {...drag.handlers}/>
+      <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,lineHeight:1,cursor:"pointer",zIndex:5,fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>✕</button>
+      <div className="sh-ttl" {...drag.handlers} style={{paddingRight:44}}>Vendor update</div>
+      <div className="sh-sub" {...drag.handlers}>{openHome?.address} · {openHome?.time}</div>
       <div className="sum-body">
         <div className="sum-stats">
           <div className="ss"><div className="ss-n">{buyers.length}</div><div className="ss-l">Total</div></div>
@@ -1352,8 +1380,8 @@ function SummarySheet({open,onClose,openHome,buyers}){
           {sumText&&!loading&&<div className="sum-txt">{sumText}</div>}
         </div>
         <div className="cpy-row">
-          {sumText&&!loading&&<button className="btn-grn" style={{flex:1}} onClick={()=>{navigator.clipboard?.writeText(sumText).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),2000);}}>{copied?"✓ Copied!":"Copy for SMS"}</button>}
-          <button className="btn-cream" style={{flex:"0 0 auto",padding:"13px 16px"}} onClick={gen}>Regenerate</button>
+          {sumText&&!loading&&<button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} onClick={()=>{navigator.clipboard?.writeText(sumText).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),2000);}}>{copied?"✓ Copied!":"Copy for SMS"}</button>}
+          <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 14px",fontSize:13,whiteSpace:"nowrap"}} onClick={gen}>↻ Regenerate</button>
         </div>
         <div style={{height:8}}/>
       </div>
@@ -1848,6 +1876,7 @@ export default function App(){
   const[openHomes,setOpenHomes]=useState([]);
   const[loading,setLoading]=useState(true);
   const[loadErr,setLoadErr]=useState("");
+  const[reloadNonce,setReloadNonce]=useState(0);
   const[isDemo,setIsDemo]=useState(false);
   const[buyers,setBuyers]=useState({});
   const[buyersLoading,setBuyersLoading]=useState(false);
@@ -1907,6 +1936,14 @@ export default function App(){
     </div>
   );
 
+  // Session watchdog: if any backend call returns "unauthorized" (token expired,
+  // or n8n restarted and dropped its session store), drop straight to the PIN
+  // screen so the agent knows to log back in — never a silent, empty app.
+  useEffect(()=>{
+    onUnauthorized = ()=>{ logout(); setAgentName(""); setScreen("home"); };
+    return ()=>{ onUnauthorized = null; };
+  },[]);
+
   // Load open homes on mount
   useEffect(()=>{
     if(!agentName) return;
@@ -1925,8 +1962,14 @@ export default function App(){
       // "add from listings" flow), so the opens list no longer waits on them.
       const r = await Attio.getOpenHomesThisWeek();
       if(r.ok&&r.data.length>0){
-        setOpenHomes(r.data);setIsDemo(false);
+        setOpenHomes(r.data);setIsDemo(false);setLoadErr("");
         try{ localStorage.setItem("savvi_opens",JSON.stringify(r.data)); }catch(e){}
+      } else if(!r.ok && r.error!=="unauthorized"){
+        // Backend unreachable (down / execution limit). Keep showing cached opens
+        // if we have them, but surface a clear, retryable banner so a dead-looking
+        // app is never mistaken for "no buyers".
+        setLoadErr("server");
+        if(!hadCache){ setOpenHomes(DEMO_OPENS);setBuyers(DEMO_BUYERS);setIsDemo(true); }
       } else if(!hadCache){
         setOpenHomes(DEMO_OPENS);setBuyers(DEMO_BUYERS);setIsDemo(true);
       }
@@ -1935,7 +1978,7 @@ export default function App(){
         .then(lr=>{ if(lr.ok) setAllListings(lr.data); })
         .catch(()=>{});
     })();
-  },[agentName]);
+  },[agentName,reloadNonce]);
 
   // Load buyers when entering an open home
   const enterOpenHome=async oh=>{
@@ -2114,6 +2157,10 @@ export default function App(){
       {!loading&&<div className="seg" style={{marginTop:8,marginBottom:6}}>
         <button className={`seg-b ${homeTab==="opens"?"on":""}`} onClick={()=>setHomeTab("opens")}>🏠 Opens</button>
         <button className={`seg-b ${homeTab==="match"?"on":""}`} onClick={()=>setHomeTab("match")}>🎯 Buyer Match</button>
+      </div>}
+
+      {!loading&&loadErr==="server"&&<div className="demo-banner" onClick={()=>{setLoadErr("");setReloadNonce(n=>n+1);}} style={{cursor:"pointer",background:"#FDECEA",borderColor:"#F1B0A8",color:"#B23B2E"}}>
+        <strong>⚠️ Can't reach the server.</strong> Showing your last saved data — some info may be out of date. <strong>Tap to retry</strong> (if it keeps failing, check n8n).
       </div>}
 
       {loading&&<div className="state-box">
