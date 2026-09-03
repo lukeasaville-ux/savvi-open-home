@@ -2263,8 +2263,9 @@ export default function App(){
       Attio.getAllActiveListings()
         .then(lr=>{ if(lr.ok) setAllListings(lr.data); })
         .catch(()=>{});
-      // Warm the buyer-records cache so the first open-tap shows its list instantly.
+      // Warm the buyer-records + property-meta caches so the first open-tap is instant.
       Attio.prefetchBuyerRecords();
+      loadPropMeta();
     })();
   },[agentName,reloadNonce]);
 
