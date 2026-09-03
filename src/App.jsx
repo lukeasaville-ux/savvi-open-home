@@ -1205,14 +1205,21 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
     const f=e.target.files&&e.target.files[0]; if(!f) return;
     const idx=thread.length;
     setBusy(true);
-    setThread(t=>[...t,{type:"reg",buyer:null,reply:"",copied:false}]);
+    setThread(t=>[...t,{type:"reg",buyer:null,reply:"",status:"reading",done:[]}]);
     try{
       const dataUrl=await new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f);});
       const m=/^data:(.*?);base64,(.*)$/.exec(dataUrl||"");
-      if(m){ const j=await call("aiParseEnquiry",{ image:m[2], mediaType:m[1]||"image/png" }); const d=(j&&j.data)||{};
-        setThread(t=>t.map((x,i)=>i===idx?{...x,buyer:{name:d.name||"",mobile:d.mobile||"",email:d.email||"",question:d.question||"",wantsContract:!!d.wantsContract},reply:d.suggestedReply||""}:x)); }
-      else setThread(t=>t.filter((_,i)=>i!==idx));
-    }catch(err){ setThread(t=>t.map((x,i)=>i===idx?{...x,buyer:{name:"",mobile:"",email:"",question:"Couldn't read that screenshot — try a clearer one.",wantsContract:false}}:x)); }
+      if(m){
+        const j=await call("aiParseEnquiry",{ image:m[2], mediaType:m[1]||"image/png" }); const d=(j&&j.data)||{};
+        const buyer={name:d.name||"",mobile:d.mobile||"",email:d.email||"",question:d.question||"",wantsContract:!!d.wantsContract};
+        const reply=d.suggestedReply||"";
+        setThread(t=>t.map((x,i)=>i===idx?{...x,buyer,reply,status:"working"}:x));
+        // Hands-free: register + reply + contract, then confirm what happened.
+        let res={done:[]};
+        try{ res=(await onRegister({...buyer,reply}))||{done:[]}; }catch(err){ res={done:["⚠️ Something went wrong — check the buyer list"]}; }
+        setThread(t=>t.map((x,i)=>i===idx?{...x,status:"done",done:res.done||[]}:x));
+      } else setThread(t=>t.filter((_,i)=>i!==idx));
+    }catch(err){ setThread(t=>t.map((x,i)=>i===idx?{...x,buyer:{name:"",mobile:"",email:"",question:"",wantsContract:false},status:"error"}:x)); }
     setBusy(false);
     if(fileRef.current) fileRef.current.value="";
   };
@@ -1243,23 +1250,22 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
                 : <div style={{fontSize:13.5,lineHeight:1.55,color:ESPRESSO,whiteSpace:"pre-wrap",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"11px 13px"}}>{x.a}</div>}
             </div>
           : <div key={i} style={{marginBottom:14,background:"#fbfaf7",border:`1px solid ${SAND_D}`,borderRadius:12,padding:"12px 13px"}}>
-              {x.buyer===null
+              {x.status==="reading"
                 ? <div style={{fontSize:13,color:BROWN_L,fontStyle:"italic"}}>📸 Reading the screenshot…</div>
+                : x.status==="error"
+                ? <div style={{fontSize:13,color:AMBER,fontWeight:600}}>Couldn't read that screenshot — try a clearer one.</div>
                 : <>
-                  <div style={{fontSize:12,fontWeight:800,letterSpacing:.5,textTransform:"uppercase",color:BLUE_D,marginBottom:8}}>New buyer from screenshot</div>
-                  <input style={inp} value={x.buyer.name} onChange={e=>updBuyer(i,"name",e.target.value)} placeholder="Name"/>
-                  <input style={inp} value={x.buyer.mobile} onChange={e=>updBuyer(i,"mobile",e.target.value)} placeholder="Mobile"/>
-                  <input style={inp} value={x.buyer.email} onChange={e=>updBuyer(i,"email",e.target.value)} placeholder="Email"/>
-                  {x.buyer.question&&<div style={{marginTop:9,fontSize:12.5,color:ESPRESSO}}><b>They asked:</b> {x.buyer.question}{x.buyer.wantsContract?<span style={{color:BLUE_D,fontWeight:700}}> · wants the contract</span>:null}</div>}
-                  <button onClick={()=>onRegister(x.buyer)} style={{width:"100%",marginTop:11,padding:"12px",fontSize:14,fontWeight:800,borderRadius:10,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer"}}>Register {x.buyer.name?x.buyer.name.split(" ")[0]:"buyer"} on this listing →</button>
-                  {x.reply&&<div style={{marginTop:11}}>
-                    <div style={{fontSize:11.5,fontWeight:700,color:BROWN_L,marginBottom:3}}>SUGGESTED REPLY</div>
-                    <textarea value={x.reply} onChange={e=>setThread(t=>t.map((y,j)=>j===i?{...y,reply:e.target.value}:y))} style={{...inp,minHeight:66,resize:"vertical",marginTop:0}}/>
-                    <div style={{display:"flex",gap:8,marginTop:7}}>
-                      <button onClick={()=>{navigator.clipboard?.writeText(x.reply).catch(()=>{});setThread(t=>t.map((y,j)=>j===i?{...y,copied:true}:y));setTimeout(()=>setThread(t=>t.map((y,j)=>j===i?{...y,copied:false}:y)),1500);}} style={{flex:1,padding:"9px",fontSize:12.5,fontWeight:700,borderRadius:8,border:`1px solid ${SAND_D}`,background:"#fff",color:ESPRESSO,cursor:"pointer"}}>{x.copied?"Copied ✓":"Copy reply"}</button>
-                      {x.buyer.mobile&&<a href={`sms:${toE164AU(x.buyer.mobile)}?&body=${encodeURIComponent(x.reply)}`} style={{flex:1,textAlign:"center",padding:"9px",fontSize:12.5,fontWeight:700,borderRadius:8,border:"none",background:AMBER,color:"#fff",textDecoration:"none"}}>📱 Text reply</a>}
+                  <div style={{fontSize:12,fontWeight:800,letterSpacing:.5,textTransform:"uppercase",color:x.status==="done"?"#3E8E5A":BLUE_D,marginBottom:6}}>{x.status==="done"?"✓ Enquiry handled":"Buyer from screenshot"}</div>
+                  <div style={{fontSize:14,fontWeight:800,color:ESPRESSO}}>{x.buyer.name||"—"}</div>
+                  {(x.buyer.mobile||x.buyer.email)&&<div style={{fontSize:12.5,color:BROWN_L,marginTop:1}}>{[x.buyer.mobile,x.buyer.email].filter(Boolean).join(" · ")}</div>}
+                  {x.buyer.question&&<div style={{marginTop:8,fontSize:12.5,color:ESPRESSO}}><b>They asked:</b> {x.buyer.question}</div>}
+                  {x.status==="working"&&<div style={{marginTop:10,fontSize:13,color:BROWN_L,fontStyle:"italic"}}>Registering & sending…</div>}
+                  {x.status==="done"&&<>
+                    <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:5}}>
+                      {(x.done||[]).map((d,k)=><div key={k} style={{fontSize:12.5,fontWeight:600,color:d.startsWith("⚠️")?"#B7770D":ESPRESSO}}>{d.startsWith("⚠️")?d:`✓ ${d}`}</div>)}
                     </div>
-                  </div>}
+                    {x.reply&&<div style={{marginTop:10,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:9,padding:"9px 11px",fontSize:12.5,color:ESPRESSO,whiteSpace:"pre-wrap"}}><b style={{color:BROWN_L}}>Reply sent:</b> {x.reply}</div>}
+                  </>}
                 </>}
             </div>)}
       </div>
@@ -2140,6 +2146,7 @@ export default function App(){
   const[lastAdded,setLastAdded]=useState(null);
   const[showCtr,setShowCtr]=useState(false);
   const[ctrBuyer,setCtrBuyer]=useState(null);
+  const[ctrChannel,setCtrChannel]=useState("email");
   const[allListings,setAllListings]=useState([]);
   const[propBuyers,setPropBuyers]=useState({});
   const[showQuickContract,setShowQuickContract]=useState(false);
@@ -2302,7 +2309,7 @@ export default function App(){
     // Update local state immediately
     setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===b.id?{...x,contractSent:true,contractSentTime:t}:x);return u;});
     setActive(p=>p?.id===b.id?{...p,contractSent:true,contractSentTime:t}:p);
-    setCtrBuyer(b);setShowDetail(false);
+    setCtrBuyer(b);setCtrChannel("email");setShowDetail(false);
     setTimeout(()=>setShowCtr(true),220);
     // Fire email via Resend + store tracking ID in Attio
     if(b.email && openHome?.contractUrl) {
@@ -2332,10 +2339,12 @@ export default function App(){
 
   // Send the contract by SMS (the contract-of-sale link) instead of email.
   const textContract=useCallback((pid,b)=>{
-    if(!pid)return;
+    if(!pid||!b.mobile)return;
     const t=fmtDateTime();
     setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===b.id?{...x,contractSent:true,contractSentTime:t}:x);return u;});
     setActive(p=>p?.id===b.id?{...p,contractSent:true,contractSentTime:t}:p);
+    setCtrBuyer(b);setCtrChannel("text");setShowDetail(false);
+    setTimeout(()=>setShowCtr(true),220);
     if(b.mobile && openHome?.contractUrl){
       MM.sendMessage({ toPhone:b.mobile, message: buildContractSms({ firstName:(b.name||"").split(" ")[0], address:openHome.address, contractUrl:openHome.contractUrl, agent:agentName }) })
         .then(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); })
@@ -2372,6 +2381,69 @@ export default function App(){
     setLastAdded(b);setShowAdd(false);
     setTimeout(()=>setShowOk(true),220);
   };
+
+  // Screenshot enquiry → hands-free: register the buyer (or update them if they're
+  // already on this property), text the reply, and email the contract if they asked.
+  // No taps. Returns a list of what it did for the assistant to confirm.
+  const handleEnquiry=useCallback(async(enq)=>{
+    const pid=openHome?.id; if(!pid) return { done:[] };
+    const digits=s=>String(s||"").replace(/\D/g,"").slice(-9);
+    const done=[]; const first=(enq.name||"").split(" ")[0]||"They";
+    const noteObj={ id:"n"+Date.now(), text:`📨 Enquiry via text: ${enq.question||"contacted us"}`, ts:new Date().toISOString(), agent:AGENT_FULL[agentName]||agentName||"" };
+    // Dedup — already registered against THIS property?
+    const existing=(propBuyers[pid]||[]).find(b=>
+      (enq.mobile&&digits(b.mobile)&&digits(b.mobile)===digits(enq.mobile)) ||
+      (enq.email&&b.email&&String(b.email).toLowerCase()===String(enq.email).toLowerCase()));
+    let contactId=existing?existing.contactId:null, inspectionId=existing?existing._attioInspectionId:null, rowId;
+
+    if(existing){
+      rowId=existing.id;
+      done.push(`${first} was already registered here — added a note`);
+    } else {
+      if(!isDemo){
+        let found=enq.mobile?await Attio.findPersonByPhone(enq.mobile).catch(()=>null):null;
+        if(found) contactId=Attio.id(found);
+        else { const r=await Attio.createPerson({name:enq.name,email:enq.email,mobile:enq.mobile}).catch(()=>({ok:false})); if(r.ok) contactId=r.id; }
+        if(contactId){ const r=await Attio.createInspection({contactId,propertyId:openHome?.propertyId,openHomeId:pid,interest:""}).catch(()=>({ok:false})); if(r.ok) inspectionId=r.id; }
+      }
+      rowId=inspectionId||("local"+Date.now());
+      const row=normBuyer({ id:rowId, contactId, _attioInspectionId:inspectionId, name:enq.name||"Enquiry", mobile:enq.mobile||"", email:enq.email||"", interest:"", notes:"" });
+      setBuyers(p=>({...p,[pid]:[row,...(p[pid]||[])]}));
+      setPropBuyers(p=>({...p,[pid]:[row,...(p[pid]||[])]}));
+      invalidateBuyerCache();
+      done.push("Registered on this listing");
+    }
+
+    // Append the enquiry note (local + Attio)
+    setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===rowId?{...x,notes:[...(x.notes||[]),noteObj]}:x);return u;});
+    setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===rowId?{...x,notes:[...(x.notes||[]),noteObj]}:x);return u;});
+    if(!isDemo&&inspectionId){
+      const base=existing?(existing.notes||[]):[];
+      const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text;
+      Attio.updateInspection(inspectionId,{notes:[...base,noteObj].map(enc).join("\n---\n")}).catch(()=>{});
+    }
+
+    // Auto-reply text
+    if(enq.mobile&&enq.reply&&!isDemo){
+      MM.sendMessage({ toPhone:enq.mobile, message:enq.reply }).catch(()=>{});
+      done.push(`Texted the reply to ${enq.mobile}`);
+    }
+    // Auto-send contract if they asked and we can
+    if(enq.wantsContract){
+      if(enq.email&&openHome?.contractUrl&&!isDemo){
+        const t=fmtDateTime();
+        Resend.sendContract({ toEmail:enq.email, toName:enq.name, agentName, address:openHome.address, contractUrl:openHome.contractUrl })
+          .then(res=>{ if(inspectionId) Attio.updateInspection(inspectionId,{contractSent:true,contractSentTime:t,...(res&&res.id?{resendId:res.id}:{})}).catch(()=>{}); }).catch(()=>{});
+        setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===rowId?{...x,contractSent:true,contractSentTime:t}:x);return u;});
+        done.push(`Emailed the contract to ${enq.email}`);
+      } else if(!openHome?.contractUrl){
+        done.push("⚠️ No contract on file for this listing yet — send it once it's uploaded");
+      } else if(!enq.email){
+        done.push("⚠️ No email captured — add one to send the contract");
+      }
+    }
+    return { done, name:enq.name };
+  },[openHome,propBuyers,isDemo,agentName]);
   // Patch an optimistically-added buyer once its Attio write finishes (real ids), or
   // flag it if the write failed — keyed by the temp id used at registration.
   const reconcileBuyer=useCallback((pid,tempId,patch)=>{
@@ -2608,7 +2680,7 @@ export default function App(){
       <svg width="26" height="26" viewBox="0 0 24 24" fill="white"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
     </button>}
     <AddSheet open={showAdd} onClose={()=>{setShowAdd(false);setAiPrefill(null);}} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)} prefill={aiPrefill}/>
-    <AiAssistantSheet open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={(r)=>{ setAiPrefill({name:r.name||"",mobile:r.mobile||"",email:r.email||""}); setShowAssistant(false); setShowAdd(true); }}/>
+    <AiAssistantSheet open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={handleEnquiry}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id} propIndex={propIndex}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
@@ -2647,9 +2719,9 @@ export default function App(){
 
     {/* ── SUCCESS: CONTRACT SENT ── */}
     <div className={`sov ${showCtr?"on":""}`}><div className="sc">
-      <div className="sic" style={{background:GRN_BG}}>📨</div>
+      <div className="sic" style={{background:GRN_BG}}>{ctrChannel==="text"?"📱":"📨"}</div>
       <div className="sttl">Contract sent</div>
-      <div className="ssub">Emailed to {ctrBuyer?.name}.<br/>Logged in CRM automatically.</div>
+      <div className="ssub">{ctrChannel==="text"?`Texted to ${ctrBuyer?.name}.`:`Emailed to ${ctrBuyer?.name}.`}<br/>Logged in CRM automatically.</div>
       <div className="sflex"><button className="btn-cream" onClick={()=>setShowCtr(false)}>Close</button></div>
     </div></div>
   </div>;
