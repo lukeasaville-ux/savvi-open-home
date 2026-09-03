@@ -80,10 +80,11 @@ function normBuyer(b) {
     // Notes persist to Attio as "<ISO timestamp>\t<text>" joined by \n---\n so the
     // date + time survive a reload. Older notes have no timestamp prefix.
     notes = b.notes.split("\n---\n").map((t, i) => {
-      const tab = t.indexOf("\t");
-      return (tab > 0 && /^\d{4}-\d\d-\d\dT/.test(t))
-        ? { id: `n${i}`, text: t.slice(tab + 1), ts: t.slice(0, tab) }
-        : { id: `n${i}`, text: t, ts: "" };
+      // New format: "<ISO>\t<agent>\t<text>". Older: "<ISO>\t<text>" or plain text.
+      const p = t.split("\t");
+      if (/^\d{4}-\d\d-\d\dT/.test(p[0]) && p.length >= 3) return { id:`n${i}`, ts:p[0], agent:p[1], text:p.slice(2).join("\t") };
+      if (/^\d{4}-\d\d-\d\dT/.test(p[0]) && p.length === 2) return { id:`n${i}`, ts:p[0], agent:"", text:p[1] };
+      return { id:`n${i}`, ts:"", agent:"", text:t };
     });
   }
   return {
@@ -92,7 +93,7 @@ function normBuyer(b) {
     name,
     mobile: b.mobile || "",
     email: b.email || "",
-    interest: b.interest || "cool",
+    interest: b.interest || "",
     contractSent: !!b.contractSent,
     contractSentTime: b.contractSentTime || null,
     offered: !!b.offered,
@@ -538,6 +539,9 @@ const norm=s=>s.replace(/\s+/g,"");
 const fmtTs=()=>new Date().toLocaleTimeString("en-AU",{hour:"2-digit",minute:"2-digit",hour12:false});
 // Date + time (Melbourne), e.g. "9 Jul, 2:28pm" — used for contract-sent and open events.
 const fmtDateTime=(d)=>{try{return new Date(d||Date.now()).toLocaleString("en-AU",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit",hour12:true,timeZone:"Australia/Melbourne"}).replace(/\s?[AP]M/i,m=>m.trim().toLowerCase());}catch{return "";}};
+// Note timestamp with weekday + ordinal, e.g. "Sat 24th August 12:41pm"
+const _ord=n=>{const v=n%100;return n+(["th","st","nd","rd"][(v-20)%10]||["th","st","nd","rd"][v]||"th");};
+const fmtNoteTime=(d)=>{try{const P=new Intl.DateTimeFormat("en-AU",{weekday:"short",day:"numeric",month:"long",hour:"numeric",minute:"2-digit",hour12:true,timeZone:"Australia/Melbourne"}).formatToParts(new Date(d));const g=t=>(P.find(p=>p.type===t)||{}).value||"";return `${g("weekday")} ${_ord(+g("day"))} ${g("month")} ${g("hour")}:${g("minute")}${g("dayPeriod").toLowerCase()}`;}catch{return "";}};
 const daysSince=d=>{try{return Math.floor((Date.now()-new Date(d))/86400000);}catch{return null;}};
 const STAGE_CFG={"Early":{bg:"#F2EDE3",col:"#7A5C48",dot:"#C4AD8A"},"Middle":{bg:"#FFF4D5",col:"#8B6914",dot:"#C9963A"},"Late":{bg:"#E8F7EE",col:"#2D8A5E",dot:"#2D8A5E"}};
 // Demo open homes shown when Attio has none yet
@@ -979,7 +983,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
   const save=()=>{
     const nm=name.trim(), em=email.trim(), mob=mobile.trim(), sel=selected;
     if(!nm) return;
-    const interestVal=interest||"cool";  // interest is optional at registration; set later from the profile
+    const interestVal=interest||null;  // no default — agent sets hot/watching/cool from the profile
     const col=sel?.col||AVATAR_COLS[Math.abs((nm.charCodeAt(0)||65)%AVATAR_COLS.length)];
     const tempId="tmp"+Date.now();
     const pid=openHome?.id;
@@ -1111,6 +1115,25 @@ function ReelLink({ propertyId, value, onSaved }){
 }
 
 /* ════ CONTRACT BOX WITH TRACKING ════ */
+// Open-day quick reference: view the contract + a collapsible panel of the Box+Dice
+// listing notes (finer details, keysafe/door codes, access info).
+function OpenListingInfo({ openHome }){
+  const [open,setOpen]=useState(false);
+  const notes=(openHome?.listingNotes||"").trim();
+  const contractUrl=openHome?.contractUrl||"";
+  if(!notes && !contractUrl) return null;
+  const btn={flex:1,padding:"9px 12px",fontSize:12.5,fontWeight:700,borderRadius:10,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",textAlign:"center"};
+  return (
+    <div style={{padding:"8px 14px 0"}}>
+      <div style={{display:"flex",gap:8}}>
+        {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{...btn,background:LINEN,color:ESPRESSO,border:`1px solid ${SAND_D}`,textDecoration:"none"}}>📄 View contract</a>}
+        {notes&&<button style={{...btn,background:"#eef2fb",color:BLUE_D,border:`1px solid ${BLUE}33`}} onClick={()=>setOpen(o=>!o)}>🔑 Listing info {open?"▲":"▼"}</button>}
+      </div>
+      {open&&notes&&<div style={{marginTop:8,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"12px 13px",fontSize:13,lineHeight:1.5,color:ESPRESSO,whiteSpace:"pre-wrap"}}>{notes}</div>}
+    </div>
+  );
+}
+
 function ContractBox({ buyer, propId, onSendContract, onTextContract }) {
   const [tracking, setTracking] = useState(null);
   const [loadingTrack, setLoadingTrack] = useState(false);
@@ -1275,7 +1298,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSend
           <div style={{flex:1}}>
             <div className="det-nm">{buyer.name}</div>
             <div className="det-meta">
-              <span className={`ibadge ${iCl(buyer.interest)}`}>{iLbl(buyer.interest)}</span>
+              {buyer.interest ? <span className={`ibadge ${iCl(buyer.interest)}`}>{iLbl(buyer.interest)}</span> : <span style={{fontSize:11,fontWeight:700,color:BLUE,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:6,padding:"3px 8px"}}>Set interest ↓</span>}
               {buyer.contractSent&&<span className="ctr-badge">📄 Contract sent</span>}
               {buyer.smsSent&&<span className="sms-badge">📱 SMS sent</span>}
               {days!==null&&<span style={{fontSize:10,color:BROWN_L,fontWeight:500}}>{days}d in system</span>}
@@ -1327,7 +1350,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSend
       <div className="sec-w"><div className="sec-i">Notes</div></div>
       <div className="notes-w">
         {(buyer.notes||[]).length>0&&<div className="note-feed">{(buyer.notes||[]).map(n=><div key={n.id} className="note-item">
-          <div className="note-txt">{n.text}</div><div className="note-ts">{n.ts?(/^\d{4}-/.test(n.ts)?fmtDateTime(n.ts):n.ts):""}</div>
+          <div className="note-txt">{n.text}</div><div className="note-ts">{n.ts?(/^\d{4}-/.test(n.ts)?fmtNoteTime(n.ts):n.ts):""}{n.agent?` — ${n.agent}`:""}</div>
         </div>)}</div>}
         {showNote?<>
           <textarea className="note-area" placeholder="Price feedback, buyer profile, who they inspect with…" value={noteText} onChange={e=>setNoteText(e.target.value)} autoFocus/>
@@ -2291,7 +2314,7 @@ export default function App(){
             const price  = p.price || "";
             const contUrl= p.contractUrl || "";
             const pid    = p.id;
-            const synthOh = { id:`listing_${pid}`, propertyId:pid, address:addr, suburb, beds, baths, car, price, igUrl:p.igUrl||"", contractUrl:contUrl, time:"", date:"", agent:agentName, _listing:true };
+            const synthOh = { id:`listing_${pid}`, propertyId:pid, address:addr, suburb, beds, baths, car, price, igUrl:p.igUrl||"", contractUrl:contUrl, listingNotes:p.listingNotes||"", time:"", date:"", agent:agentName, _listing:true };
             return (
               <div key={pid} className="pc" style={{borderLeft:`4px solid ${SAND_D}`,cursor:"default"}}>
                 <div className="pc-bar" style={{background:SAND_D}}/>
@@ -2315,6 +2338,7 @@ export default function App(){
                     </button>
                   </div>
                   <ReelLink propertyId={pid} value={p.igUrl||""} onSaved={u=>updateListingReel(pid,u)}/>
+                  <OpenListingInfo openHome={synthOh}/>
                 </div>
               </div>
             );
@@ -2347,6 +2371,8 @@ export default function App(){
         </button>
         <button className="btn-outline" onClick={()=>setShowSum(true)}>📩 Vendor update</button>
       </div>
+
+      <OpenListingInfo openHome={openHome}/>
 
       {!isDemo&&openHome?.propertyId&&<div style={{padding:"10px 14px 0"}}>
         <ReelLink propertyId={openHome.propertyId} value={openHome.igUrl} onSaved={u=>updateOpenReel(openHome.id,u)}/>
