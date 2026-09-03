@@ -1177,12 +1177,23 @@ function ReelLink({ propertyId, value, onSaved }){
 // Per-listing AI assistant — reads the Contract of Sale + Section 32 and answers
 // any question about the property (OC fees, AGM points, special conditions, etc).
 const AI_SUGGESTIONS=["Owners corp fees?","Recent AGM discussion points","Any special conditions?","Settlement terms","What's included in the sale?","Any pets allowed / OC rules?","Outstanding levies or defects?"];
-function ListingAiSheet({ open, onClose, openHome }){
+// One AI assistant for the listing: ask anything about the contract/S32, OR register a
+// buyer from a screenshot of their text — two tabs, one button.
+function AiAssistantSheet({ open, onClose, openHome, onRegister }){
+  const [tab,setTab]=useState("ask");
+  // Ask
   const [q,setQ]=useState("");
-  const [thread,setThread]=useState([]); // {q, a}
+  const [thread,setThread]=useState([]);
   const [busy,setBusy]=useState(false);
+  // Scan
+  const [res,setRes]=useState(null);
+  const [reply,setReply]=useState("");
+  const [scanBusy,setScanBusy]=useState(false);
+  const [copied,setCopied]=useState(false);
+  const fileRef=useRef(null);
   const drag=useSheetDrag(onClose);
-  useEffect(()=>{ if(open){ setQ(""); } },[open, openHome?.id]);
+  useEffect(()=>{ if(open){ setTab("ask"); setQ(""); setThread([]); setBusy(false); setRes(null); setReply(""); setScanBusy(false); setCopied(false); } },[open, openHome?.id]);
+
   const runAsk=async(query,label,fresh)=>{
     if(!query||busy) return;
     setBusy(true); setQ("");
@@ -1190,124 +1201,108 @@ function ListingAiSheet({ open, onClose, openHome }){
     let answer="";
     try{
       const j=await call("aiListingAsk",{ contractUrl:openHome?.contractUrl||"", address:`${openHome?.address||""}${openHome?.suburb?", "+openHome.suburb:""}`, question:query, ...(fresh?{fresh:true}:{}) });
-      answer=(j&&j.ok&&j.data&&j.data.answer)|| (j&&j.data&&j.data.answer) ||"Sorry, I couldn't get an answer just now — please try again.";
+      answer=(j&&j.ok&&j.data&&j.data.answer)||(j&&j.data&&j.data.answer)||"Sorry, I couldn't get an answer just now — please try again.";
     }catch(e){ answer="Sorry, something went wrong reading the contract. Please try again."; }
     setThread(t=>t.map((x,i)=>i===t.length-1?{...x,a:answer}:x));
     setBusy(false);
   };
   const ask=(question)=>runAsk((question||q).trim());
   const reread=()=>{ const lastQ=[...thread].reverse().find(x=>x.q&&!x.q.startsWith("↻")); runAsk(lastQ?lastQ.q:"Give me a quick overview of this contract and anything a buyer should know.","↻ Re-reading the full contract…",true); };
-  if(!open) return null;
-  return <div className="ov s" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",maxHeight:"88vh",display:"flex",flexDirection:"column",...drag.style}} {...drag.handlers}>
-      <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
-      <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
-      <div style={{padding:"4px 18px 6px"}}>
-        <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>🤖 Ask about this listing</div>
-        <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>{openHome?.address}{openHome?.suburb?`, ${openHome.suburb}`:""} · reads the contract & Section 32</div>
-      </div>
-      <div style={{flex:1,overflowY:"auto",padding:"6px 16px 0"}}>
-        {thread.length===0&&<div style={{display:"flex",flexWrap:"wrap",gap:7,padding:"6px 0 4px"}}>
-          {AI_SUGGESTIONS.map(s=><button key={s} onClick={()=>ask(s)} disabled={busy} style={{fontSize:12,fontWeight:600,color:BLUE_D,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:16,padding:"7px 12px",cursor:"pointer"}}>{s}</button>)}
-        </div>}
-        {thread.map((x,i)=><div key={i} style={{marginBottom:14}}>
-          <div style={{fontSize:13.5,fontWeight:700,color:ESPRESSO,marginBottom:6}}>{x.q}</div>
-          {x.a===null
-            ? <div style={{fontSize:13,color:BROWN_L,fontStyle:"italic"}}>Reading the contract… this can take ~20 seconds.</div>
-            : <div style={{fontSize:13.5,lineHeight:1.55,color:ESPRESSO,whiteSpace:"pre-wrap",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"11px 13px"}}>{x.a}</div>}
-        </div>)}
-      </div>
-      <div style={{padding:"8px 14px calc(12px + env(safe-area-inset-bottom,0px))",borderTop:`1px solid ${SAND_D}`,display:"flex",gap:8}}>
-        <input className="fi" style={{flex:1}} value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")ask();}} placeholder="Ask anything about this property…" disabled={busy}/>
-        <button onClick={()=>ask()} disabled={busy||!q.trim()} style={{padding:"0 18px",borderRadius:10,border:"none",background:busy?SAND_D:BLUE_D,color:"#fff",fontWeight:700,fontSize:14,cursor:busy?"default":"pointer"}}>{busy?"…":"Ask"}</button>
-      </div>
-      {thread.length>0&&<div style={{padding:"0 16px 8px",marginTop:-4}}>
-        <button onClick={reread} disabled={busy} style={{background:"none",border:"none",color:BROWN_L,fontSize:11.5,fontWeight:600,cursor:busy?"default":"pointer",textDecoration:"underline"}}>↻ Not up to date? Re-read the full contract</button>
-      </div>}
-    </div>
-  </div>;
-}
 
-// In-app AI assistant: screenshot a buyer's text/DM/email → Claude reads it and pulls
-// out who they are + what they want, so the agent registers them and replies in a
-// couple of taps. Extraction only — the agent confirms the register + any send.
-function ScreenshotAssistant({ open, onClose, openHome, onRegister }){
-  const [busy,setBusy]=useState(false);
-  const [res,setRes]=useState(null);
-  const [reply,setReply]=useState("");
-  const [copied,setCopied]=useState(false);
-  const fileRef=useRef(null);
-  const drag=useSheetDrag(onClose);
-  useEffect(()=>{ if(open){ setRes(null); setReply(""); setBusy(false); setCopied(false); } },[open]);
   const onFile=async(e)=>{
     const f=e.target.files&&e.target.files[0]; if(!f) return;
-    setBusy(true); setRes(null);
+    setScanBusy(true); setRes(null);
     try{
       const dataUrl=await new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f);});
       const m=/^data:(.*?);base64,(.*)$/.exec(dataUrl||"");
-      if(!m){ setBusy(false); return; }
+      if(!m){ setScanBusy(false); return; }
       const j=await call("aiParseEnquiry",{ image:m[2], mediaType:m[1]||"image/png" });
       const d=(j&&j.data)||{};
       setRes({name:d.name||"",mobile:d.mobile||"",email:d.email||"",question:d.question||"",wantsContract:!!d.wantsContract});
       setReply(d.suggestedReply||"");
     }catch(err){ setRes({name:"",mobile:"",email:"",question:"Sorry — I couldn't read that screenshot. Try a clearer one.",wantsContract:false}); }
-    setBusy(false);
+    setScanBusy(false);
     if(fileRef.current) fileRef.current.value="";
   };
-  const set=(k,v)=>setRes(r=>({...r,[k]:v}));
+  const setF=(k,v)=>setRes(r=>({...r,[k]:v}));
   if(!open) return null;
   const inp={width:"100%",padding:"11px 12px",fontSize:14,border:`1px solid ${SAND_D}`,borderRadius:9,fontFamily:"'Neue Haas Unica Pro',sans-serif",marginTop:4};
+  const tabBtn=(k,label)=>{ const on=tab===k; return <button onClick={()=>setTab(k)} style={{flex:1,padding:"9px 6px",fontSize:13,fontWeight:700,border:"none",borderRadius:9,cursor:"pointer",background:on?"#fff":"transparent",color:on?ESPRESSO:BROWN_L,boxShadow:on?"0 1px 3px rgba(49,30,16,.12)":"none"}}>{label}</button>; };
   return <div className="ov s" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",maxHeight:"90vh",overflowY:"auto",...drag.style}} {...drag.handlers}>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",maxHeight:"90vh",display:"flex",flexDirection:"column",...drag.style}} {...drag.handlers}>
       <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
       <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
-      <div style={{padding:"4px 18px 8px"}}>
-        <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>📸 Register from a text</div>
-        <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>{openHome?.address} · screenshot a buyer's message and I'll pull out the details</div>
+      <div style={{padding:"4px 18px 6px"}}>
+        <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>🤖 AI assistant</div>
+        <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>{openHome?.address}{openHome?.suburb?`, ${openHome.suburb}`:""}</div>
       </div>
-      <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onFile} style={{display:"none"}}/>
-      <div style={{padding:"0 16px 16px"}}>
-        {!res&&!busy&&<button onClick={()=>fileRef.current?.click()} style={{width:"100%",padding:"16px",fontSize:14,fontWeight:800,borderRadius:12,border:`2px dashed ${BLUE}55`,background:"#eef2fb",color:BLUE_D,cursor:"pointer"}}>＋ Choose or take a screenshot</button>}
-        {busy&&<div style={{padding:"20px 4px",fontSize:13.5,color:BROWN_L,fontStyle:"italic"}}>Reading the screenshot…</div>}
-        {res&&<>
-          <label className="fl">Name</label><input style={inp} value={res.name} onChange={e=>set("name",e.target.value)} placeholder="Buyer name"/>
-          <label className="fl" style={{marginTop:10,display:"block"}}>Mobile</label><input style={inp} value={res.mobile} onChange={e=>set("mobile",e.target.value)} placeholder="04XX XXX XXX"/>
-          <label className="fl" style={{marginTop:10,display:"block"}}>Email</label><input style={inp} value={res.email} onChange={e=>set("email",e.target.value)} placeholder="name@email.com"/>
-          {res.question&&<div style={{marginTop:12,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"10px 12px",fontSize:13,color:ESPRESSO}}><b>They asked:</b> {res.question}{res.wantsContract?<div style={{marginTop:4,color:BLUE_D,fontWeight:700}}>→ Wants the contract</div>:null}</div>}
-          <button onClick={()=>onRegister(res)} style={{width:"100%",marginTop:14,padding:"13px",fontSize:14,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer"}}>Register {res.name?res.name.split(" ")[0]:"buyer"} on this listing →</button>
-          <button onClick={()=>fileRef.current?.click()} style={{width:"100%",marginTop:8,padding:"9px",fontSize:12.5,fontWeight:600,borderRadius:9,border:`1px solid ${SAND_D}`,background:"#fff",color:BROWN_L,cursor:"pointer"}}>↻ Try another screenshot</button>
-          <div style={{marginTop:16}}>
-            <label className="fl">Suggested reply</label>
-            <textarea value={reply} onChange={e=>setReply(e.target.value)} style={{...inp,minHeight:80,resize:"vertical"}}/>
-            <div style={{display:"flex",gap:8,marginTop:8}}>
-              <button onClick={()=>{navigator.clipboard?.writeText(reply).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}} style={{flex:1,padding:"10px",fontSize:13,fontWeight:700,borderRadius:9,border:`1px solid ${SAND_D}`,background:"#fff",color:ESPRESSO,cursor:"pointer"}}>{copied?"Copied ✓":"Copy reply"}</button>
-              {res.mobile&&<a href={`sms:${toE164AU(res.mobile)}?&body=${encodeURIComponent(reply)}`} style={{flex:1,textAlign:"center",padding:"10px",fontSize:13,fontWeight:700,borderRadius:9,border:"none",background:AMBER,color:"#fff",textDecoration:"none"}}>📱 Text reply</a>}
+      <div style={{margin:"4px 16px 8px",padding:3,background:SAND,borderRadius:11,display:"flex",gap:3}}>
+        {tabBtn("ask","💬 Ask about listing")}
+        {tabBtn("scan","📸 Register a buyer")}
+      </div>
+
+      {tab==="ask"?<>
+        <div style={{flex:1,overflowY:"auto",padding:"2px 16px 0"}}>
+          {thread.length===0&&<div style={{display:"flex",flexWrap:"wrap",gap:7,padding:"2px 0 4px"}}>
+            {AI_SUGGESTIONS.map(s=><button key={s} onClick={()=>ask(s)} disabled={busy} style={{fontSize:12,fontWeight:600,color:BLUE_D,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:16,padding:"7px 12px",cursor:"pointer"}}>{s}</button>)}
+          </div>}
+          {thread.map((x,i)=><div key={i} style={{marginBottom:14}}>
+            <div style={{fontSize:13.5,fontWeight:700,color:ESPRESSO,marginBottom:6}}>{x.q}</div>
+            {x.a===null
+              ? <div style={{fontSize:13,color:BROWN_L,fontStyle:"italic"}}>Reading the contract… this can take ~20 seconds.</div>
+              : <div style={{fontSize:13.5,lineHeight:1.55,color:ESPRESSO,whiteSpace:"pre-wrap",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"11px 13px"}}>{x.a}</div>}
+          </div>)}
+          {thread.length>0&&<div style={{padding:"0 0 8px"}}>
+            <button onClick={reread} disabled={busy} style={{background:"none",border:"none",color:BROWN_L,fontSize:11.5,fontWeight:600,cursor:busy?"default":"pointer",textDecoration:"underline"}}>↻ Not up to date? Re-read the full contract</button>
+          </div>}
+        </div>
+        <div style={{padding:"8px 14px calc(12px + env(safe-area-inset-bottom,0px))",borderTop:`1px solid ${SAND_D}`,display:"flex",gap:8}}>
+          <input className="fi" style={{flex:1}} value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")ask();}} placeholder="Ask anything about this property…" disabled={busy}/>
+          <button onClick={()=>ask()} disabled={busy||!q.trim()} style={{padding:"0 18px",borderRadius:10,border:"none",background:busy?SAND_D:BLUE_D,color:"#fff",fontWeight:700,fontSize:14,cursor:busy?"default":"pointer"}}>{busy?"…":"Ask"}</button>
+        </div>
+      </>:<>
+        <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onFile} style={{display:"none"}}/>
+        <div style={{flex:1,overflowY:"auto",padding:"0 16px 16px"}}>
+          {!res&&!scanBusy&&<><button onClick={()=>fileRef.current?.click()} style={{width:"100%",padding:"16px",fontSize:14,fontWeight:800,borderRadius:12,border:`2px dashed ${BLUE}55`,background:"#eef2fb",color:BLUE_D,cursor:"pointer"}}>＋ Choose or take a screenshot</button>
+            <div style={{fontSize:12,color:BROWN_L,textAlign:"center",marginTop:8}}>Screenshot a buyer's text, DM or email and I'll pull out their details + a reply.</div></>}
+          {scanBusy&&<div style={{padding:"20px 4px",fontSize:13.5,color:BROWN_L,fontStyle:"italic"}}>Reading the screenshot…</div>}
+          {res&&<>
+            <label className="fl">Name</label><input style={inp} value={res.name} onChange={e=>setF("name",e.target.value)} placeholder="Buyer name"/>
+            <label className="fl" style={{marginTop:10,display:"block"}}>Mobile</label><input style={inp} value={res.mobile} onChange={e=>setF("mobile",e.target.value)} placeholder="04XX XXX XXX"/>
+            <label className="fl" style={{marginTop:10,display:"block"}}>Email</label><input style={inp} value={res.email} onChange={e=>setF("email",e.target.value)} placeholder="name@email.com"/>
+            {res.question&&<div style={{marginTop:12,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"10px 12px",fontSize:13,color:ESPRESSO}}><b>They asked:</b> {res.question}{res.wantsContract?<div style={{marginTop:4,color:BLUE_D,fontWeight:700}}>→ Wants the contract</div>:null}</div>}
+            <button onClick={()=>onRegister(res)} style={{width:"100%",marginTop:14,padding:"13px",fontSize:14,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer"}}>Register {res.name?res.name.split(" ")[0]:"buyer"} on this listing →</button>
+            <button onClick={()=>fileRef.current?.click()} style={{width:"100%",marginTop:8,padding:"9px",fontSize:12.5,fontWeight:600,borderRadius:9,border:`1px solid ${SAND_D}`,background:"#fff",color:BROWN_L,cursor:"pointer"}}>↻ Try another screenshot</button>
+            <div style={{marginTop:16}}>
+              <label className="fl">Suggested reply</label>
+              <textarea value={reply} onChange={e=>setReply(e.target.value)} style={{...inp,minHeight:80,resize:"vertical"}}/>
+              <div style={{display:"flex",gap:8,marginTop:8}}>
+                <button onClick={()=>{navigator.clipboard?.writeText(reply).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}} style={{flex:1,padding:"10px",fontSize:13,fontWeight:700,borderRadius:9,border:`1px solid ${SAND_D}`,background:"#fff",color:ESPRESSO,cursor:"pointer"}}>{copied?"Copied ✓":"Copy reply"}</button>
+                {res.mobile&&<a href={`sms:${toE164AU(res.mobile)}?&body=${encodeURIComponent(reply)}`} style={{flex:1,textAlign:"center",padding:"10px",fontSize:13,fontWeight:700,borderRadius:9,border:"none",background:AMBER,color:"#fff",textDecoration:"none"}}>📱 Text reply</a>}
+              </div>
             </div>
-          </div>
-        </>}
-      </div>
+          </>}
+        </div>
+      </>}
     </div>
   </div>;
 }
 
-// Open-day quick reference: AI assistant + view the contract + a collapsible panel
-// of the Box+Dice listing notes (finer details, keysafe/door codes, access info).
+// Quiet quick-reference: one "Listing info" toggle that expands to the access notes
+// (keysafe/door codes) and a link to open the full contract. No AI here — that lives
+// in the single AI assistant button.
 function OpenListingInfo({ openHome }){
   const [open,setOpen]=useState(false);
-  const [ask,setAsk]=useState(false);
   const notes=(openHome?.listingNotes||"").trim();
   const contractUrl=openHome?.contractUrl||"";
   if(!notes && !contractUrl) return null;
-  const btn={flex:1,padding:"9px 12px",fontSize:12.5,fontWeight:700,borderRadius:10,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",textAlign:"center"};
   return (
-    <div style={{padding:"8px 14px 0"}}>
-      {contractUrl&&<button onClick={()=>setAsk(true)} style={{width:"100%",padding:"11px 12px",fontSize:13.5,fontWeight:800,borderRadius:11,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",background:BLUE_D,color:"#fff",border:"none",marginBottom:8,boxShadow:"0 2px 8px rgba(49,30,16,.12)"}}>🤖 Ask AI about this listing</button>}
-      <div style={{display:"flex",gap:8}}>
-        {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{...btn,background:LINEN,color:ESPRESSO,border:`1px solid ${SAND_D}`,textDecoration:"none"}}>📄 View contract</a>}
-        {notes&&<button style={{...btn,background:"#eef2fb",color:BLUE_D,border:`1px solid ${BLUE}33`}} onClick={()=>setOpen(o=>!o)}>🔑 Listing info {open?"▲":"▼"}</button>}
-      </div>
-      {open&&notes&&<div style={{marginTop:8,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"12px 13px",fontSize:13,lineHeight:1.5,color:ESPRESSO,whiteSpace:"pre-wrap"}}>{notes}</div>}
-      <ListingAiSheet open={ask} onClose={()=>setAsk(false)} openHome={openHome}/>
+    <div style={{padding:"0 14px"}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{width:"100%",padding:"10px 12px",fontSize:12.5,fontWeight:700,borderRadius:10,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",textAlign:"center",background:"#fff",color:BROWN_L,border:`1px solid ${SAND_D}`}}>🔑 Listing info &amp; contract {open?"▲":"▼"}</button>
+      {open&&<div style={{marginTop:8}}>
+        {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none",marginBottom:notes?8:0}}>📄 Open / read the full contract</a>}
+        {notes&&<div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"12px 13px",fontSize:13,lineHeight:1.5,color:ESPRESSO,whiteSpace:"pre-wrap"}}>{notes}</div>}
+      </div>}
     </div>
   );
 }
@@ -2573,8 +2568,8 @@ export default function App(){
         </button>
         <button className="btn-outline" onClick={()=>setShowSum(true)}>📩 Vendor update</button>
       </div>
-      <div style={{padding:"0 14px"}}>
-        <button className="btn-outline" style={{width:"100%",margin:0}} onClick={()=>setShowAssistant(true)}>📸 Register from a text / screenshot</button>
+      <div style={{padding:"0 14px 10px"}}>
+        <button onClick={()=>setShowAssistant(true)} style={{width:"100%",padding:"13px",fontSize:14,fontWeight:800,borderRadius:12,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",boxShadow:"0 2px 8px rgba(49,30,16,.14)"}}>🤖 AI assistant</button>
       </div>
 
       <OpenListingInfo openHome={openHome}/>
@@ -2631,7 +2626,7 @@ export default function App(){
       <svg width="26" height="26" viewBox="0 0 24 24" fill="white"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
     </button>}
     <AddSheet open={showAdd} onClose={()=>{setShowAdd(false);setAiPrefill(null);}} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)} prefill={aiPrefill}/>
-    <ScreenshotAssistant open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={(r)=>{ setAiPrefill({name:r.name||"",mobile:r.mobile||"",email:r.email||""}); setShowAssistant(false); setShowAdd(true); }}/>
+    <AiAssistantSheet open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={(r)=>{ setAiPrefill({name:r.name||"",mobile:r.mobile||"",email:r.email||""}); setShowAssistant(false); setShowAdd(true); }}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id} propIndex={propIndex}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
