@@ -245,6 +245,24 @@ const Attio = {
       };
     };
     const openGroups = {}, propGroups = {};
+    // Cross-property activity: every property a contact has an inspection on, with
+    // their strongest interest + visit count there. Powers the "Also active on"
+    // section — always live, never a stale snapshot.
+    const rankX = { hot: 3, watching: 2, cool: 1 };
+    const contactProps = {};
+    (inspJ.data || []).forEach(insp => {
+      const cid = rref(insp, "contact"), pr = rref(insp, "property"); if (!cid || !pr) return;
+      const it = (rval(insp, "interest") || "").toLowerCase();
+      const enq = /(^|\n)[^\t\n]*\t?(REA|Domain|Portal)\s+enquiry/i.test(String(rval(insp, "notes") || ""));
+      const m = (contactProps[cid] = contactProps[cid] || {});
+      const e = (m[pr] = m[pr] || { ref: pr, interest: "", visits: 0, enquiredOnly: true });
+      e.visits++; if (!enq) e.enquiredOnly = false;
+      if ((rankX[it] || 0) > (rankX[e.interest] || 0)) e.interest = it;
+    });
+    const attachOther = (list, curProp) => list.map(b => ({
+      ...b,
+      otherProps: Object.values(contactProps[b.contactId] || {}).filter(x => x.ref !== curProp),
+    }));
     (inspJ.data || []).forEach(insp => {
       const oh = rref(insp, "open_home"), pr = rref(insp, "property"), b = build(insp);
       const k = b.contactId || b.id;
@@ -253,8 +271,8 @@ const Attio = {
     });
     return {
       ok: true,
-      open: Object.values(openGroups).map(mergeGroup).map(normBuyer),
-      property: Object.values(propGroups).map(mergeGroup).map(normBuyer),
+      open: attachOther(Object.values(openGroups).map(mergeGroup).map(normBuyer), propertyId),
+      property: attachOther(Object.values(propGroups).map(mergeGroup).map(normBuyer), propertyId),
     };
   },
   // One row per buyer (deduped by contact) with every note they have across all
@@ -1219,7 +1237,7 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract }) {
 /* ════════════════════════════════════════════
    BUYER DETAIL SHEET
 ════════════════════════════════════════════ */
-function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSendContract,onTextContract,onAddNote,onSetProfile,onUpdateDetails}){
+function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,onUpdateInterest,onSendContract,onTextContract,onAddNote,onSetProfile,onUpdateDetails}){
   const[noteText,setNoteText]=useState("");
   const[showNote,setShowNote]=useState(false);
   const[copied,setCopied]=useState(false);
@@ -1376,15 +1394,33 @@ function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSend
         </button>}
       </div>
 
-      <div className="sec-w"><div className="sec-i">Other properties inspected</div></div>
-      {hist.length===0?<p className="no-hist">No prior inspection history.</p>
-        :<div className="hist-scroll">{hist.map((h,i)=><div key={i} className="hcard">
-          <div className="hc-addr">{h.addr}</div><div className="hc-sub">{h.suburb} · {h.date}</div>
-          <div className="hc-sep"/>
-          <div className="hc-row"><span className="hc-lbl">Interest</span><span className="hc-val" style={{color:iCol(h.interest)}}>{iLbl(h.interest)}</span></div>
-          <div className="hc-row"><span className="hc-lbl">Contract</span><span className="hc-val" style={{color:h.contractSent?GRN:"#C0B8A8"}}>{h.contractSent?"Sent ✓":"No"}</span></div>
-          <div className="hc-row"><span className="hc-lbl">Offered</span><span className="hc-val" style={{color:h.offered?"#B7770D":"#C0B8A8"}}>{h.offered?h.offerAmt:"No"}</span></div>
-        </div>)}</div>}
+      <div className="sec-w"><div className="sec-i">Other property activity</div></div>
+      {(()=>{
+        // Real cross-property activity (every other Savvi property this buyer has
+        // inspected or enquired on), resolved live via propIndex. Falls back to the
+        // demo history when a buyer carries no otherProps (demo mode).
+        const real = Array.isArray(buyer.otherProps)
+          ? buyer.otherProps.map(o=>({ ...o, addr: (propIndex&&propIndex[o.ref])||"" }))
+          : null;
+        if(real){
+          return real.length===0
+            ? <p className="no-hist">No other property activity yet.</p>
+            : <div className="hist-scroll">{real.map((o,i)=><div key={i} className="hcard">
+                <div className="hc-addr">{o.addr||"Another Savvi listing"}</div>
+                <div className="hc-sub">{o.enquiredOnly?"Enquired online":`Inspected${o.visits>1?` · ${o.visits} visits`:""}`}</div>
+                <div className="hc-sep"/>
+                <div className="hc-row"><span className="hc-lbl">Interest</span><span className="hc-val" style={{color:o.interest?iCol(o.interest):"#C0B8A8"}}>{o.interest?iLbl(o.interest):"—"}</span></div>
+              </div>)}</div>;
+        }
+        return hist.length===0?<p className="no-hist">No prior inspection history.</p>
+          :<div className="hist-scroll">{hist.map((h,i)=><div key={i} className="hcard">
+            <div className="hc-addr">{h.addr}</div><div className="hc-sub">{h.suburb} · {h.date}</div>
+            <div className="hc-sep"/>
+            <div className="hc-row"><span className="hc-lbl">Interest</span><span className="hc-val" style={{color:iCol(h.interest)}}>{iLbl(h.interest)}</span></div>
+            <div className="hc-row"><span className="hc-lbl">Contract</span><span className="hc-val" style={{color:h.contractSent?GRN:"#C0B8A8"}}>{h.contractSent?"Sent ✓":"No"}</span></div>
+            <div className="hc-row"><span className="hc-lbl">Offered</span><span className="hc-val" style={{color:h.offered?"#B7770D":"#C0B8A8"}}>{h.offered?h.offerAmt:"No"}</span></div>
+          </div>)}</div>;
+      })()}
 
       {/* Thumb-reachable close — easier one-handed than the top-right ✕ */}
       <div style={{padding:"16px 16px 4px"}}>
@@ -2441,7 +2477,7 @@ export default function App(){
     </button>}
     <AddSheet open={showAdd} onClose={()=>setShowAdd(false)} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
-      openHome={openHome} propId={openHome?.id}
+      openHome={openHome} propId={openHome?.id} propIndex={propIndex}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
       onAddNote={addNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}/>
     <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb}/>
