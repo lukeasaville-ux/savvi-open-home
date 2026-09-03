@@ -53,7 +53,26 @@ const melbGreeting = () => { const h = melbHour(); return h < 12 ? "Good morning
 // open home reuses the data instead of re-fetching every record. Invalidated
 // on any write (register / update) so fresh buyers always show.
 let _buyerRecCache = null; // { t, insp, ppl }
-const invalidateBuyerCache = () => { _buyerRecCache = null; };
+const invalidateBuyerCache = () => { _buyerRecCache = null; _propMetaCache = null; };
+
+// id -> { address, suburb, price } for EVERY property (active, sold or past), so a
+// buyer's cross-property activity always shows the real listing + price, not just the
+// currently-active ones the home screen happens to hold.
+let _propMetaCache = null; // { t, map }
+async function loadPropMeta() {
+  if (_propMetaCache && (Date.now() - _propMetaCache.t) < 120000) return _propMetaCache.map;
+  const map = {};
+  try {
+    const j = await call("listRecords", { objectSlug: "properties" });
+    (j?.data || []).forEach(p => {
+      const id = p?.id?.record_id; if (!id) return;
+      const v = f => p?.values?.[f]?.[0]?.value;
+      map[id] = { address: v("address") || "", suburb: v("suburb") || "", price: v("price") || v("display_price") || "" };
+    });
+    _propMetaCache = { t: Date.now(), map };
+  } catch (e) {}
+  return map;
+}
 
 // Parse the inspection's contract_opens text field — a newline list of
 // "opened <ISO>" / "clicked <ISO>" written by the Resend webhook — into
@@ -259,9 +278,13 @@ const Attio = {
       e.visits++; if (!enq) e.enquiredOnly = false;
       if ((rankX[it] || 0) > (rankX[e.interest] || 0)) e.interest = it;
     });
+    const propMeta = await loadPropMeta();
     const attachOther = (list, curProp) => list.map(b => ({
       ...b,
-      otherProps: Object.values(contactProps[b.contactId] || {}).filter(x => x.ref !== curProp),
+      otherProps: Object.values(contactProps[b.contactId] || {}).filter(x => x.ref !== curProp).map(x => {
+        const m = propMeta[x.ref] || {};
+        return { ...x, address: m.address || "", suburb: m.suburb || "", price: m.price || "" };
+      }),
     }));
     (inspJ.data || []).forEach(insp => {
       const oh = rref(insp, "open_home"), pr = rref(insp, "property"), b = build(insp);
@@ -339,7 +362,11 @@ const Attio = {
     const rank = { hot: 3, watching: 2, cool: 1 };
     // Strip the "<ISO>\t<text>" timestamp encoding from stored notes for display.
     const cleanNotes = s => String(s || "").split("\n---\n").map(t => {
-      const tab = t.indexOf("\t"); return (tab > 0 && /^\d{4}-\d\d-\d\dT/.test(t)) ? t.slice(tab + 1) : t;
+      // New format "<ISO>\t<agent>\t<text>" and old "<ISO>\t<text>" — strip the
+      // timestamp + agent so the AI corpus sees only the note prose.
+      const p = t.split("\t");
+      if (/^\d{4}-\d\d-\d\dT/.test(p[0])) return p.length >= 3 ? p.slice(2).join("\t") : (p[1] || "");
+      return t;
     }).map(t => t.trim()).filter(Boolean);
     const ext = {};
     inspData.forEach(insp => {
@@ -1457,16 +1484,17 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,onUpdateInter
         // inspected or enquired on), resolved live via propIndex. Falls back to the
         // demo history when a buyer carries no otherProps (demo mode).
         const real = Array.isArray(buyer.otherProps)
-          ? buyer.otherProps.map(o=>({ ...o, addr: (propIndex&&propIndex[o.ref])||"" }))
+          ? buyer.otherProps.map(o=>({ ...o, addr: o.address || (propIndex&&propIndex[o.ref])||"", sub: o.suburb||"" }))
           : null;
         if(real){
           return real.length===0
             ? <p className="no-hist">No other property activity yet.</p>
             : <div className="hist-scroll">{real.map((o,i)=><div key={i} className="hcard">
                 <div className="hc-addr">{o.addr||"Another Savvi listing"}</div>
-                <div className="hc-sub">{o.enquiredOnly?"Enquired online":`Inspected${o.visits>1?` · ${o.visits} visits`:""}`}</div>
+                <div className="hc-sub">{[o.sub, o.enquiredOnly?"Enquired online":`Inspected${o.visits>1?` · ${o.visits} visits`:""}`].filter(Boolean).join(" · ")}</div>
                 <div className="hc-sep"/>
                 <div className="hc-row"><span className="hc-lbl">Interest</span><span className="hc-val" style={{color:o.interest?iCol(o.interest):"#C0B8A8"}}>{o.interest?iLbl(o.interest):"—"}</span></div>
+                {o.price&&<div className="hc-row"><span className="hc-lbl">Price</span><span className="hc-val">{o.price}</span></div>}
               </div>)}</div>;
         }
         return hist.length===0?<p className="no-hist">No prior inspection history.</p>
