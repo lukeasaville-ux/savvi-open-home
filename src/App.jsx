@@ -510,6 +510,8 @@ async function aiBuyerProfile(buyer) {
     firstSeen: buyer.firstSeen,
     daysSince: daysSince(buyer.firstSeen),
     notes: (buyer.notes || []).map(n => n.text),
+    // Every property this buyer has touched, so the bio spans their whole history.
+    properties: (buyer.otherProps || []).map(o => [o.address, o.suburb].filter(Boolean).join(", ")).filter(Boolean),
     contractSent: !!buyer.contractSent,
   });
   if (j?.ok) { const d = j.data || j; if (d.bio) return { bio: d.bio, stage: d.stage || "Early" }; }
