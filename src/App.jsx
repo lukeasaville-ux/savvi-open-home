@@ -521,18 +521,19 @@ async function aiBuyerProfile(buyer) {
 // name to the vendor). When there's nothing noted for a buyer, we say we didn't get
 // a proper chat and will follow up, rather than inventing detail.
 const VENDOR_NO_NOTE = "we didn't get the chance to have much of a conversation — I'll follow them up early next week";
-async function aiVendorSummary(openHome, buyers) {
+async function aiVendorSummary(openHome, buyers, mode) {
   const j = await call("aiVendorSummary", {
     openHomeId: openHome.id,
     address: openHome.address,
     suburb: openHome.suburb,
     time: openHome.time,
+    mode: mode || "open", // "open" = quick post-open wrap; "campaign" = full weekly report
     buyers: buyers.map(b => {
       const firstName = String(b.name || "").trim().split(/\s+/)[0] || "They";
       const noteTexts = (b.notes || []).map(n => n.text).filter(t => t && t.trim());
       // Only feed the "no chat" line when there's genuinely nothing else to say —
       // a contract-taker's story is the contract, so leave that to the flag.
-      const notes = noteTexts.length ? noteTexts : (b.contractSent ? [] : [VENDOR_NO_NOTE]);
+      const notes = noteTexts.length ? noteTexts : (b.contractSent ? [] : (mode === "campaign" ? [] : [VENDOR_NO_NOTE]));
       return { name: firstName, interest: b.interest, contractSent: !!b.contractSent, visits: b.visits || 1, notes };
     }),
   });
@@ -1569,6 +1570,7 @@ function SummarySheet({open,onClose,openHome,buyers}){
   const[sumText,setSumText]=useState("");
   const[loading,setLoading]=useState(false);
   const[copied,setCopied]=useState(false);
+  const[mode,setMode]=useState("open"); // "open" = quick post-open wrap (auto) · "campaign" = full weekly report
   const drag=useSheetDrag(onClose);
 
   // Detailed, casual vendor wrap: a recap line (keen / contracts / repeat visits)
@@ -1602,14 +1604,17 @@ function SummarySheet({open,onClose,openHome,buyers}){
   // Try the AI vendor summary (backend now writes it in Luke's voice: greeting →
   // prose recap → a line per buyer → sign-off). Fall back to the detailed
   // client-built version if the AI is unavailable.
-  const gen=useCallback(async()=>{
+  const gen=useCallback(async(m)=>{
     if(!openHome)return;
+    const useMode=m||"open";
     setLoading(true);setSumText("");
-    try{ const t=await aiVendorSummary(openHome,buyers); if(t&&t.trim()) setSumText(t); else build(); }
+    try{ const t=await aiVendorSummary(openHome,buyers,useMode); if(t&&t.trim()) setSumText(t); else build(); }
     catch{ build(); }
     setLoading(false);
   },[openHome,buyers,build]);
-  useEffect(()=>{if(open)gen();},[open]);
+  // On open, instantly generate the quick post-open wrap (unchanged behaviour).
+  useEffect(()=>{if(open){setMode("open");gen("open");}},[open]);
+  const switchMode=useCallback((m)=>{ setMode(m); gen(m); },[gen]);
 
   // Send the (edited) update via WhatsApp: opens WhatsApp with the text pre-filled
   // so you pick the listing's group and hit send — a chance to eyeball it first.
@@ -1631,9 +1636,12 @@ function SummarySheet({open,onClose,openHome,buyers}){
           <div className="ss"><div className="ss-n h">{buyers.filter(b=>b.interest==="hot").length}</div><div className="ss-l">Hot</div></div>
           <div className="ss"><div className="ss-n w">{buyers.filter(b=>b.interest==="watching").length}</div><div className="ss-l">Watching</div></div>
         </div>
+        <div style={{margin:"0 0 10px",padding:3,background:SAND,borderRadius:11,display:"flex",gap:3}}>
+          {[["open","Post-open update"],["campaign","Full campaign report"]].map(([k,l])=>{const on=mode===k;return <button key={k} onClick={()=>!loading&&mode!==k&&switchMode(k)} style={{flex:1,padding:"9px 6px",fontSize:12.5,fontWeight:700,border:"none",borderRadius:9,cursor:loading?"default":"pointer",background:on?"#fff":"transparent",color:on?ESPRESSO:BROWN_L,boxShadow:on?"0 1px 3px rgba(49,30,16,.12)":"none"}}>{l}</button>;})}
+        </div>
         <div className="sum-box">
-          <div className="sum-lbl">Update for today's open · edit before sending</div>
-          {loading&&<div className="sum-loading"><div className="sp"/><div className="sp-txt">Writing your vendor update…</div></div>}
+          <div className="sum-lbl">{mode==="campaign"?"Weekly campaign report · edit before sending":"Update for today's open · edit before sending"}</div>
+          {loading&&<div className="sum-loading"><div className="sp"/><div className="sp-txt">{mode==="campaign"?"Writing the campaign report…":"Writing your vendor update…"}</div></div>}
           {!loading&&<textarea className="sum-edit" value={sumText} onChange={e=>setSumText(e.target.value)} onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()} spellCheck={true}/>}
         </div>
         <div className="cpy-row">
