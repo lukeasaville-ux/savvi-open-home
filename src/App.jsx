@@ -1566,7 +1566,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,onUpdateInter
 /* ════════════════════════════════════════════
    VENDOR SUMMARY SHEET
 ════════════════════════════════════════════ */
-function SummarySheet({open,onClose,openHome,buyers}){
+function SummarySheet({open,onClose,openHome,buyers,allBuyers}){
   const[sumText,setSumText]=useState("");
   const[loading,setLoading]=useState(false);
   const[copied,setCopied]=useState(false);
@@ -1607,11 +1607,13 @@ function SummarySheet({open,onClose,openHome,buyers}){
   const gen=useCallback(async(m)=>{
     if(!openHome)return;
     const useMode=m||"open";
+    // Post-open wrap = today's attendees. Campaign report = EVERYONE on the property.
+    const src=useMode==="campaign"?((allBuyers&&allBuyers.length)?allBuyers:buyers):buyers;
     setLoading(true);setSumText("");
-    try{ const t=await aiVendorSummary(openHome,buyers,useMode); if(t&&t.trim()) setSumText(t); else build(); }
+    try{ const t=await aiVendorSummary(openHome,src,useMode); if(t&&t.trim()) setSumText(t); else build(); }
     catch{ build(); }
     setLoading(false);
-  },[openHome,buyers,build]);
+  },[openHome,buyers,allBuyers,build]);
   // On open, instantly generate the quick post-open wrap (unchanged behaviour).
   useEffect(()=>{if(open){setMode("open");gen("open");}},[open]);
   const switchMode=useCallback((m)=>{ setMode(m); gen(m); },[gen]);
@@ -2698,7 +2700,7 @@ export default function App(){
       openHome={openHome} propId={openHome?.id} propIndex={propIndex}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
       onAddNote={addNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}/>
-    <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb}/>
+    <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll}/>
     <QuickContractSheet
       open={showQuickContract}
       prop={quickContractProp}
