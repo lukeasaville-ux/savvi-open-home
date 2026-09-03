@@ -1247,7 +1247,7 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
           ? <div key={i} style={{marginBottom:14}}>
               <div style={{fontSize:13.5,fontWeight:700,color:ESPRESSO,marginBottom:6}}>{x.q}</div>
               {x.a===null
-                ? <div style={{fontSize:13,color:BROWN_L,fontStyle:"italic"}}>Reading the contract… this can take ~20 seconds.</div>
+                ? <div style={{fontSize:13,color:BROWN_L,fontStyle:"italic"}}>Checking the contract…</div>
                 : <div style={{fontSize:13.5,lineHeight:1.55,color:ESPRESSO,whiteSpace:"pre-wrap",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"11px 13px"}}>{x.a}</div>}
             </div>
           : <div key={i} style={{marginBottom:14,background:"#fbfaf7",border:`1px solid ${SAND_D}`,borderRadius:12,padding:"12px 13px"}}>
