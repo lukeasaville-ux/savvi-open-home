@@ -500,7 +500,7 @@ const AGENT_FULL={ "Luke":"Luke Saville", "Sam":"Sam Robinson" };
 // Blank lines between each part so it reads clean. Built client-side + sent via the
 // sendSms custom-message path, so no reel on the property = no walkthrough line.
 function buildWelcomeSms({ firstName, address, igUrl, agent }){
-  const sig = AGENT_FULL[agent] || agent || "Luke Saville";
+  const sig = "Luke Saville"; // all SMS send from Luke's MessageMedia (personal) number, so always sign as Luke until Sam has his own verified number
   const parts = [
     `Hi ${firstName||"there"},`,
     `Great to meet you at ${address||"the open"} today.`,
@@ -509,6 +509,17 @@ function buildWelcomeSms({ firstName, address, igUrl, agent }){
   if(SOFT_LAUNCH_URL) parts.push(`Also, if you want first look at our off-market listings before they hit realestate.com or Domain, join our Soft Launch Club: ${SOFT_LAUNCH_URL}`);
   parts.push(`Thanks :)\n${sig}`);
   return parts.join("\n\n");
+}
+// Contract-by-SMS: a short text with the contract-of-sale link. Agent-aware sign-off.
+// Sent via the sendSms custom-message path (same transport as the welcome SMS).
+function buildContractSms({ firstName, address, contractUrl, agent }){
+  const sig = "Luke Saville"; // all SMS send from Luke's MessageMedia (personal) number, so always sign as Luke until Sam has his own verified number
+  return [
+    `Hi ${firstName||"there"},`,
+    `As promised, here's the contract of sale for ${address||"the property"}: ${contractUrl}`,
+    `Any questions, just reply here.`,
+    `Thanks :)\n${sig}`,
+  ].join("\n\n");
 }
 const CONTACTS_CACHE=[
   {id:"c1",name:"Sarah Chen",      mobile:"0412 345 678",email:"sarah.chen@gmail.com",  col:"#C75B3A"},
@@ -740,7 +751,9 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 .ctr-box.sent{background:${GRN_BG};border:1px solid #A9DFBF;}.ctr-box.unsent{background:${LINEN};border:1px solid ${SAND_D};}
 .ctr-lbl{font-size:13px;font-weight:600;}.ctr-lbl.sent{color:${GRN};}.ctr-lbl.unsent{color:${BROWN_M};}
 .ctr-sub{font-size:11px;color:${BROWN_L};margin-top:1px;}
-.ctr-send{margin-left:auto;background:${BLUE};color:${WHITE};border:none;border-radius:8px;padding:7px 12px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:12px;font-weight:700;cursor:pointer;}
+.ctr-send{background:${BLUE};color:${WHITE};border:none;border-radius:8px;padding:7px 12px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:12px;font-weight:700;cursor:pointer;}
+.ctr-txt{background:${GRN};color:${WHITE};border:none;border-radius:8px;padding:7px 12px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:12px;font-weight:700;cursor:pointer;}
+.ctr-btns{margin-left:auto;display:flex;gap:6px;flex:0 0 auto;}
 /* interest change */
 .cgr{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;padding:0 16px 13px;}
 .cb{border:1.5px solid ${SAND_D};background:${LINEN};border-radius:11px;padding:11px 6px;text-align:center;cursor:pointer;font-family:'Neue Haas Unica Pro',sans-serif;transition:all .13s;}
@@ -1095,7 +1108,7 @@ function ReelLink({ propertyId, value, onSaved }){
 }
 
 /* ════ CONTRACT BOX WITH TRACKING ════ */
-function ContractBox({ buyer, propId, onSendContract }) {
+function ContractBox({ buyer, propId, onSendContract, onTextContract }) {
   const [tracking, setTracking] = useState(null);
   const [loadingTrack, setLoadingTrack] = useState(false);
 
@@ -1119,9 +1132,12 @@ function ContractBox({ buyer, propId, onSendContract }) {
         <span style={{fontSize:20}}>📋</span>
         <div style={{flex:1}}>
           <div className="ctr-lbl unsent">Contract not yet sent</div>
-          <div className="ctr-sub">Tap to email from your address</div>
+          <div className="ctr-sub">Send it by text or email</div>
         </div>
-        <button className="ctr-send" onClick={()=>onSendContract(propId,buyer)}>Send</button>
+        <div className="ctr-btns">
+          {buyer?.mobile&&<button className="ctr-txt" onClick={()=>onTextContract(propId,buyer)}>📱 Text</button>}
+          {buyer?.email&&<button className="ctr-send" onClick={()=>onSendContract(propId,buyer)}>✉ Email</button>}
+        </div>
       </div>
     );
   }
@@ -1149,7 +1165,10 @@ function ContractBox({ buyer, propId, onSendContract }) {
             <div className="ctr-sub">{loadingTrack ? "Checking status…" : "Email delivered"}</div>
           </>}
         </div>
-        <button className="ctr-send" onClick={()=>onSendContract(propId,buyer)}>Resend</button>
+        <div className="ctr-btns">
+          {buyer?.mobile&&<button className="ctr-txt" onClick={()=>onTextContract(propId,buyer)}>📱 Text</button>}
+          {buyer?.email&&<button className="ctr-send" onClick={()=>onSendContract(propId,buyer)}>Resend</button>}
+        </div>
       </div>
     </div>
   );
@@ -1158,7 +1177,7 @@ function ContractBox({ buyer, propId, onSendContract }) {
 /* ════════════════════════════════════════════
    BUYER DETAIL SHEET
 ════════════════════════════════════════════ */
-function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSendContract,onAddNote,onSetProfile,onUpdateDetails}){
+function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSendContract,onTextContract,onAddNote,onSetProfile,onUpdateDetails}){
   const[noteText,setNoteText]=useState("");
   const[showNote,setShowNote]=useState(false);
   const[copied,setCopied]=useState(false);
@@ -1291,7 +1310,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,onUpdateInterest,onSend
       </div>
       </>)}
 
-      <ContractBox buyer={buyer} propId={propId} onSendContract={onSendContract}/>
+      <ContractBox buyer={buyer} propId={propId} onSendContract={onSendContract} onTextContract={onTextContract}/>
 
       <div className="sec-w"><div className="sec-i">Update interest</div></div>
       <div className="cgr">{ISET.map(o=><div key={o.v} className={`cb ${buyer.interest===o.v?(o.v==="hot"?"ah":o.v==="watching"?"aw":"ac"):""}`} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}>
@@ -2102,6 +2121,21 @@ export default function App(){
     }
   },[isDemo, openHome, agentName]);
 
+  // Send the contract by SMS (the contract-of-sale link) instead of email.
+  const textContract=useCallback((pid,b)=>{
+    if(!pid)return;
+    const t=fmtDateTime();
+    setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===b.id?{...x,contractSent:true,contractSentTime:t}:x);return u;});
+    setActive(p=>p?.id===b.id?{...p,contractSent:true,contractSentTime:t}:p);
+    if(b.mobile && openHome?.contractUrl){
+      MM.sendMessage({ toPhone:b.mobile, message: buildContractSms({ firstName:(b.name||"").split(" ")[0], address:openHome.address, contractUrl:openHome.contractUrl, agent:agentName }) })
+        .then(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); })
+        .catch(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); });
+    } else if(!isDemo && b._attioInspectionId){
+      Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{});
+    }
+  },[isDemo, openHome, agentName]);
+
   const addNote=useCallback((pid,id,text)=>{
     if(!pid)return;
     const note={id:"n"+Date.now(),text,ts:new Date().toISOString()};
@@ -2360,7 +2394,7 @@ export default function App(){
     <AddSheet open={showAdd} onClose={()=>setShowAdd(false)} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id}
-      onUpdateInterest={updateInterest} onSendContract={sendContract}
+      onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
       onAddNote={addNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}/>
     <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb}/>
     <QuickContractSheet
