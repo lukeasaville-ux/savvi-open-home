@@ -2549,9 +2549,9 @@ export default function App(){
         </button>
         <button className="btn-blue" onClick={()=>setShowAssistant(true)}>🤖 AI assistant</button>
       </div>
-      <div className="acts" style={{paddingTop:0}}>
-        <button className="btn-outline" onClick={()=>setShowSum(true)}>📩 Vendor update</button>
-        {listingHasInfo(openHome)&&<button className="btn-outline" onClick={()=>setShowInfo(s=>!s)}>🔑 Listing info {showInfo?"▲":"▼"}</button>}
+      <div className="acts" style={{paddingTop:8}}>
+        <button className="btn-outline" style={{flex:1}} onClick={()=>setShowSum(true)}>📩 Vendor update</button>
+        {listingHasInfo(openHome)&&<button className="btn-outline" style={{flex:1}} onClick={()=>setShowInfo(s=>!s)}>🔑 Listing info {showInfo?"▲":"▼"}</button>}
       </div>
 
       {showInfo&&<OpenListingInfo openHome={openHome}/>}
