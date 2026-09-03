@@ -122,7 +122,7 @@ function normBuyer(b) {
     notes,
     // Online portal enquiries (REA/Domain) are auto-created with a note prefixed
     // "<portal> enquiry:" — flag them so the app can show them separately.
-    isEnquiry: notes.some(n=>/^\s*(REA|Domain|Portal)\s+enquiry/i.test(n.text||"")),
+    isEnquiry: notes.some(n=>/^\s*((REA|Domain|Portal)\s+enquiry|Enquiry via (text|sms|email|phone|dm))/i.test(n.text||"")),
     aiProfile: null,
     initials: b.initials || mkI(name),
     col: b.col || AVATAR_COLS[Math.abs(name.charCodeAt(0) || 65) % AVATAR_COLS.length],
@@ -1510,7 +1510,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,onUpdateInter
 
       <div className="sec-w"><div className="sec-i">Notes</div></div>
       <div className="notes-w">
-        {(buyer.notes||[]).length>0&&<div className="note-feed">{(buyer.notes||[]).map(n=><div key={n.id} className="note-item">
+        {(buyer.notes||[]).length>0&&<div className="note-feed">{[...(buyer.notes||[])].reverse().map(n=><div key={n.id} className="note-item">
           <div className="note-txt">{n.text}</div><div className="note-ts">{n.ts?(/^\d{4}-/.test(n.ts)?fmtNoteTime(n.ts):n.ts):""}{n.agent?` — ${n.agent}`:""}</div>
         </div>)}</div>}
         {showNote?<>
@@ -2397,7 +2397,12 @@ export default function App(){
     const pid=openHome?.id; if(!pid) return { done:[] };
     const digits=s=>String(s||"").replace(/\D/g,"").slice(-9);
     const done=[]; const first=(enq.name||"").split(" ")[0]||"They";
-    const noteObj={ id:"n"+Date.now(), text:`📨 Enquiry via text: ${enq.question||"contacted us"}`, ts:new Date().toISOString(), agent:AGENT_FULL[agentName]||agentName||"" };
+    const agentFull=AGENT_FULL[agentName]||agentName||"";
+    const noteText=`Enquiry via text: ${enq.question||"contacted us"}`;
+    const noteTs=new Date().toISOString();
+    const noteObj={ id:"n"+Date.now(), text:noteText, ts:noteTs, agent:agentFull };
+    const noteLine=`${noteTs}\t${agentFull}\t${noteText}`;
+    const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text;
     // Dedup — already registered against THIS property?
     const existing=(propBuyers[pid]||[]).find(b=>
       (enq.mobile&&digits(b.mobile)&&digits(b.mobile)===digits(enq.mobile)) ||
@@ -2406,29 +2411,27 @@ export default function App(){
 
     if(existing){
       rowId=existing.id;
-      done.push(`${first} was already registered here — added a note`);
+      const addNote=x=>x.id===rowId?{...x,notes:[...(x.notes||[]),noteObj]}:x;
+      setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(addNote);return u;});
+      setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(addNote);return u;});
+      if(!isDemo&&inspectionId) Attio.updateInspection(inspectionId,{notes:[...(existing.notes||[]),noteObj].map(enc).join("\n---\n")}).catch(()=>{});
+      done.push(`${first} was already registered here — added their enquiry note`);
     } else {
       if(!isDemo){
         let found=enq.mobile?await Attio.findPersonByPhone(enq.mobile).catch(()=>null):null;
         if(found) contactId=Attio.id(found);
         else { const r=await Attio.createPerson({name:enq.name,email:enq.email,mobile:enq.mobile}).catch(()=>({ok:false})); if(r.ok) contactId=r.id; }
-        if(contactId){ const r=await Attio.createInspection({contactId,propertyId:openHome?.propertyId,openHomeId:pid,interest:""}).catch(()=>({ok:false})); if(r.ok) inspectionId=r.id; }
+        // An enquiry is NOT an open attendee → openHomeId stays null (property-level).
+        if(contactId){ const r=await Attio.createInspection({contactId,propertyId:openHome?.propertyId,openHomeId:null,interest:""}).catch(()=>({ok:false})); if(r.ok) inspectionId=r.id; }
+        if(inspectionId) Attio.updateInspection(inspectionId,{notes:noteLine}).catch(()=>{});
       }
       rowId=inspectionId||("local"+Date.now());
-      const row=normBuyer({ id:rowId, contactId, _attioInspectionId:inspectionId, name:enq.name||"Enquiry", mobile:enq.mobile||"", email:enq.email||"", interest:"", notes:"" });
-      setBuyers(p=>({...p,[pid]:[row,...(p[pid]||[])]}));
+      // Build with the note included so it flags as an enquiry (isEnquiry) right away.
+      const row=normBuyer({ id:rowId, contactId, _attioInspectionId:inspectionId, name:enq.name||"Enquiry", mobile:enq.mobile||"", email:enq.email||"", interest:"", notes:noteLine });
+      // Enquiries live at property level (Enquiries filter) — NOT counted "at this open".
       setPropBuyers(p=>({...p,[pid]:[row,...(p[pid]||[])]}));
       invalidateBuyerCache();
-      done.push("Registered on this listing");
-    }
-
-    // Append the enquiry note (local + Attio)
-    setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===rowId?{...x,notes:[...(x.notes||[]),noteObj]}:x);return u;});
-    setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===rowId?{...x,notes:[...(x.notes||[]),noteObj]}:x);return u;});
-    if(!isDemo&&inspectionId){
-      const base=existing?(existing.notes||[]):[];
-      const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text;
-      Attio.updateInspection(inspectionId,{notes:[...base,noteObj].map(enc).join("\n---\n")}).catch(()=>{});
+      done.push("Registered as an enquiry on this listing");
     }
 
     // Auto-reply text
@@ -2442,7 +2445,9 @@ export default function App(){
         const t=fmtDateTime();
         Resend.sendContract({ toEmail:enq.email, toName:enq.name, agentName, address:openHome.address, contractUrl:openHome.contractUrl })
           .then(res=>{ if(inspectionId) Attio.updateInspection(inspectionId,{contractSent:true,contractSentTime:t,...(res&&res.id?{resendId:res.id}:{})}).catch(()=>{}); }).catch(()=>{});
-        setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===rowId?{...x,contractSent:true,contractSentTime:t}:x);return u;});
+        const markSent=x=>x.id===rowId?{...x,contractSent:true,contractSentTime:t}:x;
+        setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(markSent);return u;});
+        setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(markSent);return u;});
         done.push(`Emailed the contract to ${enq.email}`);
       } else if(!openHome?.contractUrl){
         done.push("⚠️ No contract on file for this listing yet — send it once it's uploaded");
