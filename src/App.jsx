@@ -130,6 +130,18 @@ const Attio = {
     const j = await call("getListings");
     return j?.ok ? { ok: true, data: j.data || [] } : { ok: false, data: [] };
   },
+  // Warm the shared inspection/people cache in the background (called on the home
+  // screen) so the first tap into an open renders its buyer list instantly.
+  async prefetchBuyerRecords() {
+    if (_buyerRecCache && (Date.now() - _buyerRecCache.t) < 60000) return;
+    try {
+      const [inspJ, pplJ] = await Promise.all([
+        call("listRecords", { objectSlug: "inspections" }),
+        call("listRecords", { objectSlug: "people" }),
+      ]);
+      if (inspJ?.ok) _buyerRecCache = { t: Date.now(), insp: inspJ.data || [], ppl: pplJ?.data || [] };
+    } catch (e) {}
+  },
   async getInspections(openHomeId) {
     // The backend getInspections filter is broken server-side (returns all
     // inspections, or errors), so reconstruct the per-open buyer list from raw
@@ -160,7 +172,7 @@ const Attio = {
         name: c ? pnm(c) : "Unknown",
         mobile: c ? pph(c) : "",
         email: c ? pem(c) : "",
-        interest: (rval(insp, "interest") || "cool").toLowerCase(),
+        interest: (rval(insp, "interest") || "").toLowerCase(),
         contractSent: !!rval(insp, "contract_sent"),
         contractSentTime: rval(insp, "contract_sent_time") || null,
         smsSent: !!rval(insp, "sms_sent"),
@@ -203,7 +215,7 @@ const Attio = {
         // just-registered buyers that happen to have _attioInspectionId set.
         _attioInspectionId: rid(insp),
         name: c ? pnm(c) : "Unknown", mobile: c ? pph(c) : "", email: c ? pem(c) : "",
-        interest: (rval(insp, "interest") || "cool").toLowerCase(),
+        interest: (rval(insp, "interest") || "").toLowerCase(),
         contractSent: !!rval(insp, "contract_sent"), contractSentTime: rval(insp, "contract_sent_time") || null,
         smsSent: !!rval(insp, "sms_sent"), resendId: rval(insp, "resend_id") || null,
         contractOpens: rval(insp, "contract_opens") || "",
@@ -274,7 +286,7 @@ const Attio = {
       const cid = rref(insp, "contact"); if (!cid) return;
       const c = people[cid];
       const note = (rval(insp, "notes") || "").trim();
-      const interest = (rval(insp, "interest") || "cool").toLowerCase();
+      const interest = (rval(insp, "interest") || "").toLowerCase();
       const pr = rref(insp, "property");
       if (!byC[cid]) byC[cid] = { id: cid, contactId: cid, name: c ? pnm(c) : "Unknown", mobile: c ? pph(c) : "", email: c ? pem(c) : "", notes: [], interest, propertyRefs: [] };
       const b = byC[cid];
@@ -1642,7 +1654,7 @@ function QuickContractSheet({ open, prop, agentName, onClose, onSent }) {
       const pr = await Attio.createPerson({ name, email, mobile });
       if (pr.ok) contactId = pr.id;
       if (contactId) {
-        const ir = await Attio.createInspection({ contactId, propertyId: prop?.propertyId, openHomeId: null, interest: "cool" });
+        const ir = await Attio.createInspection({ contactId, propertyId: prop?.propertyId, openHomeId: null, interest: "" });
         if (ir.ok) inspectionId = ir.id;
       }
       // Send contract email
@@ -2064,6 +2076,8 @@ export default function App(){
       Attio.getAllActiveListings()
         .then(lr=>{ if(lr.ok) setAllListings(lr.data); })
         .catch(()=>{});
+      // Warm the buyer-records cache so the first open-tap shows its list instantly.
+      Attio.prefetchBuyerRecords();
     })();
   },[agentName,reloadNonce]);
 
