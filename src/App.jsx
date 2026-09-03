@@ -507,7 +507,7 @@ function buildWelcomeSms({ firstName, address, igUrl, agent }){
   ];
   if(igUrl) parts.push(`Here's a walkthrough video should you need to retrace your steps: ${igUrl}`);
   if(SOFT_LAUNCH_URL) parts.push(`Also, if you want first look at our off-market listings before they hit realestate.com or Domain, join our Soft Launch Club: ${SOFT_LAUNCH_URL}`);
-  parts.push(`Thanks :)\n${sig}`);
+  parts.push(`Thanks,\n${sig}`);
   return parts.join("\n\n");
 }
 // Contract-by-SMS: a short text with the contract-of-sale link. Agent-aware sign-off.
@@ -518,7 +518,7 @@ function buildContractSms({ firstName, address, contractUrl, agent }){
     `Hi ${firstName||"there"},`,
     `As promised, here's the contract of sale for ${address||"the property"}: ${contractUrl}`,
     `Any questions, just reply here.`,
-    `Thanks :)\n${sig}`,
+    `Thanks,\n${sig}`,
   ].join("\n\n");
 }
 const CONTACTS_CACHE=[
@@ -606,11 +606,14 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 /* home */
 .home-hdr{background:${ESPRESSO};padding:16px 20px 22px;border-radius:0 0 22px 22px;box-shadow:0 8px 24px rgba(49,30,16,.20);}
 .logo{font-family:'Newsreader',serif;font-size:36px;font-weight:900;color:${CREAM};letter-spacing:-1px;margin-bottom:16px;}
-.logo-img{height:29px;width:auto;display:block;margin-bottom:20px;}
-.agent-row{display:flex;align-items:center;justify-content:space-between;gap:8px;}
-.greeting{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${AMBER};margin-bottom:4px;}
-.hdate{font-family:'Newsreader',serif;font-size:20px;font-weight:700;color:${CREAM};}
+.logo-img{height:28px;width:auto;display:block;}
+.hdr-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:18px;}
+.logout-btn{background:transparent;border:1px solid rgba(255,244,213,.3);border-radius:100px;padding:6px 14px;font-size:11px;font-weight:600;color:${CREAM};cursor:pointer;font-family:'Neue Haas Unica Pro',sans-serif;white-space:nowrap;flex:0 0 auto;}
+.greeting{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${AMBER};margin-bottom:3px;white-space:nowrap;}
+.hdate{font-family:'Newsreader',serif;font-size:22px;font-weight:700;color:${CREAM};white-space:nowrap;}
+.hdr-chips{display:flex;align-items:center;gap:8px;margin-top:15px;flex-wrap:wrap;}
 .opens-chip{background:rgba(255,244,213,.12);border:1px solid rgba(255,244,213,.24);border-radius:100px;padding:7px 14px;font-size:12px;font-weight:600;color:${CREAM};white-space:nowrap;}
+.add-listing-btn{background:${AMBER};border:none;border-radius:100px;padding:7px 15px;font-size:12px;font-weight:700;color:${ESPRESSO};cursor:pointer;font-family:'Neue Haas Unica Pro',sans-serif;white-space:nowrap;}
 .sec-lbl{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:${BROWN_L};padding:18px 20px 10px;}
 /* loading/error states */
 .state-box{text-align:center;padding:48px 24px;}
@@ -1142,15 +1145,19 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract }) {
     );
   }
 
+  // Open-tracking only exists for EMAILED contracts (Resend webhook → contract_opens).
+  // A contract sent by SMS has no resendId, so we don't claim "email delivered" for it.
+  const emailed = !!buyer.resendId;
   // We care about CONTRACT-LINK CLICKS (them viewing the contract), not just email opens.
   const clicks = (buyer.contractOpens || []).filter(o => o.kind === "clicked")
     .slice().sort((a, b) => new Date(a.at) - new Date(b.at));
   // Fall back to Resend's live last-event if the per-event list hasn't synced yet.
   const trackingClicked = tracking && tracking.status === "clicked";
-  const viewed = clicks.length > 0 || trackingClicked;
+  const viewed = emailed && (clicks.length > 0 || trackingClicked);
   const lastViewedAt = clicks.length > 0 ? clicks[clicks.length - 1].at : (trackingClicked ? tracking.updatedAt : null);
   const viewCount = clicks.length;
   const viewedLine = `Last viewed ${fmtDateTime(lastViewedAt).replace(", ", " at ")}${viewCount > 1 ? ` (×${viewCount})` : ""}`;
+  const emailSub = loadingTrack ? "Checking status…" : (tracking ? statusLabel(tracking.status) : "Email sent");
 
   return (
     <div style={{margin:"0 16px 10px"}}>
@@ -1162,12 +1169,12 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract }) {
             <div className="ctr-sub">Contract sent {buyer.contractSentTime}</div>
           </> : <>
             <div className="ctr-lbl sent">Contract sent {buyer.contractSentTime}</div>
-            <div className="ctr-sub">{loadingTrack ? "Checking status…" : "Email delivered"}</div>
+            <div className="ctr-sub">{emailed ? emailSub : "Sent by text"}</div>
           </>}
         </div>
         <div className="ctr-btns">
           {buyer?.mobile&&<button className="ctr-txt" onClick={()=>onTextContract(propId,buyer)}>📱 Text</button>}
-          {buyer?.email&&<button className="ctr-send" onClick={()=>onSendContract(propId,buyer)}>Resend</button>}
+          {buyer?.email&&<button className="ctr-send" onClick={()=>onSendContract(propId,buyer)}>{emailed ? "Resend" : "✉ Email"}</button>}
         </div>
       </div>
     </div>
@@ -2213,15 +2220,16 @@ export default function App(){
     <div className={`scr ${screen==="home"?"on":"ol"}`} onTouchStart={onHomeTouchStart} onTouchEnd={onHomeTouchEnd}>
       <SBar/>
       <div className="home-hdr">
-        <img className="logo-img" src={wordmark} alt="Savvi"/>
-        <div className="agent-row">
-          <div><div className="greeting">{melbGreeting()}, {agentName}</div><div className="hdate">{today}</div></div>
-          {!loading&&<div style={{display:"flex",gap:8,alignItems:"center"}}>
-          <div className="opens-chip">{visibleOpens.length} open{visibleOpens.length!==1?"s":""} this week</div>
-          <button onClick={()=>setShowAddListing(true)} style={{background:AMBER,border:"none",borderRadius:"100px",padding:"7px 13px",fontSize:12,fontWeight:700,color:ESPRESSO,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",whiteSpace:"nowrap"}}>+ Add listing</button>
-          <button onClick={()=>{logout();setAgentName("");}} style={{background:"transparent",border:"1px solid rgba(255,244,213,.28)",borderRadius:"100px",padding:"7px 12px",fontSize:11,fontWeight:600,color:CREAM,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Log out</button>
-        </div>}
+        <div className="hdr-top">
+          <img className="logo-img" src={wordmark} alt="Savvi"/>
+          {!loading&&<button className="logout-btn" onClick={()=>{logout();setAgentName("");}}>Log out</button>}
         </div>
+        <div className="greeting">{melbGreeting()}, {agentName}</div>
+        <div className="hdate">{today}</div>
+        {!loading&&<div className="hdr-chips">
+          <div className="opens-chip">{visibleOpens.length} open{visibleOpens.length!==1?"s":""} this week</div>
+          <button className="add-listing-btn" onClick={()=>setShowAddListing(true)}>+ Add listing</button>
+        </div>}
       </div>
 
       <ContactSearch/>
