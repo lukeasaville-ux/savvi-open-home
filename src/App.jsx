@@ -412,9 +412,11 @@ function openEmail(e, email, subject) {
 }
 
 const MM = {
-  async send({ toPhone, firstName, address, igUrl, contractUrl }) {
+  async send({ toPhone, firstName, address, igUrl }) {
     const dest = toE164AU(toPhone);
-    const j = await call("sendSms", { toPhone: dest, firstName, address, igUrl, contractUrl });
+    // Registration SMS = welcome + walkthrough only. NEVER include a contract link
+    // here — contracts go solely via the deliberate Send-contract action (email).
+    const j = await call("sendSms", { toPhone: dest, firstName, address, igUrl });
     return { ok: !!j?.ok, error: j?.error };
   },
   // Send an arbitrary custom message (used by the bulk personalised composer).
@@ -1612,7 +1614,7 @@ function QuickContractSheet({ open, prop, agentName, onClose, onSent }) {
       }
       // Also SMS if mobile provided
       if (mobile && prop?.contractUrl) {
-        await MM.send({ toPhone: mobile, firstName: name.split(" ")[0], address: prop.address, igUrl: prop.igUrl, contractUrl: prop.contractUrl }).catch(()=>{});
+        await MM.send({ toPhone: mobile, firstName: name.split(" ")[0], address: prop.address, igUrl: prop.igUrl }).catch(()=>{});
       }
       setDone(true);
       setTimeout(onSent, 1800);
