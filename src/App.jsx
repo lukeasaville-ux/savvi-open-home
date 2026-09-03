@@ -1145,21 +1145,78 @@ function ReelLink({ propertyId, value, onSaved }){
 }
 
 /* ════ CONTRACT BOX WITH TRACKING ════ */
-// Open-day quick reference: view the contract + a collapsible panel of the Box+Dice
-// listing notes (finer details, keysafe/door codes, access info).
+// Per-listing AI assistant — reads the Contract of Sale + Section 32 and answers
+// any question about the property (OC fees, AGM points, special conditions, etc).
+const AI_SUGGESTIONS=["Owners corp fees?","Recent AGM discussion points","Any special conditions?","Settlement terms","What's included in the sale?","Any pets allowed / OC rules?","Outstanding levies or defects?"];
+function ListingAiSheet({ open, onClose, openHome }){
+  const [q,setQ]=useState("");
+  const [thread,setThread]=useState([]); // {q, a}
+  const [busy,setBusy]=useState(false);
+  const drag=useSheetDrag(onClose);
+  useEffect(()=>{ if(open){ setQ(""); } },[open, openHome?.id]);
+  const runAsk=async(query,label,fresh)=>{
+    if(!query||busy) return;
+    setBusy(true); setQ("");
+    setThread(t=>[...t,{q:label||query,a:null}]);
+    let answer="";
+    try{
+      const j=await call("aiListingAsk",{ contractUrl:openHome?.contractUrl||"", address:`${openHome?.address||""}${openHome?.suburb?", "+openHome.suburb:""}`, question:query, ...(fresh?{fresh:true}:{}) });
+      answer=(j&&j.ok&&j.data&&j.data.answer)|| (j&&j.data&&j.data.answer) ||"Sorry, I couldn't get an answer just now — please try again.";
+    }catch(e){ answer="Sorry, something went wrong reading the contract. Please try again."; }
+    setThread(t=>t.map((x,i)=>i===t.length-1?{...x,a:answer}:x));
+    setBusy(false);
+  };
+  const ask=(question)=>runAsk((question||q).trim());
+  const reread=()=>{ const lastQ=[...thread].reverse().find(x=>x.q&&!x.q.startsWith("↻")); runAsk(lastQ?lastQ.q:"Give me a quick overview of this contract and anything a buyer should know.","↻ Re-reading the full contract…",true); };
+  if(!open) return null;
+  return <div className="ov s" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",maxHeight:"88vh",display:"flex",flexDirection:"column",...drag.style}} {...drag.handlers}>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
+      <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
+      <div style={{padding:"4px 18px 6px"}}>
+        <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>🤖 Ask about this listing</div>
+        <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>{openHome?.address}{openHome?.suburb?`, ${openHome.suburb}`:""} · reads the contract & Section 32</div>
+      </div>
+      <div style={{flex:1,overflowY:"auto",padding:"6px 16px 0"}}>
+        {thread.length===0&&<div style={{display:"flex",flexWrap:"wrap",gap:7,padding:"6px 0 4px"}}>
+          {AI_SUGGESTIONS.map(s=><button key={s} onClick={()=>ask(s)} disabled={busy} style={{fontSize:12,fontWeight:600,color:BLUE_D,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:16,padding:"7px 12px",cursor:"pointer"}}>{s}</button>)}
+        </div>}
+        {thread.map((x,i)=><div key={i} style={{marginBottom:14}}>
+          <div style={{fontSize:13.5,fontWeight:700,color:ESPRESSO,marginBottom:6}}>{x.q}</div>
+          {x.a===null
+            ? <div style={{fontSize:13,color:BROWN_L,fontStyle:"italic"}}>Reading the contract… this can take ~20 seconds.</div>
+            : <div style={{fontSize:13.5,lineHeight:1.55,color:ESPRESSO,whiteSpace:"pre-wrap",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"11px 13px"}}>{x.a}</div>}
+        </div>)}
+      </div>
+      <div style={{padding:"8px 14px calc(12px + env(safe-area-inset-bottom,0px))",borderTop:`1px solid ${SAND_D}`,display:"flex",gap:8}}>
+        <input className="fi" style={{flex:1}} value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")ask();}} placeholder="Ask anything about this property…" disabled={busy}/>
+        <button onClick={()=>ask()} disabled={busy||!q.trim()} style={{padding:"0 18px",borderRadius:10,border:"none",background:busy?SAND_D:BLUE_D,color:"#fff",fontWeight:700,fontSize:14,cursor:busy?"default":"pointer"}}>{busy?"…":"Ask"}</button>
+      </div>
+      {thread.length>0&&<div style={{padding:"0 16px 8px",marginTop:-4}}>
+        <button onClick={reread} disabled={busy} style={{background:"none",border:"none",color:BROWN_L,fontSize:11.5,fontWeight:600,cursor:busy?"default":"pointer",textDecoration:"underline"}}>↻ Not up to date? Re-read the full contract</button>
+      </div>}
+    </div>
+  </div>;
+}
+
+// Open-day quick reference: AI assistant + view the contract + a collapsible panel
+// of the Box+Dice listing notes (finer details, keysafe/door codes, access info).
 function OpenListingInfo({ openHome }){
   const [open,setOpen]=useState(false);
+  const [ask,setAsk]=useState(false);
   const notes=(openHome?.listingNotes||"").trim();
   const contractUrl=openHome?.contractUrl||"";
   if(!notes && !contractUrl) return null;
   const btn={flex:1,padding:"9px 12px",fontSize:12.5,fontWeight:700,borderRadius:10,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",textAlign:"center"};
   return (
     <div style={{padding:"8px 14px 0"}}>
+      {contractUrl&&<button onClick={()=>setAsk(true)} style={{width:"100%",padding:"11px 12px",fontSize:13.5,fontWeight:800,borderRadius:11,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",background:BLUE_D,color:"#fff",border:"none",marginBottom:8,boxShadow:"0 2px 8px rgba(49,30,16,.12)"}}>🤖 Ask AI about this listing</button>}
       <div style={{display:"flex",gap:8}}>
         {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{...btn,background:LINEN,color:ESPRESSO,border:`1px solid ${SAND_D}`,textDecoration:"none"}}>📄 View contract</a>}
         {notes&&<button style={{...btn,background:"#eef2fb",color:BLUE_D,border:`1px solid ${BLUE}33`}} onClick={()=>setOpen(o=>!o)}>🔑 Listing info {open?"▲":"▼"}</button>}
       </div>
       {open&&notes&&<div style={{marginTop:8,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"12px 13px",fontSize:13,lineHeight:1.5,color:ESPRESSO,whiteSpace:"pre-wrap"}}>{notes}</div>}
+      <ListingAiSheet open={ask} onClose={()=>setAsk(false)} openHome={openHome}/>
     </div>
   );
 }
