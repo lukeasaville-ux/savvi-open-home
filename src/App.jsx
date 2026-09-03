@@ -996,7 +996,7 @@ function AiProfile({profile,onRegen}){
 /* ════════════════════════════════════════════
    ADD BUYER SHEET — with live Attio lookup
 ════════════════════════════════════════════ */
-function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContactIds=[]}){
+function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContactIds=[],prefill=null}){
   const[step,setStep]=useState("mobile");
   const[mobile,setMobile]=useState("");
   const[searching,setSearching]=useState(false);
@@ -1011,7 +1011,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
   const debounce=useRef(null);
   const ref=useRef(null);
 
-  useEffect(()=>{if(open){setStep("mobile");setMobile("");setMatch(null);setNoMatch(false);setSelected(null);setName("");setEmail("");setInterest("");setSaving(false);setErr("");call("warmup").catch(()=>{});setTimeout(()=>ref.current?.focus(),400);}}, [open]);
+  useEffect(()=>{if(open){setStep("mobile");setMatch(null);setNoMatch(false);setSelected(null);setInterest("");setSaving(false);setErr("");setMobile(prefill?.mobile||"");setName(prefill?.name||"");setEmail(prefill?.email||"");call("warmup").catch(()=>{});setTimeout(()=>ref.current?.focus(),400);}}, [open]);
 
   useEffect(()=>{
     clearTimeout(debounce.current);
@@ -1224,6 +1224,68 @@ function ListingAiSheet({ open, onClose, openHome }){
       {thread.length>0&&<div style={{padding:"0 16px 8px",marginTop:-4}}>
         <button onClick={reread} disabled={busy} style={{background:"none",border:"none",color:BROWN_L,fontSize:11.5,fontWeight:600,cursor:busy?"default":"pointer",textDecoration:"underline"}}>↻ Not up to date? Re-read the full contract</button>
       </div>}
+    </div>
+  </div>;
+}
+
+// In-app AI assistant: screenshot a buyer's text/DM/email → Claude reads it and pulls
+// out who they are + what they want, so the agent registers them and replies in a
+// couple of taps. Extraction only — the agent confirms the register + any send.
+function ScreenshotAssistant({ open, onClose, openHome, onRegister }){
+  const [busy,setBusy]=useState(false);
+  const [res,setRes]=useState(null);
+  const [reply,setReply]=useState("");
+  const [copied,setCopied]=useState(false);
+  const fileRef=useRef(null);
+  const drag=useSheetDrag(onClose);
+  useEffect(()=>{ if(open){ setRes(null); setReply(""); setBusy(false); setCopied(false); } },[open]);
+  const onFile=async(e)=>{
+    const f=e.target.files&&e.target.files[0]; if(!f) return;
+    setBusy(true); setRes(null);
+    try{
+      const dataUrl=await new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f);});
+      const m=/^data:(.*?);base64,(.*)$/.exec(dataUrl||"");
+      if(!m){ setBusy(false); return; }
+      const j=await call("aiParseEnquiry",{ image:m[2], mediaType:m[1]||"image/png" });
+      const d=(j&&j.data)||{};
+      setRes({name:d.name||"",mobile:d.mobile||"",email:d.email||"",question:d.question||"",wantsContract:!!d.wantsContract});
+      setReply(d.suggestedReply||"");
+    }catch(err){ setRes({name:"",mobile:"",email:"",question:"Sorry — I couldn't read that screenshot. Try a clearer one.",wantsContract:false}); }
+    setBusy(false);
+    if(fileRef.current) fileRef.current.value="";
+  };
+  const set=(k,v)=>setRes(r=>({...r,[k]:v}));
+  if(!open) return null;
+  const inp={width:"100%",padding:"11px 12px",fontSize:14,border:`1px solid ${SAND_D}`,borderRadius:9,fontFamily:"'Neue Haas Unica Pro',sans-serif",marginTop:4};
+  return <div className="ov s" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",maxHeight:"90vh",overflowY:"auto",...drag.style}} {...drag.handlers}>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
+      <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
+      <div style={{padding:"4px 18px 8px"}}>
+        <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>📸 Register from a text</div>
+        <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>{openHome?.address} · screenshot a buyer's message and I'll pull out the details</div>
+      </div>
+      <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onFile} style={{display:"none"}}/>
+      <div style={{padding:"0 16px 16px"}}>
+        {!res&&!busy&&<button onClick={()=>fileRef.current?.click()} style={{width:"100%",padding:"16px",fontSize:14,fontWeight:800,borderRadius:12,border:`2px dashed ${BLUE}55`,background:"#eef2fb",color:BLUE_D,cursor:"pointer"}}>＋ Choose or take a screenshot</button>}
+        {busy&&<div style={{padding:"20px 4px",fontSize:13.5,color:BROWN_L,fontStyle:"italic"}}>Reading the screenshot…</div>}
+        {res&&<>
+          <label className="fl">Name</label><input style={inp} value={res.name} onChange={e=>set("name",e.target.value)} placeholder="Buyer name"/>
+          <label className="fl" style={{marginTop:10,display:"block"}}>Mobile</label><input style={inp} value={res.mobile} onChange={e=>set("mobile",e.target.value)} placeholder="04XX XXX XXX"/>
+          <label className="fl" style={{marginTop:10,display:"block"}}>Email</label><input style={inp} value={res.email} onChange={e=>set("email",e.target.value)} placeholder="name@email.com"/>
+          {res.question&&<div style={{marginTop:12,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"10px 12px",fontSize:13,color:ESPRESSO}}><b>They asked:</b> {res.question}{res.wantsContract?<div style={{marginTop:4,color:BLUE_D,fontWeight:700}}>→ Wants the contract</div>:null}</div>}
+          <button onClick={()=>onRegister(res)} style={{width:"100%",marginTop:14,padding:"13px",fontSize:14,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer"}}>Register {res.name?res.name.split(" ")[0]:"buyer"} on this listing →</button>
+          <button onClick={()=>fileRef.current?.click()} style={{width:"100%",marginTop:8,padding:"9px",fontSize:12.5,fontWeight:600,borderRadius:9,border:`1px solid ${SAND_D}`,background:"#fff",color:BROWN_L,cursor:"pointer"}}>↻ Try another screenshot</button>
+          <div style={{marginTop:16}}>
+            <label className="fl">Suggested reply</label>
+            <textarea value={reply} onChange={e=>setReply(e.target.value)} style={{...inp,minHeight:80,resize:"vertical"}}/>
+            <div style={{display:"flex",gap:8,marginTop:8}}>
+              <button onClick={()=>{navigator.clipboard?.writeText(reply).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}} style={{flex:1,padding:"10px",fontSize:13,fontWeight:700,borderRadius:9,border:`1px solid ${SAND_D}`,background:"#fff",color:ESPRESSO,cursor:"pointer"}}>{copied?"Copied ✓":"Copy reply"}</button>
+              {res.mobile&&<a href={`sms:${toE164AU(res.mobile)}?&body=${encodeURIComponent(reply)}`} style={{flex:1,textAlign:"center",padding:"10px",fontSize:13,fontWeight:700,borderRadius:9,border:"none",background:AMBER,color:"#fff",textDecoration:"none"}}>📱 Text reply</a>}
+            </div>
+          </div>
+        </>}
+      </div>
     </div>
   </div>;
 }
@@ -2106,6 +2168,8 @@ export default function App(){
   const[propBuyers,setPropBuyers]=useState({});
   const[showQuickContract,setShowQuickContract]=useState(false);
   const[showAddListing,setShowAddListing]=useState(false);
+  const[showAssistant,setShowAssistant]=useState(false);
+  const[aiPrefill,setAiPrefill]=useState(null);
   const[quickContractProp,setQuickContractProp]=useState(null);
 
   const today=new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long",timeZone:"Australia/Melbourne"});
@@ -2508,6 +2572,9 @@ export default function App(){
         </button>
         <button className="btn-outline" onClick={()=>setShowSum(true)}>📩 Vendor update</button>
       </div>
+      <div style={{padding:"0 14px"}}>
+        <button className="btn-outline" style={{width:"100%",margin:0}} onClick={()=>setShowAssistant(true)}>📸 Register from a text / screenshot</button>
+      </div>
 
       <OpenListingInfo openHome={openHome}/>
 
@@ -2562,7 +2629,8 @@ export default function App(){
     {screen==="open"&&<button onClick={()=>setShowAdd(true)} aria-label="Add buyer" style={{position:"absolute",right:18,bottom:`calc(18px + env(safe-area-inset-bottom,0px))`,zIndex:45,width:58,height:58,borderRadius:"50%",border:"none",background:BLUE_D,color:"#fff",boxShadow:"0 6px 18px rgba(49,30,16,.30)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
       <svg width="26" height="26" viewBox="0 0 24 24" fill="white"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
     </button>}
-    <AddSheet open={showAdd} onClose={()=>setShowAdd(false)} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)}/>
+    <AddSheet open={showAdd} onClose={()=>{setShowAdd(false);setAiPrefill(null);}} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)} prefill={aiPrefill}/>
+    <ScreenshotAssistant open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={(r)=>{ setAiPrefill({name:r.name||"",mobile:r.mobile||"",email:r.email||""}); setShowAssistant(false); setShowAdd(true); }}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id} propIndex={propIndex}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
