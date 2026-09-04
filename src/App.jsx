@@ -583,8 +583,8 @@ function buildWelcomeSms({ firstName, address, igUrl, agent, inspectionId }){
     parts.push(`Here's a walkthrough of the property so you can retrace your steps: ${FOLLOWUP_URL}?t=${inspectionId}&w=1`);
   } else if(igUrl){
     parts.push(`Here's a walkthrough video should you need to retrace your steps: ${igUrl}`);
-    if(SOFT_LAUNCH_URL) parts.push(`Also, if you want first look at our off-market listings before they hit realestate.com or Domain, join our Soft Launch Club: ${SOFT_LAUNCH_URL}`);
   }
+  if(SOFT_LAUNCH_URL) parts.push(`Also, if you want first look at our off-market listings before they hit realestate.com or Domain, join our Soft Launch Club: ${SOFT_LAUNCH_URL}`);
   parts.push(`Thanks,\n${sig}`);
   return parts.join("\n\n");
 }
@@ -595,7 +595,6 @@ function buildContractSms({ firstName, address, contractUrl, agent }){
   return [
     `Hi ${firstName||"there"},`,
     `As promised, here's the contract of sale for ${address||"the property"}: ${contractUrl}`,
-    `Any questions, just reply here.`,
     `Thanks,\n${sig}`,
   ].join("\n\n");
 }
@@ -1929,7 +1928,7 @@ const BM_EXAMPLES = [
 
 // Bulk personalised text to a set of buyers (e.g. everyone in the current open-screen
 // filter — all contract-holders, all hot, etc). Reuses the same send path as Buyer Match.
-function BulkTextSheet({ open, onClose, buyers, agentName, label }){
+function BulkTextSheet({ open, onClose, buyers, agentName, label, address }){
   const [msg,setMsg]=useState("");
   const [sel,setSel]=useState({});
   const [sending,setSending]=useState(false);
@@ -1937,7 +1936,12 @@ function BulkTextSheet({ open, onClose, buyers, agentName, label }){
   const [done,setDone]=useState(null);
   const drag=useSheetDrag(onClose);
   const msgRef=useRef(null);
-  useEffect(()=>{ if(open){ setMsg(""); setDone(null); setProgress(null); setSending(false); const s={}; (buyers||[]).forEach(b=>{ s[b.id]=!!b.mobile; }); setSel(s); } },[open]);
+  useEffect(()=>{ if(open){
+    const aFirst=smsSig(agentName).split(" ")[0];
+    const shortAddr=String(address||"the property").split(",")[0];
+    setMsg(`Hi {first_name}, ${aFirst} here from Savvi — we've just received an offer on ${shortAddr}. If you're still keen, please contact us urgently.`);
+    setDone(null); setProgress(null); setSending(false); const s={}; (buyers||[]).forEach(b=>{ s[b.id]=!!b.mobile; }); setSel(s);
+  } },[open]);
   const withMobile=(buyers||[]).filter(b=>b.mobile);
   const selected=(buyers||[]).filter(b=>sel[b.id]&&b.mobile);
   const noMobile=(buyers||[]).length-withMobile.length;
@@ -2771,7 +2775,7 @@ export default function App(){
     </button>}
     <AddSheet open={showAdd} onClose={()=>{setShowAdd(false);setAiPrefill(null);}} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)} prefill={aiPrefill}/>
     <AiAssistantSheet open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={handleEnquiry}/>
-    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} label={({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"}/>
+    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} label={({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id} propIndex={propIndex}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
