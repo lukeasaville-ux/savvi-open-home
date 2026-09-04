@@ -566,14 +566,22 @@ const AGENT_FULL={ "Luke":"Luke Saville", "Sam":"Sam Robinson" };
 // if the property has one on file) → Soft Launch Club invite → full-name sign-off.
 // Blank lines between each part so it reads clean. Built client-side + sent via the
 // sendSms custom-message path, so no reel on the property = no walkthrough line.
-function buildWelcomeSms({ firstName, address, igUrl, agent }){
+const FOLLOWUP_URL = "https://savvi.app.n8n.cloud/webhook/savvi-followup";
+function buildWelcomeSms({ firstName, address, igUrl, agent, inspectionId }){
   const sig = "Luke Saville"; // all SMS send from Luke's MessageMedia (personal) number, so always sign as Luke until Sam has his own verified number
   const parts = [
     `Hi ${firstName||"there"},`,
     `Great to meet you at ${address||"the open"} today.`,
   ];
-  if(igUrl) parts.push(`Here's a walkthrough video should you need to retrace your steps: ${igUrl}`);
-  if(SOFT_LAUNCH_URL) parts.push(`Also, if you want first look at our off-market listings before they hit realestate.com or Domain, join our Soft Launch Club: ${SOFT_LAUNCH_URL}`);
+  // Link the walkthrough via the listing's walkthrough page (t=<inspection>&w=1) so the
+  // text previews the LISTING PHOTO in iMessage; the page opens to the walkthrough reel
+  // and carries the Soft Launch Club link. Only when there's a reel live (igUrl set).
+  if(igUrl && inspectionId){
+    parts.push(`Here's a walkthrough of the property so you can retrace your steps: ${FOLLOWUP_URL}?t=${inspectionId}&w=1`);
+  } else if(igUrl){
+    parts.push(`Here's a walkthrough video should you need to retrace your steps: ${igUrl}`);
+    if(SOFT_LAUNCH_URL) parts.push(`Also, if you want first look at our off-market listings before they hit realestate.com or Domain, join our Soft Launch Club: ${SOFT_LAUNCH_URL}`);
+  }
   parts.push(`Thanks,\n${sig}`);
   return parts.join("\n\n");
 }
@@ -1083,7 +1091,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
         // Welcome SMS — first inspection of this property only.
         const alreadyInspected=(propContactIds||[]).includes(contactId);
         if(mob && !alreadyInspected){
-          MM.sendMessage({ toPhone:mob, message: buildWelcomeSms({ firstName:nm.split(" ")[0], address:openHome.address, igUrl:openHome.igUrl||"", agent:agentName||openHome.agent }) })
+          MM.sendMessage({ toPhone:mob, message: buildWelcomeSms({ firstName:nm.split(" ")[0], address:openHome.address, igUrl:openHome.igUrl||"", agent:agentName||openHome.agent, inspectionId }) })
             .then(sres=>{ if(sres&&sres.ok) Attio.updateInspection(inspectionId,{smsSent:true}).catch(()=>{}); }).catch(()=>{});
         }
       } else {
