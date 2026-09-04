@@ -1927,6 +1927,62 @@ const BM_EXAMPLES = [
   "buyers looking $600k–$700k who need a second bedroom",
 ];
 
+// Bulk personalised text to a set of buyers (e.g. everyone in the current open-screen
+// filter — all contract-holders, all hot, etc). Reuses the same send path as Buyer Match.
+function BulkTextSheet({ open, onClose, buyers, agentName, label }){
+  const [msg,setMsg]=useState("");
+  const [sel,setSel]=useState({});
+  const [sending,setSending]=useState(false);
+  const [progress,setProgress]=useState(null);
+  const [done,setDone]=useState(null);
+  const drag=useSheetDrag(onClose);
+  const msgRef=useRef(null);
+  useEffect(()=>{ if(open){ setMsg(""); setDone(null); setProgress(null); setSending(false); const s={}; (buyers||[]).forEach(b=>{ s[b.id]=!!b.mobile; }); setSel(s); } },[open]);
+  const withMobile=(buyers||[]).filter(b=>b.mobile);
+  const selected=(buyers||[]).filter(b=>sel[b.id]&&b.mobile);
+  const noMobile=(buyers||[]).length-withMobile.length;
+  const toggle=id=>setSel(s=>({...s,[id]:!s[id]}));
+  const insertToken=()=>{ const el=msgRef.current; if(!el){setMsg(m=>m+"{first_name}");return;} const a=el.selectionStart??msg.length,b=el.selectionEnd??msg.length; setMsg(msg.slice(0,a)+"{first_name}"+msg.slice(b)); setTimeout(()=>{el.focus();el.selectionStart=el.selectionEnd=a+12;},0); };
+  const send=async()=>{ if(sending||!selected.length||!msg.trim())return; setSending(true); setDone(null); let ok=0,fail=0; setProgress({done:0,total:selected.length});
+    for(let i=0;i<selected.length;i++){ const b=selected[i]; try{ const r=await MM.sendMessage({toPhone:b.mobile,message:personalize(msg,b),agent:agentName}); if(r&&r.ok)ok++;else fail++; }catch{fail++;} setProgress({done:i+1,total:selected.length}); }
+    setSending(false); setDone({ok,fail}); setProgress(null); };
+  if(!open) return null;
+  const preview=personalize(msg||"Hi {first_name}, …", selected[0]||withMobile[0]||{name:"there"});
+  const segs=Math.max(1,Math.ceil(preview.length/153));
+  return <div className="ov s" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",maxHeight:"92vh",display:"flex",flexDirection:"column",...drag.style}} {...drag.handlers}>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
+      <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
+      <div style={{padding:"4px 18px 8px"}}>
+        <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>📣 Text these buyers</div>
+        <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>{label?label+" · ":""}{selected.length} of {withMobile.length} selected{noMobile?` · ${noMobile} have no mobile`:""}</div>
+      </div>
+      {done
+      ? <div style={{padding:"10px 18px 20px",textAlign:"center"}}><div style={{fontSize:40,marginBottom:8}}>✅</div><div style={{fontSize:16,fontWeight:800,color:ESPRESSO}}>Sent to {done.ok}{done.fail?` · ${done.fail} failed`:""}</div><button className="btn-cream" style={{marginTop:16,padding:"13px"}} onClick={onClose}>Done</button></div>
+      : <>
+        <div style={{flex:1,overflowY:"auto",padding:"0 16px"}}>
+          <textarea ref={msgRef} className="note-area" style={{minHeight:96}} value={msg} onChange={e=>setMsg(e.target.value)} placeholder="Hi {first_name}, we've just received an offer on the property…" autoFocus/>
+          <div style={{display:"flex",alignItems:"center",gap:10,margin:"6px 0 12px"}}>
+            <button onClick={insertToken} style={{fontSize:12,fontWeight:700,color:BLUE_D,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:8,padding:"6px 10px",cursor:"pointer"}}>+ {"{first_name}"}</button>
+            <span style={{fontSize:11.5,color:BROWN_L}}>{preview.length} chars · {segs} SMS{segs>1?"s":""} each</span>
+          </div>
+          <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"10px 12px",fontSize:13,color:ESPRESSO,whiteSpace:"pre-wrap",marginBottom:14}}><b style={{color:BROWN_L,fontSize:11}}>PREVIEW</b><br/>{preview}</div>
+          <div style={{fontSize:11.5,fontWeight:800,letterSpacing:.5,color:BROWN_L,marginBottom:6}}>RECIPIENTS</div>
+          {(buyers||[]).map(b=><div key={b.id} onClick={()=>b.mobile&&toggle(b.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 4px",opacity:b.mobile?1:.45,cursor:b.mobile?"pointer":"default",borderBottom:`1px solid ${SAND}`}}>
+            <div style={{width:20,height:20,borderRadius:6,border:`2px solid ${sel[b.id]&&b.mobile?BLUE_D:SAND_D}`,background:sel[b.id]&&b.mobile?BLUE_D:"#fff",color:"#fff",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{sel[b.id]&&b.mobile?"✓":""}</div>
+            <div style={{flex:1,fontSize:13.5,color:ESPRESSO,fontWeight:600}}>{b.name}<span style={{color:BROWN_L,fontWeight:400,fontSize:12}}> · {b.mobile||"no mobile"}</span></div>
+          </div>)}
+          <div style={{height:8}}/>
+        </div>
+        <div style={{padding:"8px 16px calc(12px + env(safe-area-inset-bottom,0px))",borderTop:`1px solid ${SAND_D}`}}>
+          {progress&&<div style={{fontSize:12.5,color:BROWN_L,marginBottom:8,textAlign:"center"}}>Sending… {progress.done}/{progress.total}</div>}
+          <button onClick={send} disabled={sending||!selected.length||!msg.trim()} style={{width:"100%",padding:"15px",borderRadius:12,border:"none",background:(sending||!selected.length||!msg.trim())?SAND_D:BLUE_D,color:"#fff",fontSize:15,fontWeight:800,cursor:(sending||!selected.length||!msg.trim())?"default":"pointer"}}>{sending?"Sending…":`Send to ${selected.length} buyer${selected.length===1?"":"s"}`}</button>
+        </div>
+      </>}
+    </div>
+  </div>;
+}
+
 /* ════════════════════════════════════════════
    BUYER MATCH — natural-language buyer search + bulk personalised SMS.
    Replaces the old "Ask your CRM" bar: describe the buyer you want, it reads
@@ -2180,6 +2236,7 @@ export default function App(){
   const[showAddListing,setShowAddListing]=useState(false);
   const[showAssistant,setShowAssistant]=useState(false);
   const[showInfo,setShowInfo]=useState(false);
+  const[showBulk,setShowBulk]=useState(false);
   const[aiPrefill,setAiPrefill]=useState(null);
   const[quickContractProp,setQuickContractProp]=useState(null);
 
@@ -2679,6 +2736,7 @@ export default function App(){
 
         {!buyersLoading&&filterActive&&<>
           <div className="sec-lbl" style={{padding:"2px 0 10px"}}>{filteredBuyers.length} {enqActive?(filteredBuyers.length===1?"enquiry":"enquiries"):(filteredBuyers.length===1?"buyer":"buyers")}</div>
+          {filteredBuyers.some(b=>b.mobile)&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:12,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>📣 Text these {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
           {filteredBuyers.length===0
             ? <div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>{enqActive?"No enquiries yet.":"No buyers match this filter."}</div>
             : filteredBuyers.map(b=>rowOf(b,"f"))}
@@ -2713,6 +2771,7 @@ export default function App(){
     </button>}
     <AddSheet open={showAdd} onClose={()=>{setShowAdd(false);setAiPrefill(null);}} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)} prefill={aiPrefill}/>
     <AiAssistantSheet open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={handleEnquiry}/>
+    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} label={({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id} propIndex={propIndex}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
