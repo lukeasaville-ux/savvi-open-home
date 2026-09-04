@@ -417,8 +417,8 @@ const Attio = {
     if (j?.ok) invalidateBuyerCache();
     return !!j?.ok;
   },
-  async createInspection({ contactId, propertyId, openHomeId, interest }) {
-    const j = await call("createInspection", { contactId, propertyId, openHomeId, interest });
+  async createInspection({ contactId, propertyId, openHomeId, interest, agent }) {
+    const j = await call("createInspection", { contactId, propertyId, openHomeId, interest, agent });
     if (j?.ok) invalidateBuyerCache();
     return j?.ok ? { ok: true, id: j.id } : { ok: false };
   },
@@ -1088,7 +1088,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
     (async()=>{
       let contactId=sel?.id, inspectionId=null;
       if(!contactId){ const r=await Attio.createPerson({name:nm,email:em,mobile:mob}).catch(()=>({ok:false})); if(r.ok) contactId=r.id; }
-      if(contactId){ const r=await Attio.createInspection({contactId,propertyId:openHome?.propertyId,openHomeId:openHome?.id,interest:interestVal}).catch(()=>({ok:false})); if(r.ok) inspectionId=r.id; }
+      if(contactId){ const r=await Attio.createInspection({contactId,propertyId:openHome?.propertyId,openHomeId:openHome?.id,interest:interestVal,agent:agentName}).catch(()=>({ok:false})); if(r.ok) inspectionId=r.id; }
       if(contactId&&inspectionId){
         onReconcile&&onReconcile(pid,tempId,{id:inspectionId,contactId,_attioInspectionId:inspectionId,_pending:false});
         // Welcome SMS — first inspection of this property only.
@@ -1848,7 +1848,7 @@ function QuickContractSheet({ open, prop, agentName, onClose, onSent }) {
       const pr = await Attio.createPerson({ name, email, mobile });
       if (pr.ok) contactId = pr.id;
       if (contactId) {
-        const ir = await Attio.createInspection({ contactId, propertyId: prop?.propertyId, openHomeId: null, interest: "" });
+        const ir = await Attio.createInspection({ contactId, propertyId: prop?.propertyId, openHomeId: null, interest: "", agent: agentName });
         if (ir.ok) inspectionId = ir.id;
       }
       // Send contract email
@@ -2441,7 +2441,7 @@ export default function App(){
         if(found) contactId=Attio.id(found);
         else { const r=await Attio.createPerson({name:enq.name,email:enq.email,mobile:enq.mobile}).catch(()=>({ok:false})); if(r.ok) contactId=r.id; }
         // An enquiry is NOT an open attendee → openHomeId stays null (property-level).
-        if(contactId){ const r=await Attio.createInspection({contactId,propertyId:openHome?.propertyId,openHomeId:null,interest:""}).catch(()=>({ok:false})); if(r.ok) inspectionId=r.id; }
+        if(contactId){ const r=await Attio.createInspection({contactId,propertyId:openHome?.propertyId,openHomeId:null,interest:"",agent:agentName}).catch(()=>({ok:false})); if(r.ok) inspectionId=r.id; }
         if(inspectionId) Attio.updateInspection(inspectionId,{notes:noteLine}).catch(()=>{});
       }
       rowId=inspectionId||("local"+Date.now());
