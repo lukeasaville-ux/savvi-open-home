@@ -479,9 +479,10 @@ const MM = {
   },
   // Send an arbitrary custom message (used by the bulk personalised composer).
   // The backend sendSms now honours `message` when provided, else builds the welcome text.
-  async sendMessage({ toPhone, message }) {
+  async sendMessage({ toPhone, message, agent }) {
     const dest = toE164AU(toPhone);
-    const j = await call("sendSms", { toPhone: dest, message });
+    // agent → backend picks that agent's own verified sender number (Luke / Sam).
+    const j = await call("sendSms", { toPhone: dest, message, agent });
     return { ok: !!j?.ok, error: j?.error };
   },
 };
@@ -567,8 +568,10 @@ const AGENT_FULL={ "Luke":"Luke Saville", "Sam":"Sam Robinson" };
 // Blank lines between each part so it reads clean. Built client-side + sent via the
 // sendSms custom-message path, so no reel on the property = no walkthrough line.
 const FOLLOWUP_URL = "https://savvi.app.n8n.cloud/webhook/savvi-followup";
+// Sign SMS with the sending agent's full name (their number is chosen backend-side to match).
+const smsSig = a => AGENT_FULL[String(a||"").trim().split(" ")[0]] || "Luke Saville";
 function buildWelcomeSms({ firstName, address, igUrl, agent, inspectionId }){
-  const sig = "Luke Saville"; // all SMS send from Luke's MessageMedia (personal) number, so always sign as Luke until Sam has his own verified number
+  const sig = smsSig(agent);
   const parts = [
     `Hi ${firstName||"there"},`,
     `Great to meet you at ${address||"the open"} today.`,
@@ -588,7 +591,7 @@ function buildWelcomeSms({ firstName, address, igUrl, agent, inspectionId }){
 // Contract-by-SMS: a short text with the contract-of-sale link. Agent-aware sign-off.
 // Sent via the sendSms custom-message path (same transport as the welcome SMS).
 function buildContractSms({ firstName, address, contractUrl, agent }){
-  const sig = "Luke Saville"; // all SMS send from Luke's MessageMedia (personal) number, so always sign as Luke until Sam has his own verified number
+  const sig = smsSig(agent);
   return [
     `Hi ${firstName||"there"},`,
     `As promised, here's the contract of sale for ${address||"the property"}: ${contractUrl}`,
@@ -1091,7 +1094,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
         // Welcome SMS — first inspection of this property only.
         const alreadyInspected=(propContactIds||[]).includes(contactId);
         if(mob && !alreadyInspected){
-          MM.sendMessage({ toPhone:mob, message: buildWelcomeSms({ firstName:nm.split(" ")[0], address:openHome.address, igUrl:openHome.igUrl||"", agent:agentName||openHome.agent, inspectionId }) })
+          MM.sendMessage({ toPhone:mob, agent:agentName||openHome.agent, message: buildWelcomeSms({ firstName:nm.split(" ")[0], address:openHome.address, igUrl:openHome.igUrl||"", agent:agentName||openHome.agent, inspectionId }) })
             .then(sres=>{ if(sres&&sres.ok) Attio.updateInspection(inspectionId,{smsSent:true}).catch(()=>{}); }).catch(()=>{});
         }
       } else {
@@ -1930,7 +1933,7 @@ const BM_EXAMPLES = [
    every buyer's notes/history (aiQuery backend), pulls the matches, then you
    pick who's in and send each a personalised text about a new listing.
 ════════════════════════════════════════════ */
-function BuyerMatch({ propIndex }) {
+function BuyerMatch({ propIndex, agentName }) {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [matches, setMatches] = useState(null);
@@ -1978,7 +1981,7 @@ function BuyerMatch({ propIndex }) {
     setProgress({ done: 0, total });
     for (let i = 0; i < selected.length; i++) {
       const b = selected[i];
-      try { const r = await MM.sendMessage({ toPhone: b.mobile, message: personalize(msg, b) }); if (r.ok) ok++; else fail++; }
+      try { const r = await MM.sendMessage({ toPhone: b.mobile, message: personalize(msg, b), agent: agentName }); if (r.ok) ok++; else fail++; }
       catch { fail++; }
       setProgress({ done: i + 1, total });
     }
@@ -2370,7 +2373,7 @@ export default function App(){
     setCtrBuyer(b);setCtrChannel("text");setShowDetail(false);
     setTimeout(()=>setShowCtr(true),220);
     if(b.mobile && openHome?.contractUrl){
-      MM.sendMessage({ toPhone:b.mobile, message: buildContractSms({ firstName:(b.name||"").split(" ")[0], address:openHome.address, contractUrl:openHome.contractUrl, agent:agentName }) })
+      MM.sendMessage({ toPhone:b.mobile, agent:agentName, message: buildContractSms({ firstName:(b.name||"").split(" ")[0], address:openHome.address, contractUrl:openHome.contractUrl, agent:agentName }) })
         .then(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); })
         .catch(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); });
     } else if(!isDemo && b._attioInspectionId){
@@ -2452,7 +2455,7 @@ export default function App(){
 
     // Auto-reply text
     if(enq.mobile&&enq.reply&&!isDemo){
-      MM.sendMessage({ toPhone:enq.mobile, message:enq.reply }).catch(()=>{});
+      MM.sendMessage({ toPhone:enq.mobile, message:enq.reply, agent:agentName }).catch(()=>{});
       done.push(`Texted the reply to ${enq.mobile}`);
     }
     // Auto-send contract if they asked and we can
@@ -2625,7 +2628,7 @@ export default function App(){
         </>}
       </>}
 
-      {!loading&&homeTab==="match"&&<BuyerMatch propIndex={propIndex}/>}
+      {!loading&&homeTab==="match"&&<BuyerMatch propIndex={propIndex} agentName={agentName}/>}
       <div style={{height:40}}/>
     </div>
 
