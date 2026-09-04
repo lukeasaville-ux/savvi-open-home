@@ -522,18 +522,24 @@ async function aiBuyerProfile(buyer) {
 // a proper chat and will follow up, rather than inventing detail.
 const VENDOR_NO_NOTE = "we didn't get the chance to have much of a conversation — I'll follow them up early next week";
 async function aiVendorSummary(openHome, buyers, mode) {
+  const isCampaign = mode === "campaign";
+  // The campaign report names only buyers who INSPECTED — online enquiries are counted,
+  // not named. (Post-open wrap keeps everyone who came through.)
+  const named = isCampaign ? buyers.filter(b => !b.isEnquiry) : buyers;
+  const enquiryCount = isCampaign ? buyers.filter(b => b.isEnquiry).length : 0;
   const j = await call("aiVendorSummary", {
     openHomeId: openHome.id,
     address: openHome.address,
     suburb: openHome.suburb,
     time: openHome.time,
     mode: mode || "open", // "open" = quick post-open wrap; "campaign" = full weekly report
-    buyers: buyers.map(b => {
+    enquiryCount,
+    buyers: named.map(b => {
       const firstName = String(b.name || "").trim().split(/\s+/)[0] || "They";
       const noteTexts = (b.notes || []).map(n => n.text).filter(t => t && t.trim());
       // Only feed the "no chat" line when there's genuinely nothing else to say —
       // a contract-taker's story is the contract, so leave that to the flag.
-      const notes = noteTexts.length ? noteTexts : (b.contractSent ? [] : (mode === "campaign" ? [] : [VENDOR_NO_NOTE]));
+      const notes = noteTexts.length ? noteTexts : (b.contractSent ? [] : (isCampaign ? [] : [VENDOR_NO_NOTE]));
       return { name: firstName, interest: b.interest, contractSent: !!b.contractSent, visits: b.visits || 1, notes };
     }),
   });
