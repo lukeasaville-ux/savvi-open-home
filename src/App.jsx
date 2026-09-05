@@ -2799,7 +2799,7 @@ export default function App(){
         <div className="greeting">{melbGreeting()}, {agentName}</div>
         <div className="hdate">{today}</div>
         {!loading&&<div className="hdr-chips">
-          <div className="opens-chip" style={opensStale?{background:"#FDECEA",color:"#B23B2E",border:"1px solid #F1B0A8"}:undefined}>{opensStale?"⚠️ Last week's opens":`${visibleOpens.length} open${visibleOpens.length!==1?"s":""} this week`}</div>
+          <div className="opens-chip">{`${visibleOpens.length} open${visibleOpens.length!==1?"s":""}${opensStale?"":" this week"}`}</div>
           <button className="add-listing-btn" onClick={()=>setShowAddListing(true)}>+ Add listing</button>
         </div>}
       </div>
@@ -2826,9 +2826,6 @@ export default function App(){
         </div>}
 
         {/* ── OPEN HOMES: grouped by day ── */}
-        {opensStale&&<div className="demo-banner" style={{background:"#FDECEA",borderColor:"#F1B0A8",color:"#B23B2E"}}>
-          <strong>⚠️ These are last week's opens.</strong> This week's open times aren't up yet (they load Mon–Tue) — don't quote these to buyers.
-        </div>}
         <div className="sec-lbl">{opensStale?"Last Week's Open Homes":"This Week's Open Homes"}</div>
         {openDays.map(day => (
           <div key={day}>
