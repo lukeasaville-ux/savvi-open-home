@@ -2756,6 +2756,11 @@ export default function App(){
     opensByDay[d].push(oh);
   });
   const openDays = Object.keys(opensByDay).sort();
+  // After the weekend, the previous opens linger until next week's times are loaded into
+  // Box+Dice (Mon PM / Tue AM). Flag them clearly so an agent never quotes a stale time.
+  // "Stale" = there are opens loaded but NONE are today-or-later (Melbourne).
+  const _todayMel = melbToday();
+  const opensStale = visibleOpens.length > 0 && !visibleOpens.some(o => o.date && o.date >= _todayMel);
 
   // Listings = active properties NOT already in this week's opens
   const openPropIds = new Set(visibleOpens.map(oh => oh.propertyId).filter(Boolean));
@@ -2794,7 +2799,7 @@ export default function App(){
         <div className="greeting">{melbGreeting()}, {agentName}</div>
         <div className="hdate">{today}</div>
         {!loading&&<div className="hdr-chips">
-          <div className="opens-chip">{visibleOpens.length} open{visibleOpens.length!==1?"s":""} this week</div>
+          <div className="opens-chip" style={opensStale?{background:"#FDECEA",color:"#B23B2E",border:"1px solid #F1B0A8"}:undefined}>{opensStale?"⚠️ Last week's opens":`${visibleOpens.length} open${visibleOpens.length!==1?"s":""} this week`}</div>
           <button className="add-listing-btn" onClick={()=>setShowAddListing(true)}>+ Add listing</button>
         </div>}
       </div>
@@ -2821,7 +2826,10 @@ export default function App(){
         </div>}
 
         {/* ── OPEN HOMES: grouped by day ── */}
-        <div className="sec-lbl">This Week's Open Homes</div>
+        {opensStale&&<div className="demo-banner" style={{background:"#FDECEA",borderColor:"#F1B0A8",color:"#B23B2E"}}>
+          <strong>⚠️ These are last week's opens.</strong> This week's open times aren't up yet (they load Mon–Tue) — don't quote these to buyers.
+        </div>}
+        <div className="sec-lbl">{opensStale?"Last Week's Open Homes":"This Week's Open Homes"}</div>
         {openDays.map(day => (
           <div key={day}>
             <div style={{padding:"6px 20px 4px",fontSize:11,fontWeight:700,color:BLUE_D,textTransform:"uppercase",letterSpacing:.8}}>
