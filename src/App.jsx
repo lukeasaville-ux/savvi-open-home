@@ -94,7 +94,7 @@ function normBuyer(b) {
   if (Array.isArray(b.notes)) {
     notes = b.notes.map((n, i) => typeof n === "string"
       ? { id: `n${i}`, text: n, ts: "" }
-      : { id: n.id || `n${i}`, text: n.text || "", ts: n.ts || "" });
+      : { id: n.id || `n${i}`, text: n.text || "", ts: n.ts || "", agent: n.agent || "" });
   } else if (typeof b.notes === "string" && b.notes.trim()) {
     // Notes persist to Attio as "<ISO timestamp>\t<text>" joined by \n---\n so the
     // date + time survive a reload. Older notes have no timestamp prefix.
@@ -439,6 +439,26 @@ const Attio = {
     const j = await call("updateProperty", { propertyId: id, igUrl });
     return !!j?.ok;
   },
+  // Remove a buyer's registration from an open (deletes the inspection record only —
+  // the person stays in the CRM and any other opens they're registered to).
+  async deleteInspection(inspectionId) {
+    const j = await call("deleteInspection", { inspectionId });
+    if (j?.ok) invalidateBuyerCache();
+    return !!j?.ok;
+  },
+  // Move a buyer's registration to a different open (e.g. registered under the wrong
+  // listing). Repoints the inspection's open_home + property refs; notes/interest carry over.
+  async transferInspection({ inspectionId, openHomeId, propertyId }) {
+    const j = await call("transferInspection", { inspectionId, openHomeId, propertyId });
+    if (j?.ok) invalidateBuyerCache();
+    return !!j?.ok;
+  },
+  // Look up existing people by NAME (for repeat buyers whose number we don't have to hand).
+  async findPeopleByName(q) {
+    const j = await call("lookupBuyerByName", { q });
+    if (j?.ok && Array.isArray(j.data)) return j.data;
+    return [];
+  },
 };
 
 // Normalise an Australian mobile to E.164 (+61…) so the SMS gateway accepts it.
@@ -528,8 +548,14 @@ async function aiVendorSummary(openHome, buyers, mode) {
   // not named. (Post-open wrap keeps everyone who came through.)
   const named = isCampaign ? buyers.filter(b => !b.isEnquiry) : buyers;
   const enquiryCount = isCampaign ? buyers.filter(b => b.isEnquiry).length : 0;
+  // Buyer background: this contact's notes across EVERY property (one cached call).
+  // Feeds useful buyer facts (first-home-buyer, where they live, budget, must-haves)
+  // into the report when this property's own notes are thin.
+  const bgMap = {};
+  try { const contacts = await Attio.getAllContacts(); (contacts || []).forEach(c => { bgMap[c.contactId] = String(c.notes || "").split(" • ").map(s => s.trim()).filter(Boolean); }); } catch (e) {}
   const j = await call("aiVendorSummary", {
     openHomeId: openHome.id,
+    propertyId: openHome.propertyId,
     address: openHome.address,
     suburb: openHome.suburb,
     time: openHome.time,
@@ -541,7 +567,10 @@ async function aiVendorSummary(openHome, buyers, mode) {
       // Only feed the "no chat" line when there's genuinely nothing else to say —
       // a contract-taker's story is the contract, so leave that to the flag.
       const notes = noteTexts.length ? noteTexts : (b.contractSent ? [] : (isCampaign ? [] : [VENDOR_NO_NOTE]));
-      return { name: firstName, interest: b.interest, contractSent: !!b.contractSent, visits: b.visits || 1, notes };
+      // background = this buyer's notes across their whole file (other properties too),
+      // used only for buyer facts when this property's notes are thin.
+      const background = (b.contactId && bgMap[b.contactId]) ? bgMap[b.contactId] : [];
+      return { name: firstName, contactId: b.contactId || null, interest: b.interest, contractSent: !!b.contractSent, visits: b.visits || 1, notes, background };
     }),
   });
   if (j?.ok) { const t = j.data?.text || j.text || (typeof j.data === "string" ? j.data : ""); if (t) return t; }
@@ -584,7 +613,7 @@ function buildWelcomeSms({ firstName, address, igUrl, agent, inspectionId }){
   } else if(igUrl){
     parts.push(`Here's a walkthrough video should you need to retrace your steps: ${igUrl}`);
   }
-  if(SOFT_LAUNCH_URL) parts.push(`Also, if you want first look at our off-market listings before they hit realestate.com or Domain, join our Soft Launch Club: ${SOFT_LAUNCH_URL}`);
+  if(SOFT_LAUNCH_URL) parts.push(`Also, if you want first look at our off-market listings before they hit Real Estate or Domain, join our Soft Launch Club: ${SOFT_LAUNCH_URL}`);
   parts.push(`Thanks,\n${sig}`);
   return parts.join("\n\n");
 }
@@ -1013,6 +1042,10 @@ function AiProfile({profile,onRegen}){
 /* ════════════════════════════════════════════
    ADD BUYER SHEET — with live Attio lookup
 ════════════════════════════════════════════ */
+// Capitalise the first letter of each word (incl. after - and '), leaving already-cased
+// letters alone — so "tom nguyen" → "Tom Nguyen" while "McDonald"/"O'Brien" survive.
+function titleName(s){ return String(s||"").replace(/(^|[\s'-])([a-z])/g,(m,sep,c)=>sep+c.toUpperCase()); }
+
 function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContactIds=[],prefill=null}){
   const[step,setStep]=useState("mobile");
   const[mobile,setMobile]=useState("");
@@ -1025,10 +1058,27 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
   const[interest,setInterest]=useState("");
   const[saving,setSaving]=useState(false);
   const[err,setErr]=useState("");
+  const[byName,setByName]=useState(false);        // "find a repeat buyer by name" mode
+  const[nameQ,setNameQ]=useState("");
+  const[nameRes,setNameRes]=useState([]);
+  const[nameSearching,setNameSearching]=useState(false);
   const debounce=useRef(null);
+  const nameDeb=useRef(null);
   const ref=useRef(null);
 
-  useEffect(()=>{if(open){setStep("mobile");setMatch(null);setNoMatch(false);setSelected(null);setInterest("");setSaving(false);setErr("");setMobile(prefill?.mobile||"");setName(prefill?.name||"");setEmail(prefill?.email||"");call("warmup").catch(()=>{});setTimeout(()=>ref.current?.focus(),400);}}, [open]);
+  useEffect(()=>{if(open){setStep("mobile");setMatch(null);setNoMatch(false);setSelected(null);setInterest("");setSaving(false);setErr("");setByName(false);setNameQ("");setNameRes([]);setNameSearching(false);setMobile(prefill?.mobile||"");setName(prefill?.name||"");setEmail(prefill?.email||"");call("warmup").catch(()=>{});setTimeout(()=>ref.current?.focus(),400);}}, [open]);
+
+  // Name search — for a buyer we've met before whose number we don't have to hand.
+  useEffect(()=>{
+    clearTimeout(nameDeb.current);
+    const q=nameQ.trim();
+    if(!byName||q.length<2||openHome?._demo){ setNameRes([]); setNameSearching(false); return; }
+    setNameSearching(true);
+    nameDeb.current=setTimeout(async()=>{
+      const res=await Attio.findPeopleByName(q).catch(()=>[]);
+      setNameSearching(false); setNameRes(res||[]);
+    },350);
+  },[nameQ,byName]);
 
   useEffect(()=>{
     clearTimeout(debounce.current);
@@ -1054,10 +1104,10 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
     },400);
   },[mobile]);
 
-  const pick=c=>{setSelected(c);setName(c.name);setEmail(c.email||"");setStep("confirm");};
+  const pick=c=>{setSelected(c);setName(c.name);setEmail(c.email||"");if(c.mobile)setMobile(c.mobile);setStep("confirm");};
 
   const save=()=>{
-    const nm=name.trim(), em=email.trim(), mob=mobile.trim(), sel=selected;
+    const nm=titleName(name.trim()), em=email.trim(), mob=mobile.trim(), sel=selected;
     if(!nm) return;
     const interestVal=interest||null;  // no default — agent sets hot/watching/cool from the profile
     const col=sel?.col||AVATAR_COLS[Math.abs((nm.charCodeAt(0)||65)%AVATAR_COLS.length)];
@@ -1108,10 +1158,25 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
       <div className="sh-ttl">{step==="mobile"?"Add buyer":step==="newdetails"?"New contact":"Register buyer"}</div>
       <div className="sh-sub">{step==="mobile"?openHome?.address:step==="newdetails"?"Fill in their details":"Confirm and register"}</div>
 
-      {step==="mobile"&&<>
+      {step==="mobile"&&byName&&<>
+        <div className="fg"><label className="fl">Buyer's name</label>
+          <input className="fi big" type="text" placeholder="Start typing their name…" value={nameQ} onChange={e=>setNameQ(e.target.value)} autoCapitalize="words" autoComplete="off" autoFocus/></div>
+        {nameSearching&&<div className="lk-searching"><span className="sp-sm"/>Searching contacts…</div>}
+        {!nameSearching&&nameRes.length>0&&<div className="lk">{nameRes.map(c=>
+          <div key={c.id} className="lk-card" onClick={()=>pick(c)}>
+            <div className="av" style={{background:c.col||BLUE_D,width:46,height:46,fontSize:17}}>{mkI(c.name)}</div>
+            <div style={{flex:1}}><div className="lk-tag">Known buyer</div><div className="lk-nm">{c.name}</div><div className="lk-dt">{[c.mobile,c.email].filter(Boolean).join(" · ")||"no contact on file"}</div></div>
+            <div className="lk-ar">→</div>
+          </div>)}</div>}
+        {!nameSearching&&nameQ.trim().length>=2&&nameRes.length===0&&<div className="lk-none"><span style={{fontSize:19}}>🔍</span><span className="lk-nt">No buyer found matching <strong>{nameQ}</strong></span></div>}
+        <div className="fg" style={{paddingBottom:0}}><button className="btn-ghost" style={{margin:0}} onClick={()=>{setByName(false);setNameQ("");setNameRes([]);}}>← Back to mobile number</button></div>
+      </>}
+
+      {step==="mobile"&&!byName&&<>
         <div className="fg"><label className="fl">Mobile number</label>
           <input ref={ref} className="fi big" type="tel" placeholder="04XX XXX XXX"
             value={mobile} onChange={e=>setMobile(e.target.value)} autoComplete="off"/></div>
+        <div className="fg" style={{paddingTop:0,paddingBottom:0}}><button className="btn-ghost" style={{margin:0}} onClick={()=>setByName(true)}>👤 Find a repeat buyer by name instead</button></div>
         {searching&&<div className="lk-searching"><span className="sp-sm"/>Searching contacts…</div>}
         {!searching&&match&&<><div className="lk">
           <div className="lk-card" onClick={()=>pick(match)}>
@@ -1129,7 +1194,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
       </>}
 
       {step==="newdetails"&&<>
-        <div className="fg"><label className="fl">Full name</label><input className="fi" type="text" placeholder="e.g. Tom Nguyen" value={name} onChange={e=>setName(e.target.value)} autoFocus/></div>
+        <div className="fg"><label className="fl">Full name</label><input className="fi" type="text" placeholder="e.g. Tom Nguyen" value={name} onChange={e=>setName(e.target.value)} onBlur={e=>setName(titleName(e.target.value))} autoCapitalize="words" autoFocus/></div>
         <div className="fg"><label className="fl">Email</label><input className="fi" type="email" placeholder="name@email.com" value={email} onChange={e=>setEmail(e.target.value)}/></div>
         {err&&<div style={{color:AMBER_D,fontSize:13,padding:"0 0 8px",lineHeight:1.4}}>{err}</div>}
         <div className="fg" style={{paddingBottom:0}}><button className="btn-dark" style={{margin:0,width:"100%"}} disabled={!name||saving} onClick={()=>{if(name)save();}}>{saving?<><span className="sp-sm"/>Registering…</>:"Register buyer"}</button></div>
@@ -1311,7 +1376,7 @@ function OpenListingInfo({ openHome }){
   );
 }
 
-function ContractBox({ buyer, propId, onSendContract, onTextContract }) {
+function ContractBox({ buyer, propId, onSendContract, onTextContract, hasContract, onRequestContract }) {
   const [tracking, setTracking] = useState(null);
   const [loadingTrack, setLoadingTrack] = useState(false);
 
@@ -1328,6 +1393,24 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract }) {
   const statusIcon  = s => ({ delivered:"✅", opened:"👁", clicked:"🔗", bounced:"❌" }[s] || "📨");
   const statusLabel = s => ({ delivered:"Delivered", opened:"Opened", clicked:"Contract link clicked", bounced:"Bounced" }[s] || "Sent");
   const fmtTime = ts => { try { return new Date(ts).toLocaleString("en-AU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",hour12:true}); } catch { return ts; } };
+
+  // No contract uploaded to this listing yet → don't send an empty text. Offer to log a
+  // request instead; it auto-sends the moment a contract is uploaded to the listing.
+  if (!buyer?.contractSent && !hasContract) {
+    const requested = (buyer?.notes||[]).some(n => /contract requested/i.test(n.text||""));
+    return (
+      <div className="ctr-box unsent">
+        <span style={{fontSize:20}}>{requested?"⏳":"📋"}</span>
+        <div style={{flex:1}}>
+          <div className="ctr-lbl unsent">{requested?"Contract requested":"No contract uploaded yet"}</div>
+          <div className="ctr-sub">{requested?"We'll text it automatically once it's uploaded":"Log a request — it sends automatically once uploaded"}</div>
+        </div>
+        <div className="ctr-btns">
+          {!requested&&<button className="ctr-txt" onClick={()=>onRequestContract&&onRequestContract(propId,buyer)}>📩 Request contract</button>}
+        </div>
+      </div>
+    );
+  }
 
   if (!buyer?.contractSent) {
     return (
@@ -1384,11 +1467,15 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract }) {
 /* ════════════════════════════════════════════
    BUYER DETAIL SHEET
 ════════════════════════════════════════════ */
-function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,onUpdateInterest,onSendContract,onTextContract,onAddNote,onSetProfile,onUpdateDetails}){
+function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract}){
   const[noteText,setNoteText]=useState("");
   const[showNote,setShowNote]=useState(false);
   const[copied,setCopied]=useState(false);
   const[editing,setEditing]=useState(false);
+  const[editNoteId,setEditNoteId]=useState(null);
+  const[editNoteText,setEditNoteText]=useState("");
+  const[manage,setManage]=useState(false); // remove / transfer panel
+  const[xfer,setXfer]=useState(false);      // transfer target picker open
   // The buyer profile is a CONTACT-level summary: it reads this person's notes across
   // EVERY property they've inspected, not just the listing you're viewing. crossNotes
   // holds that aggregated note set (null = not loaded yet).
@@ -1397,7 +1484,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,onUpdateInter
   const[eName,setEName]=useState("");const[eMobile,setEMobile]=useState("");const[eEmail,setEEmail]=useState("");
   const[savingEdit,setSavingEdit]=useState(false);
 
-  useEffect(()=>{if(open){setNoteText("");setShowNote(false);setEditing(false);}}, [open]);
+  useEffect(()=>{if(open){setNoteText("");setShowNote(false);setEditing(false);setEditNoteId(null);setEditNoteText("");setManage(false);setXfer(false);}}, [open]);
 
   // Load this contact's notes from EVERY property (by contactId) so the profile
   // summarises the whole relationship, not just this listing. For a not-yet-synced
@@ -1517,7 +1604,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,onUpdateInter
       </div>
       </>)}
 
-      <ContractBox buyer={buyer} propId={propId} onSendContract={onSendContract} onTextContract={onTextContract}/>
+      <ContractBox buyer={buyer} propId={propId} onSendContract={onSendContract} onTextContract={onTextContract} hasContract={!!openHome?.contractUrl} onRequestContract={onRequestContract}/>
 
       <div className="sec-w"><div className="sec-i">Update interest</div></div>
       <div className="cgr">{ISET.map(o=><div key={o.v} className={`cb ${buyer.interest===o.v?(o.v==="hot"?"ah":o.v==="watching"?"aw":"ac"):""}`} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}>
@@ -1527,7 +1614,19 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,onUpdateInter
       <div className="sec-w"><div className="sec-i">Notes</div></div>
       <div className="notes-w">
         {(buyer.notes||[]).length>0&&<div className="note-feed">{[...(buyer.notes||[])].reverse().map(n=><div key={n.id} className="note-item">
-          <div className="note-txt">{n.text}</div><div className="note-ts">{n.ts?(/^\d{4}-/.test(n.ts)?fmtNoteTime(n.ts):n.ts):""}{n.agent?` — ${n.agent}`:""}</div>
+          {editNoteId===n.id?<>
+            <textarea className="note-area" value={editNoteText} onChange={e=>setEditNoteText(e.target.value)} autoFocus/>
+            <div className="note-row">
+              <button className="ns-save" disabled={!editNoteText.trim()} onClick={()=>{onEditNote&&onEditNote(propId,buyer.id,n.id,editNoteText);setEditNoteId(null);setEditNoteText("");}}>Save</button>
+              <button className="ns-can" onClick={()=>{setEditNoteId(null);setEditNoteText("");}}>Cancel</button>
+            </div>
+          </>:<>
+            <div className="note-txt">{n.text}</div>
+            <div className="note-ts" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span>{n.ts?(/^\d{4}-/.test(n.ts)?fmtNoteTime(n.ts):n.ts):""}{n.agent?` — ${n.agent}`:""}</span>
+              <span onClick={()=>{setEditNoteId(n.id);setEditNoteText(n.text);}} style={{color:BLUE_D,fontWeight:700,cursor:"pointer",fontSize:12,paddingLeft:10}}>Edit</span>
+            </div>
+          </>}
         </div>)}</div>}
         {showNote?<>
           <textarea className="note-area" placeholder="Price feedback, buyer profile, who they inspect with…" value={noteText} onChange={e=>setNoteText(e.target.value)} autoFocus/>
@@ -1569,6 +1668,26 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,onUpdateInter
             <div className="hc-row"><span className="hc-lbl">Offered</span><span className="hc-val" style={{color:h.offered?"#B7770D":"#C0B8A8"}}>{h.offered?h.offerAmt:"No"}</span></div>
           </div>)}</div>;
       })()}
+
+      {/* Move a mis-registered buyer to the right open, or remove them from this one. */}
+      {onRemoveBuyer&&buyer._attioInspectionId&&<div style={{padding:"16px 16px 0"}}>
+        {!manage?<button className="btn-ghost" style={{margin:0}} onClick={()=>setManage(true)}>⚙️ Move or remove from this open</button>:<>
+          <div className="sec-w" style={{padding:0,marginBottom:8}}><div className="sec-i">Manage registration</div></div>
+          {!xfer?<>
+            <button className="btn-ghost" style={{margin:"0 0 8px"}} onClick={()=>setXfer(true)}>↔️ Move to another open</button>
+            <button onClick={()=>{ if(window.confirm(`Remove ${buyer.name} from this open? They'll stay in your CRM and any other opens.`)){ onRemoveBuyer(propId,buyer); onClose(); } }} style={{width:"100%",padding:"12px",borderRadius:11,border:`1px solid ${AMBER_D}`,background:"#fff",color:AMBER_D,fontWeight:800,fontSize:13.5,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>🗑 Remove from this open</button>
+            <button className="btn-cream" style={{marginTop:8}} onClick={()=>setManage(false)}>Cancel</button>
+          </>:<>
+            <div style={{fontSize:12.5,color:BROWN_L,padding:"0 0 8px"}}>Move <strong>{buyer.name}</strong> into:</div>
+            {(opens||[]).filter(o=>o.id!==propId&&!o._listing&&!o._demo).map(o=><button key={o.id} onClick={()=>{ onTransferBuyer(propId,buyer,o); onClose(); }} style={{width:"100%",textAlign:"left",padding:"11px 13px",marginBottom:8,borderRadius:11,border:`1px solid ${SAND_D}`,background:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>
+              <div style={{fontWeight:700,fontSize:13.5,color:ESPRESSO}}>{o.address}</div>
+              <div style={{fontSize:12,color:BROWN_L}}>{[o.suburb,o.time].filter(Boolean).join(" · ")}</div>
+            </button>)}
+            {(opens||[]).filter(o=>o.id!==propId&&!o._listing&&!o._demo).length===0&&<div style={{fontSize:12.5,color:BROWN_L,padding:"4px 0 8px"}}>No other opens to move them to.</div>}
+            <button className="btn-cream" onClick={()=>setXfer(false)}>Back</button>
+          </>}
+        </>}
+      </div>}
 
       {/* Thumb-reachable close — easier one-handed than the top-right ✕ */}
       <div style={{padding:"16px 16px 4px"}}>
@@ -2342,24 +2461,49 @@ export default function App(){
   },[agentName,reloadNonce]);
 
   // Load buyers when entering an open home
+  // Merge fresh Attio buyers into state WITHOUT dropping optimistic rows (a buyer just
+  // registered here that hasn't finished persisting yet). Keyed by contactId/id.
+  const applyFreshBuyers=(ohId,r)=>{
+    setBuyers(p=>{
+      const prev=p[ohId]||[];
+      const freshK=new Set((r.open||[]).map(b=>b.contactId||b.id));
+      const keep=prev.filter(b=>(b._pending||b._error)&&!freshK.has(b.contactId||b.id));
+      return {...p,[ohId]:[...keep,...(r.open||[])]};
+    });
+    setPropBuyers(p=>({...p,[ohId]:r.property||[]}));
+    try{ localStorage.setItem("savvi_buyers_"+ohId, JSON.stringify({open:r.open,property:r.property})); }catch(e){}
+  };
+
   const enterOpenHome=async oh=>{
     setOpenHome(oh);setScreen("open");setBFilters([]);
     call("warmup").catch(()=>{}); // wake n8n so the first buyer-save at this open is fast
-    if(oh._demo||buyers[oh.id]) return;
-    // Instant: hydrate cached buyers for this open so the list shows immediately.
-    let hadCache=false;
-    try{
-      const c=localStorage.getItem("savvi_buyers_"+oh.id);
-      if(c){ const parsed=JSON.parse(c); if(parsed&&Array.isArray(parsed.open)){ setBuyers(p=>({...p,[oh.id]:parsed.open})); setPropBuyers(p=>({...p,[oh.id]:parsed.property||[]})); hadCache=true; } }
-    }catch(e){}
-    if(!hadCache) setBuyersLoading(true);
-    const r=await Attio.getBuyersFor(oh.id, oh.propertyId);
-    if(r.ok){
-      setBuyers(p=>({...p,[oh.id]:r.open})); setPropBuyers(p=>({...p,[oh.id]:r.property}));
-      try{ localStorage.setItem("savvi_buyers_"+oh.id, JSON.stringify({open:r.open,property:r.property})); }catch(e){}
+    if(oh._demo) return;
+    // Instant: show cached / in-memory buyers so the list appears with no spinner…
+    let hadCache=!!buyers[oh.id];
+    if(!hadCache){
+      try{
+        const c=localStorage.getItem("savvi_buyers_"+oh.id);
+        if(c){ const parsed=JSON.parse(c); if(parsed&&Array.isArray(parsed.open)){ setBuyers(p=>({...p,[oh.id]:parsed.open})); setPropBuyers(p=>({...p,[oh.id]:parsed.property||[]})); hadCache=true; } }
+      }catch(e){}
     }
+    if(!hadCache) setBuyersLoading(true);
+    // …but ALWAYS refetch fresh so buyers another agent registered (on their phone)
+    // show up here too. Bypass the short-lived cache so it's genuinely current.
+    invalidateBuyerCache();
+    const r=await Attio.getBuyersFor(oh.id, oh.propertyId);
+    if(r.ok) applyFreshBuyers(oh.id,r);
     setBuyersLoading(false);
   };
+
+  // Manual refresh (tap ↻) — pulls the very latest buyers for the current open.
+  const refreshBuyers=useCallback(async()=>{
+    if(!openHome||openHome._demo)return;
+    invalidateBuyerCache();
+    setBuyersLoading(!buyers[openHome.id]);
+    const r=await Attio.getBuyersFor(openHome.id, openHome.propertyId);
+    if(r.ok) applyFreshBuyers(openHome.id,r);
+    setBuyersLoading(false);
+  },[openHome,buyers]);
 
   // All mutations take explicit propId — no stale closure risk
   const updateInterest=useCallback((pid,id,val)=>{
@@ -2444,25 +2588,81 @@ export default function App(){
 
   const addNote=useCallback((pid,id,text)=>{
     if(!pid)return;
-    const note={id:"n"+Date.now(),text,ts:new Date().toISOString()};
+    const agentFull=AGENT_FULL[agentName]||agentName||"";
+    const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:agentFull};
     setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(b=>b.id===id?{...b,notes:[...(b.notes||[]),note]}:b);return u;});
+    setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(b=>b.id===id?{...b,notes:[...(b.notes||[]),note]}:b);return u;});
     setActive(p=>p?.id===id?{...p,notes:[...(p.notes||[]),note]}:p);
-    // Write all notes to Attio as "<ISO>\t<text>" joined by \n---\n so the timestamp survives reload.
+    // Write all notes to Attio as "<ISO>\t<agent>\t<text>" joined by \n---\n so the timestamp + agent survive reload.
     if(!isDemo){
-      const allNotes=(buyers[pid]||[]).find(b=>b.id===id);
-      if(allNotes&&allNotes._attioInspectionId){
-        const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.text}`:n.text;
-        const combined=[...(allNotes.notes||[]),note].map(enc).join("\n---\n");
-        Attio.updateInspection(allNotes._attioInspectionId,{notes:combined}).catch(()=>{});
+      const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text;
+      const row=(buyers[pid]||[]).find(b=>b.id===id) || (propBuyers[pid]||[]).find(b=>b.id===id);
+      if(row&&row._attioInspectionId){
+        const combined=[...(row.notes||[]),note].map(enc).join("\n---\n");
+        Attio.updateInspection(row._attioInspectionId,{notes:combined}).catch(()=>{});
       }
     }
-  },[isDemo,buyers]);
+  },[isDemo,buyers,propBuyers,agentName]);
+
+  // Edit an existing note's text (keeps its timestamp + agent), and re-persist the whole set.
+  const editNote=useCallback((pid,id,noteId,newText)=>{
+    if(!pid||!newText||!newText.trim())return;
+    const t=newText.trim();
+    const upd=b=>b.id===id?{...b,notes:(b.notes||[]).map(n=>n.id===noteId?{...n,text:t}:n)}:b;
+    setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(upd);return u;});
+    setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(upd);return u;});
+    setActive(p=>p?.id===id?{...p,notes:(p.notes||[]).map(n=>n.id===noteId?{...n,text:t}:n)}:p);
+    if(!isDemo){
+      const row=(buyers[pid]||[]).find(b=>b.id===id) || (propBuyers[pid]||[]).find(b=>b.id===id);
+      if(row&&row._attioInspectionId){
+        const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text;
+        const notes=(row.notes||[]).map(n=>n.id===noteId?{...n,text:t}:n);
+        Attio.updateInspection(row._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{});
+      }
+    }
+  },[isDemo,buyers,propBuyers]);
 
   const setProfile=useCallback((pid,id,profile)=>{
     if(!pid)return;
     setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(b=>b.id===id?{...b,aiProfile:profile}:b);return u;});
     setActive(p=>p?.id===id?{...p,aiProfile:profile}:p);
   },[]);
+
+  // Remove a buyer from THIS open (inspection deleted; person + other opens untouched).
+  const removeBuyer=useCallback(async(pid,buyer)=>{
+    if(!pid||!buyer)return false;
+    const drop=b=>b.id!==buyer.id;
+    setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).filter(drop);return u;});
+    setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).filter(drop);return u;});
+    setActive(a=>a?.id===buyer.id?null:a);
+    if(!isDemo&&buyer._attioInspectionId){ await Attio.deleteInspection(buyer._attioInspectionId).catch(()=>{}); }
+    invalidateBuyerCache();
+    return true;
+  },[isDemo]);
+
+  // Move a buyer's registration to a different open (wrong-listing fix). Notes + interest ride along.
+  const transferBuyer=useCallback(async(pid,buyer,target)=>{
+    if(!pid||!buyer||!target)return false;
+    const drop=b=>b.id!==buyer.id;
+    setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).filter(drop);return u;});
+    setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).filter(drop);return u;});
+    setActive(a=>a?.id===buyer.id?null:a);
+    if(!isDemo&&buyer._attioInspectionId){ await Attio.transferInspection({inspectionId:buyer._attioInspectionId,openHomeId:target.id,propertyId:target.propertyId}).catch(()=>{}); }
+    invalidateBuyerCache();
+    return true;
+  },[isDemo]);
+
+  // Buyer wants the contract but the listing has none uploaded yet: log the request
+  // (a note the auto-send workflow watches for) and text a quick acknowledgement.
+  const requestContract=useCallback((pid,buyer)=>{
+    if(!pid||!buyer)return;
+    addNote(pid,buyer.id,"Contract requested — will send the contract of sale as soon as it's uploaded to this listing.");
+    if(!isDemo&&buyer.mobile){
+      const first=(buyer.name||"").split(" ")[0]||"there";
+      const sig=smsSig(agentName);
+      MM.sendMessage({ toPhone:buyer.mobile, agent:agentName, message:`Hi ${first},\n\nThanks — I'll send the contract of sale for ${openHome?.address||"the property"} through to you as soon as it's ready.\n\nThanks,\n${sig}` }).catch(()=>{});
+    }
+  },[isDemo,agentName,openHome,addNote]);
 
   const handleSave=b=>{
     setBuyers(p=>({...p,[openHome.id]:[b,...(p[openHome.id]||[])]}));
@@ -2726,6 +2926,9 @@ export default function App(){
       </div>}
 
       <div className="blist">
+        {!isDemo&&<div style={{display:"flex",justifyContent:"flex-end",marginBottom:6}}>
+          <button onClick={refreshBuyers} disabled={buyersLoading} style={{display:"inline-flex",alignItems:"center",gap:6,background:"none",border:"none",color:BLUE_D,fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",opacity:buyersLoading?0.5:1}}>{buyersLoading?"Refreshing…":"↻ Refresh buyers"}</button>
+        </div>}
         {/* Filter — a single dropdown to organise callbacks by interest / contract / repeat */}
         {propAll.length>0&&<BuyerFilter
           active={bFilters[0]||"all"}
@@ -2747,6 +2950,7 @@ export default function App(){
         </>}
 
         {!buyersLoading&&!filterActive&&<>
+          {filteredBuyers.filter(b=>b.mobile).length>0&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:14,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>📣 Text all {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
           <div className="sec-lbl" style={{padding:"2px 0 10px"}}>At this open</div>
           {pbReal.length===0&&<div style={{textAlign:"center",padding:"36px 16px",color:"#C0B8A8"}}>
             <div style={{fontSize:36,marginBottom:10}}>👥</div>
@@ -2775,11 +2979,12 @@ export default function App(){
     </button>}
     <AddSheet open={showAdd} onClose={()=>{setShowAdd(false);setAiPrefill(null);}} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)} prefill={aiPrefill}/>
     <AiAssistantSheet open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={handleEnquiry}/>
-    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} label={({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"}/>
+    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} label={filterActive?(({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"):"All buyers"}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
-      openHome={openHome} propId={openHome?.id} propIndex={propIndex}
+      openHome={openHome} propId={openHome?.id} propIndex={propIndex} opens={visibleOpens}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
-      onAddNote={addNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}/>
+      onAddNote={addNote} onEditNote={editNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}
+      onRemoveBuyer={removeBuyer} onTransferBuyer={transferBuyer} onRequestContract={requestContract}/>
     <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll}/>
     <QuickContractSheet
       open={showQuickContract}
