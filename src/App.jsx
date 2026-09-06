@@ -67,7 +67,7 @@ async function loadPropMeta() {
     (j?.data || []).forEach(p => {
       const id = p?.id?.record_id; if (!id) return;
       const v = f => p?.values?.[f]?.[0]?.value;
-      map[id] = { address: v("address") || "", suburb: v("suburb") || "", price: v("price") || v("display_price") || "" };
+      map[id] = { address: v("address") || "", suburb: v("suburb") || "", price: v("price_guide") || v("price") || v("display_price") || "", beds: v("beds") ?? null, baths: v("baths") ?? null, car: v("car_spaces") ?? v("car") ?? null };
     });
     _propMetaCache = { t: Date.now(), map };
   } catch (e) {}
@@ -385,9 +385,18 @@ const Attio = {
   // property record id → "address, suburb" so location questions work too.
   async askCRM(question, propIndex = {}) {
     const buyers = await this.getAllBuyers();
+    // Match on BEHAVIOUR: send the full spec of every property each buyer has actually
+    // inspected (price guide, suburb, beds/baths/car) — not just the address — so the AI
+    // can infer budget + area + type from what they've been through.
+    const propMeta = await loadPropMeta();
     const payload = buyers.map(b => ({
       id: b.contactId, name: b.name, interest: b.interest,
-      properties: (b.propertyRefs || []).map(r => propIndex[r]).filter(Boolean),
+      inspected: (b.propertyRefs || []).map(r => {
+        const m = propMeta[r] || {}; const addr = m.address || propIndex[r] || "";
+        if (!addr) return null;
+        const spec = [m.beds != null ? `${m.beds} bed` : null, m.baths != null ? `${m.baths} bath` : null, m.car != null ? `${m.car} car` : null].filter(Boolean).join("/");
+        return { addr, suburb: m.suburb || "", price: m.price || "", spec };
+      }).filter(Boolean),
       notes: b.notes,
     }));
     const j = await call("aiQuery", { question, buyers: payload });
@@ -2174,12 +2183,12 @@ function BuyerMatch({ propIndex, agentName }) {
   return (
     <div className="bm-wrap">
       <div className="bm-intro">
-        Describe the buyer you're after in plain English — I'll read every buyer's notes and history, pull together the matches, then you can send them all a personalised text about a new listing.
+        Describe the property you've got (or the criteria) and I'll find the buyers most likely to want it — matched on what they've actually inspected (price range, area, beds), not just notes. Then text them all in one go.
       </div>
 
       <div style={{ display:"flex", gap:8 }}>
         <input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") run(); }}
-          placeholder="e.g. buyers wanting an art deco 2-bed in Hawthorn $600k–$700k"
+          placeholder="e.g. 2 bed art deco in Hawthorn, ~$900k off market"
           style={{ flex:1, background:WHITE, border:`1.5px solid ${SAND_D}`, borderRadius:100, padding:"12px 16px", fontSize:14, color:BROWN, outline:"none", fontFamily:"'Neue Haas Unica Pro',sans-serif" }} />
         <button onClick={()=>run()} disabled={busy||!q.trim()}
           style={{ background:AMBER, border:"none", borderRadius:100, padding:"0 20px", fontSize:14, fontWeight:700, color:ESPRESSO, cursor:busy?"default":"pointer", opacity:(busy||!q.trim())?.55:1, fontFamily:"'Neue Haas Unica Pro',sans-serif", whiteSpace:"nowrap" }}>
