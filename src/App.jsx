@@ -91,7 +91,7 @@ function matchBuyersLocal(query, buyers, propMeta){
     let priceOk=!crit.price, subOk=!wantSub.length, best=null;
     for(const p of insp){
       const lp=_loQuote(p.price);
-      const pOk=!crit.price || (lp>0 && lp<=crit.price*1.25 && lp>=crit.price*0.7);
+      const pOk=!crit.price || (lp>0 && lp<=crit.price*1.2 && lp>=crit.price*0.9);
       const sOk=!wantSub.length || wantSub.some(sub=>(p.suburb||"").toLowerCase().includes(sub));
       if(pOk) priceOk=true;
       if(sOk) subOk=true;
