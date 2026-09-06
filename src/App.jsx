@@ -1428,18 +1428,18 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract, hasContrac
     );
   }
 
-  // Open-tracking only exists for EMAILED contracts (Resend webhook → contract_opens).
-  // A contract sent by SMS has no resendId, so we don't claim "email delivered" for it.
+  // Open-tracking now works for BOTH channels: emailed contracts via the Resend webhook
+  // ("clicked" = viewed the contract), and TEXTED contracts via the Savvi tracking link
+  // ("opened" = each tap that redirected them to the PDF).
   const emailed = !!buyer.resendId;
-  // We care about CONTRACT-LINK CLICKS (them viewing the contract), not just email opens.
-  const clicks = (buyer.contractOpens || []).filter(o => o.kind === "clicked")
+  const views = (buyer.contractOpens || []).filter(o => emailed ? o.kind === "clicked" : o.kind === "opened")
     .slice().sort((a, b) => new Date(a.at) - new Date(b.at));
   // Fall back to Resend's live last-event if the per-event list hasn't synced yet.
   const trackingClicked = tracking && tracking.status === "clicked";
-  const viewed = emailed && (clicks.length > 0 || trackingClicked);
-  const lastViewedAt = clicks.length > 0 ? clicks[clicks.length - 1].at : (trackingClicked ? tracking.updatedAt : null);
-  const viewCount = clicks.length;
-  const viewedLine = `Last viewed ${fmtDateTime(lastViewedAt).replace(", ", " at ")}${viewCount > 1 ? ` (×${viewCount})` : ""}`;
+  const viewed = views.length > 0 || (emailed && trackingClicked);
+  const lastViewedAt = views.length > 0 ? views[views.length - 1].at : (trackingClicked ? tracking.updatedAt : null);
+  const viewCount = views.length;
+  const viewedLine = `Opened ${fmtDateTime(lastViewedAt).replace(", ", " at ")}${viewCount > 1 ? ` (×${viewCount})` : ""}`;
   const emailSub = loadingTrack ? "Checking status…" : (tracking ? statusLabel(tracking.status) : "Email sent");
 
   return (
@@ -2578,7 +2578,11 @@ export default function App(){
     setCtrBuyer(b);setCtrChannel("text");setShowDetail(false);
     setTimeout(()=>setShowCtr(true),220);
     if(b.mobile && openHome?.contractUrl){
-      MM.sendMessage({ toPhone:b.mobile, agent:agentName, message: buildContractSms({ firstName:(b.name||"").split(" ")[0], address:openHome.address, contractUrl:openHome.contractUrl, agent:agentName }) })
+      // Send a Savvi tracking link (logs each open, then redirects to the PDF) so text
+      // contracts get the same opened/last-viewed tracking as emailed ones — falls back
+      // to the raw URL for a not-yet-synced local buyer with no inspection id.
+      const trackUrl = (!isDemo && b._attioInspectionId) ? `${FOLLOWUP_URL}?t=${b._attioInspectionId}&c=1` : openHome.contractUrl;
+      MM.sendMessage({ toPhone:b.mobile, agent:agentName, message: buildContractSms({ firstName:(b.name||"").split(" ")[0], address:openHome.address, contractUrl:trackUrl, agent:agentName }) })
         .then(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); })
         .catch(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); });
     } else if(!isDemo && b._attioInspectionId){
