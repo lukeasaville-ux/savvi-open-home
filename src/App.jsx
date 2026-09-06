@@ -235,7 +235,7 @@ const Attio = {
         _attioInspectionId: rid(insp),
         name: c ? pnm(c) : "Unknown", mobile: c ? pph(c) : "", email: c ? pem(c) : "",
         interest: (rval(insp, "interest") || "").toLowerCase(),
-        contractSent: !!rval(insp, "contract_sent"), contractSentTime: rval(insp, "contract_sent_time") || null,
+        contractSent: !!rval(insp, "contract_sent"), contractSentTime: (v=>v?(/^\d{4}-\d\d-\d\dT/.test(v)?fmtDateTime(v):v):null)(rval(insp, "contract_sent_time")),
         smsSent: !!rval(insp, "sms_sent"), resendId: rval(insp, "resend_id") || null,
         contractOpens: rval(insp, "contract_opens") || "",
         notes: rval(insp, "notes") || "", _createdAt: insp?.created_at || null,
@@ -643,7 +643,7 @@ const mkI =n=>n.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
 const norm=s=>s.replace(/\s+/g,"");
 const fmtTs=()=>new Date().toLocaleTimeString("en-AU",{hour:"2-digit",minute:"2-digit",hour12:false});
 // Date + time (Melbourne), e.g. "9 Jul, 2:28pm" — used for contract-sent and open events.
-const fmtDateTime=(d)=>{try{return new Date(d||Date.now()).toLocaleString("en-AU",{day:"numeric",month:"numeric",year:"2-digit",hour:"numeric",minute:"2-digit",hour12:true,timeZone:"Australia/Melbourne"}).replace(/\s?[AP]M/i,m=>m.trim().toLowerCase()).replace(", "," at ");}catch{return "";}};
+const fmtDateTime=(d)=>{try{return new Date(d||Date.now()).toLocaleString("en-AU",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit",hour12:true,timeZone:"Australia/Melbourne"}).replace(/\s?[AP]M/i,m=>m.trim().toLowerCase());}catch{return "";}};
 // Note timestamp with weekday + ordinal, e.g. "Sat 24th August 12:41pm"
 const _ord=n=>{const v=n%100;return n+(["th","st","nd","rd"][(v-20)%10]||["th","st","nd","rd"][v]||"th");};
 const fmtNoteTime=(d)=>{try{const P=new Intl.DateTimeFormat("en-AU",{weekday:"short",day:"numeric",month:"long",hour:"numeric",minute:"2-digit",hour12:true,timeZone:"Australia/Melbourne"}).formatToParts(new Date(d));const g=t=>(P.find(p=>p.type===t)||{}).value||"";return `${g("weekday")} ${_ord(+g("day"))} ${g("month")} ${g("hour")}:${g("minute")}${g("dayPeriod").toLowerCase()}`;}catch{return "";}};
