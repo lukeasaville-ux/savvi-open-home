@@ -714,6 +714,23 @@ const iLbl=v=>({hot:"Hot 🔥",watching:"Watching 👀",cool:"Cool ❄️"}[v]||
 const iCol=v=>({hot:"#C0392B",watching:"#B7770D",cool:"#7F8C8D"}[v]||"#5A7FBF");
 const mkI =n=>n.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
 const norm=s=>s.replace(/\s+/g,"");
+// Buyer "heat" — a 0-100 strength score, weighted (per Luke) most heavily on repeat
+// inspections, contract requests/sends, how many times the contract's been opened, and
+// notes showing real buying signals (bidding / offer / settlement terms). Returns {score, why}.
+function buyerHeat(b){
+  if(!b) return {score:0,why:[]};
+  let s=0; const why=[];
+  const visits=b.visits||1;
+  if(visits>1){ s+=Math.min((visits-1)*15,30); why.push(visits+"× inspected"); }
+  const notesTxt=(Array.isArray(b.notes)?b.notes.map(n=>n&&n.text||"").join(" "):String(b.notes||"")).toLowerCase();
+  if(b.contractSent){ s+=25; why.push("contract sent"); }
+  else if(/contract requested/.test(notesTxt)){ s+=18; why.push("requested contract"); }
+  const opens=(b.contractOpens||[]).filter(o=>o&&(o.kind==="opened"||o.kind==="clicked")).length;
+  if(opens>0){ s+=Math.min(opens*8,24); why.push("opened contract"+(opens>1?" ×"+opens:"")); }
+  if(/\b(bid|bidding|offer|offered|settlement|auction|deposit|pre.?approv|finance approved|ready to (buy|go)|second inspection|coming back)\b/.test(notesTxt)){ s+=18; why.push("buying signals in notes"); }
+  if(b.interest==="hot"){ s+=20; why.push("hot"); } else if(b.interest==="watching"){ s+=8; } else if(b.interest==="cool"){ s-=12; }
+  return { score: Math.max(0,Math.min(100,Math.round(s))), why };
+}
 const fmtTs=()=>new Date().toLocaleTimeString("en-AU",{hour:"2-digit",minute:"2-digit",hour12:false});
 // Date + time (Melbourne), e.g. "9 Jul, 2:28pm" — used for contract-sent and open events.
 const fmtDateTime=(d)=>{try{return new Date(d||Date.now()).toLocaleString("en-AU",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit",hour12:true,timeZone:"Australia/Melbourne"}).replace(/\s?[AP]M/i,m=>m.trim().toLowerCase());}catch{return "";}};
@@ -1635,6 +1652,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
           <div style={{flex:1}}>
             <div className="det-nm">{buyer.name}</div>
             <div className="det-meta">
+              {(()=>{const h=buyerHeat(buyer);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:6,background:c.bg,color:c.fg}}>🔥 {h.score}{h.why.length?` · ${h.why[0]}`:""}</span>;})()}
               {buyer.interest ? <span className={`ibadge ${iCl(buyer.interest)}`}>{iLbl(buyer.interest)}</span> : <span style={{fontSize:11,fontWeight:700,color:BLUE,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:6,padding:"3px 8px"}}>Set interest ↓</span>}
               {buyer.contractSent&&<span className="ctr-badge">📄 Contract sent</span>}
               {buyer.smsSent&&<span className="sms-badge">📱 SMS sent</span>}
@@ -2447,7 +2465,7 @@ export default function App(){
   const enquiries=propAll.filter(b=>b.isEnquiry);
   const propReal=propAll.filter(b=>!b.isEnquiry);
   const pbReal=pb.filter(b=>!b.isEnquiry);
-  const propExtraReal=propExtra.filter(b=>!b.isEnquiry);
+  const propExtraReal=propExtra.filter(b=>!b.isEnquiry).slice().sort((a,b)=>buyerHeat(b).score-buyerHeat(a).score);
   const enqActive=bFilters[0]==="enquiry";
   const allN=id=>(buyers[id]||[]).length;
   // Multi-select filter across everyone registered to this property (for callbacks).
@@ -2461,7 +2479,8 @@ export default function App(){
     return true;
   };
   const filterActive=bFilters.length>0;
-  const filteredBuyers=enqActive?enquiries:propReal.filter(matchFilter);
+  const byHeat=(a,b)=>buyerHeat(b).score-buyerHeat(a).score; // strongest buyers first
+  const filteredBuyers=enqActive?enquiries:propReal.filter(matchFilter).slice().sort(byHeat);
   const countFor=(k)=>k==="enquiry"?enquiries.length:k==="contract"?propReal.filter(b=>b.contractSent).length:k==="repeat"?propReal.filter(b=>(b.visits||1)>1).length:propReal.filter(b=>b.interest===k).length;
   const toggleFilter=(k)=>setBFilters(prev=>prev.includes(k)?prev.filter(x=>x!==k):[...prev,k]);
   const rowOf=(b,kp)=>(
@@ -2480,7 +2499,10 @@ export default function App(){
             {(b.visits||1)>1&&<span className="sms-badge">🔁 {b.visits}× inspected</span>}
           </div>
         </div>
-        <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+          {(()=>{const h=buyerHeat(b);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"2px 7px",borderRadius:8,background:c.bg,color:c.fg,whiteSpace:"nowrap"}}>🔥 {h.score}</span>;})()}
+          <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>
+        </div>
       </div>
       {(b.notes||[]).length>0&&<div className="row-note">{b.notes[b.notes.length-1].text}</div>}
     </div>
