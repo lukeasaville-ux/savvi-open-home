@@ -59,6 +59,63 @@ const invalidateBuyerCache = () => { _buyerRecCache = null; _propMetaCache = nul
 // buyer's cross-property activity always shows the real listing + price, not just the
 // currently-active ones the home screen happens to hold.
 let _propMetaCache = null; // { t, map }
+// Parse a plain-English buyer search into structured criteria.
+function parseBuyerQuery(q){
+  const s=String(q||"").toLowerCase();
+  let price=0;
+  const km=s.match(/\$?\s*(\d+(?:\.\d+)?)\s*([km])\b/);
+  const full=s.replace(/,/g,"").match(/\$\s*(\d{5,7})|\b(\d{6,7})\b/);
+  if(km){ price=parseFloat(km[1])*(km[2]==="m"?1000000:1000); }
+  else if(full){ price=parseInt(full[1]||full[2],10); }
+  const words={one:1,two:2,three:3,four:4,five:5};
+  let beds=null; const bm=s.match(/(\d+|one|two|three|four|five)\s*(?:bed|br|bedroom)/);
+  if(bm){ beds=isNaN(+bm[1])?(words[bm[1]]||null):+bm[1]; }
+  const style=[];
+  if(/\b(old|older|period|deco|art\s*deco|classic|original|character|vintage|heritage|federation)\b/.test(s)) style.push("older");
+  if(/\b(new|modern|contemporary|brand\s*new|off.the.plan)\b/.test(s)) style.push("newer");
+  return { price, beds, style, raw:q };
+}
+const _loQuote=s=>{const m=String(s||"").replace(/,/g,"").match(/\d{5,}/);return m?parseInt(m[0],10):0;};
+// Match buyers by BEHAVIOUR (what they've inspected) against the parsed criteria, with a
+// generous tolerance — instant, client-side, no AI round-trip. Returns ranked matches.
+function matchBuyersLocal(query, buyers, propMeta){
+  const crit=parseBuyerQuery(query);
+  const qs=String(query||"").toLowerCase();
+  const suburbs=[...new Set(Object.values(propMeta).map(m=>(m.suburb||"").toLowerCase().trim()).filter(Boolean))];
+  const wantSub=suburbs.filter(sub=>sub && qs.includes(sub));
+  const rank={hot:3,watching:2,cool:1};
+  const out=[];
+  for(const b of buyers){
+    const insp=(b.propertyRefs||[]).map(r=>propMeta[r]).filter(Boolean);
+    if(!insp.length) continue;
+    let priceOk=!crit.price, subOk=!wantSub.length, best=null;
+    for(const p of insp){
+      const lp=_loQuote(p.price);
+      const pOk=!crit.price || (lp>0 && lp<=crit.price*1.25 && lp>=crit.price*0.7);
+      const sOk=!wantSub.length || wantSub.some(sub=>(p.suburb||"").toLowerCase().includes(sub));
+      if(pOk) priceOk=true;
+      if(sOk) subOk=true;
+      if(pOk && sOk && !best) best=p;
+    }
+    if(!priceOk || !subOk) continue;
+    // Beds: only exclude when the buyer's inspected stock has bed data AND none are within ±1.
+    if(crit.beds!=null){
+      const anyBeds=insp.some(p=>p.beds!=null);
+      if(anyBeds && !insp.some(p=>Math.abs((+p.beds)-crit.beds)<=1)) continue;
+    }
+    const notes=(b.notes||"").toLowerCase();
+    const styleHit=crit.style.length && crit.style.some(st=>st==="older"
+      ? /\b(old|older|period|deco|classic|original|character|vintage|heritage|federation)\b/.test(notes)
+      : /\b(new|modern|contemporary)\b/.test(notes));
+    const score=(rank[b.interest]||0)*10 + Math.min(insp.length,6)*3 + (styleHit?6:0);
+    const bp=best||insp[0];
+    const reason="Inspected "+insp.length+" propert"+(insp.length>1?"ies":"y")+(bp?(" incl. "+String(bp.address||"").split(",")[0]+(bp.suburb?", "+bp.suburb:"")+(bp.price?" "+bp.price:"")):"")+(styleHit?" · notes mention the style":"");
+    out.push({ ...b, reason, _score:score });
+  }
+  out.sort((a,b)=>b._score-a._score);
+  return out;
+}
+
 async function loadPropMeta() {
   if (_propMetaCache && (Date.now() - _propMetaCache.t) < 120000) return _propMetaCache.map;
   const map = {};
@@ -383,6 +440,13 @@ const Attio = {
   },
   // Natural-language search over the whole buyer database. propIndex maps a
   // property record id → "address, suburb" so location questions work too.
+  // Fast, reliable buyer match — structured, client-side, no AI round-trip (so it never
+  // times out and always returns). Describe the property → ranked buyers by behaviour.
+  async matchBuyers(query) {
+    const buyers = await this.getAllBuyers();
+    const propMeta = await loadPropMeta();
+    return matchBuyersLocal(query, buyers, propMeta);
+  },
   async askCRM(question, propIndex = {}) {
     const buyers = await this.getAllBuyers();
     // Match on BEHAVIOUR: send the full spec of every property each buyer has actually
@@ -2138,7 +2202,7 @@ function BuyerMatch({ propIndex, agentName }) {
     if (query) setQ(query);
     setBusy(true); setErr(""); setMatches(null); setDone(null); setProgress(null);
     try {
-      const res = await Attio.askCRM(qq, propIndex);
+      const res = await Attio.matchBuyers(qq);
       setMatches(res);
       const s = {}; res.forEach(b => { s[b.id] = !!b.mobile; }); // preselect everyone we can actually text
       setSel(s);
