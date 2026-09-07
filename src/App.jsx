@@ -732,7 +732,8 @@ function buyerHeat(b){
   if(opens>0){ s+=Math.min(opens*8,24); why.push("opened contract"+(opens>1?" ×"+opens:"")); }
   if(/\b(bid|bidding|offer|offered|settlement|auction|deposit|pre.?approv|finance approved|ready to (buy|go)|second inspection|coming back)\b/.test(notesTxt)){ s+=18; why.push("buying signals in notes"); }
   if(b.interest==="hot"){ s+=20; why.push("hot"); } else if(b.interest==="watching"){ s+=8; } else if(b.interest==="cool"){ s-=12; }
-  return { score: Math.max(0,Math.min(100,Math.round(s))), why };
+  const score=Math.max(0,Math.min(100,Math.round(s)));
+  return { score, score10: Math.max(0,Math.min(10,Math.round(score/10))), why };
 }
 const fmtTs=()=>new Date().toLocaleTimeString("en-AU",{hour:"2-digit",minute:"2-digit",hour12:false});
 // Date + time (Melbourne), e.g. "9 Jul, 2:28pm" — used for contract-sent and open events.
@@ -1659,7 +1660,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
           <div style={{flex:1}}>
             <div className="det-nm">{buyer.name}</div>
             <div className="det-meta">
-              {(()=>{const h=buyerHeat(buyer);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:6,background:c.bg,color:c.fg}}>🔥 {h.score}{h.why.length?` · ${h.why[0]}`:""}</span>;})()}
+              {(()=>{const h=buyerHeat(buyer);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:6,background:c.bg,color:c.fg}}>🔥 {h.score10}/10{h.why.length?` · ${h.why[0]}`:""}</span>;})()}
               {buyer.interest ? <span className={`ibadge ${iCl(buyer.interest)}`}>{iLbl(buyer.interest)}</span> : <span style={{fontSize:11,fontWeight:700,color:BLUE,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:6,padding:"3px 8px"}}>Set interest ↓</span>}
               {buyer.contractSent&&<span className="ctr-badge">📄 Contract sent</span>}
               {buyer.smsSent&&<span className="sms-badge">📱 SMS sent</span>}
@@ -2151,18 +2152,20 @@ function BulkTextSheet({ open, onClose, buyers, agentName, label, address }){
   const [sending,setSending]=useState(false);
   const [progress,setProgress]=useState(null);
   const [done,setDone]=useState(null);
+  const [confirm,setConfirm]=useState(false);
   const drag=useSheetDrag(onClose);
   const msgRef=useRef(null);
   useEffect(()=>{ if(open){
     const aFirst=smsSig(agentName).split(" ")[0];
     const shortAddr=String(address||"the property").split(",")[0];
     setMsg(`Hi {first_name}, ${aFirst} here from Savvi — we've just received an offer on ${shortAddr}. If you're still keen, please contact us urgently.`);
-    setDone(null); setProgress(null); setSending(false); const s={}; (buyers||[]).forEach(b=>{ s[b.id]=!!b.mobile; }); setSel(s);
+    setDone(null); setProgress(null); setSending(false); setConfirm(false); const s={}; (buyers||[]).forEach(b=>{ s[b.id]=!!b.mobile; }); setSel(s);
   } },[open]);
   const withMobile=(buyers||[]).filter(b=>b.mobile);
   const selected=(buyers||[]).filter(b=>sel[b.id]&&b.mobile);
   const noMobile=(buyers||[]).length-withMobile.length;
   const toggle=id=>setSel(s=>({...s,[id]:!s[id]}));
+  useEffect(()=>{ setConfirm(false); },[msg,selected.length]);
   const insertToken=()=>{ const el=msgRef.current; if(!el){setMsg(m=>m+"{first_name}");return;} const a=el.selectionStart??msg.length,b=el.selectionEnd??msg.length; setMsg(msg.slice(0,a)+"{first_name}"+msg.slice(b)); setTimeout(()=>{el.focus();el.selectionStart=el.selectionEnd=a+12;},0); };
   const send=async()=>{ if(sending||!selected.length||!msg.trim())return; setSending(true); setDone(null); let ok=0,fail=0; setProgress({done:0,total:selected.length});
     for(let i=0;i<selected.length;i++){ const b=selected[i]; try{ const r=await MM.sendMessage({toPhone:b.mobile,message:personalize(msg,b),agent:agentName}); if(r&&r.ok)ok++;else fail++; }catch{fail++;} setProgress({done:i+1,total:selected.length}); }
@@ -2197,7 +2200,8 @@ function BulkTextSheet({ open, onClose, buyers, agentName, label, address }){
         </div>
         <div style={{padding:"8px 16px calc(12px + env(safe-area-inset-bottom,0px))",borderTop:`1px solid ${SAND_D}`}}>
           {progress&&<div style={{fontSize:12.5,color:BROWN_L,marginBottom:8,textAlign:"center"}}>Sending… {progress.done}/{progress.total}</div>}
-          <button onClick={send} disabled={sending||!selected.length||!msg.trim()} style={{width:"100%",padding:"15px",borderRadius:12,border:"none",background:(sending||!selected.length||!msg.trim())?SAND_D:BLUE_D,color:"#fff",fontSize:15,fontWeight:800,cursor:(sending||!selected.length||!msg.trim())?"default":"pointer"}}>{sending?"Sending…":`Send to ${selected.length} buyer${selected.length===1?"":"s"}`}</button>
+          <button onClick={()=>{ if(sending||!selected.length||!msg.trim())return; if(confirm){setConfirm(false);send();} else setConfirm(true); }} disabled={sending||!selected.length||!msg.trim()} style={{width:"100%",padding:"15px",borderRadius:12,border:"none",background:(sending||!selected.length||!msg.trim())?SAND_D:(confirm?"#C0392B":BLUE_D),color:"#fff",fontSize:15,fontWeight:800,cursor:(sending||!selected.length||!msg.trim())?"default":"pointer"}}>{sending?"Sending…":confirm?`⚠️ Tap again to send to ${selected.length} buyer${selected.length===1?"":"s"}`:`Send to ${selected.length} buyer${selected.length===1?"":"s"}`}</button>
+          {confirm&&!sending&&<button onClick={()=>setConfirm(false)} style={{width:"100%",marginTop:8,padding:"10px",borderRadius:10,border:"none",background:"transparent",color:BROWN_L,fontSize:13,fontWeight:700,cursor:"pointer"}}>Cancel</button>}
         </div>
       </>}
     </div>
@@ -2220,6 +2224,7 @@ function BuyerMatch({ propIndex, agentName }) {
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState(null);
   const [done, setDone] = useState(null);
+  const [confirm, setConfirm] = useState(false);
   const msgRef = useRef(null);
 
   const run = async (query) => {
@@ -2237,6 +2242,7 @@ function BuyerMatch({ propIndex, agentName }) {
 
   const toggle = id => setSel(s => ({ ...s, [id]: !s[id] }));
   const selected = (matches || []).filter(b => sel[b.id] && b.mobile);
+  useEffect(()=>{ setConfirm(false); },[msg,selected.length]);
   const noMobile = (matches || []).filter(b => !b.mobile).length;
   const selectable = (matches || []).filter(b => b.mobile);
   const allOn = selectable.length > 0 && selectable.every(b => sel[b.id]);
@@ -2335,8 +2341,8 @@ function BuyerMatch({ propIndex, agentName }) {
           </div>}
 
           {!done
-            ? <button className="btn-dark" style={{ marginTop:12 }} disabled={sending||!selected.length||!msg.trim()} onClick={send}>
-                {sending ? <><span className="sp-sm"/>Sending {progress?`${progress.done}/${progress.total}`:""}…</> : `📲 Send to ${selected.length} buyer${selected.length!==1?"s":""}`}
+            ? <button className="btn-dark" style={{ marginTop:12, ...(confirm&&!sending?{background:"#C0392B"}:{}) }} disabled={sending||!selected.length||!msg.trim()} onClick={()=>{ if(sending||!selected.length||!msg.trim())return; if(confirm){setConfirm(false);send();} else setConfirm(true); }}>
+                {sending ? <><span className="sp-sm"/>Sending {progress?`${progress.done}/${progress.total}`:""}…</> : confirm ? `⚠️ Tap again to send to ${selected.length} buyer${selected.length!==1?"s":""}` : `📲 Send to ${selected.length} buyer${selected.length!==1?"s":""}`}
               </button>
             : <button className="btn-cream" style={{ marginTop:8 }} onClick={()=>{ setDone(null); setProgress(null); }}>Send another message</button>}
         </div>
@@ -2507,7 +2513,7 @@ export default function App(){
           </div>
         </div>
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
-          {(()=>{const h=buyerHeat(b);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"2px 7px",borderRadius:8,background:c.bg,color:c.fg,whiteSpace:"nowrap"}}>🔥 {h.score}</span>;})()}
+          {(()=>{const h=buyerHeat(b);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"2px 7px",borderRadius:8,background:c.bg,color:c.fg,whiteSpace:"nowrap"}}>🔥 {h.score10}/10</span>;})()}
           <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>
         </div>
       </div>
