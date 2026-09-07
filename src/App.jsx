@@ -734,6 +734,10 @@ function buyerHeat(b){
 const fmtTs=()=>new Date().toLocaleTimeString("en-AU",{hour:"2-digit",minute:"2-digit",hour12:false});
 // Date + time (Melbourne), e.g. "9 Jul, 2:28pm" — used for contract-sent and open events.
 const fmtDateTime=(d)=>{try{return new Date(d||Date.now()).toLocaleString("en-AU",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit",hour12:true,timeZone:"Australia/Melbourne"}).replace(/\s?[AP]M/i,m=>m.trim().toLowerCase());}catch{return "";}};
+// Auction date/time for the listing card — shows the time only when the value carries one.
+const fmtAuction=(v)=>{ if(!v) return ""; const hasTime=/T\d\d:\d\d/.test(String(v))&&!/T00:00(:00)?/.test(String(v)); try{ const o={weekday:"short",day:"numeric",month:"short",timeZone:"Australia/Melbourne"}; if(hasTime){o.hour="numeric";o.minute="2-digit";o.hour12=true;} let s=new Date(v).toLocaleString("en-AU",o); return hasTime?s.replace(/\s?[AP]M/i,m=>m.trim().toLowerCase()):s; }catch{ return String(v); } };
+// Street line only (drops a trailing ", Suburb" so the suburb isn't shown twice on cards).
+const streetLine=(address,suburb)=>{ let a=String(address||""); if(suburb){ const re=new RegExp(",?\\s*"+suburb.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\s*$","i"); a=a.replace(re,""); } return a.split(",")[0].trim()||a; };
 // Note timestamp with weekday + ordinal, e.g. "Sat 24th August 12:41pm"
 const _ord=n=>{const v=n%100;return n+(["th","st","nd","rd"][(v-20)%10]||["th","st","nd","rd"][v]||"th");};
 const fmtNoteTime=(d)=>{try{const P=new Intl.DateTimeFormat("en-AU",{weekday:"short",day:"numeric",month:"long",hour:"numeric",minute:"2-digit",hour12:true,timeZone:"Australia/Melbourne"}).formatToParts(new Date(d));const g=t=>(P.find(p=>p.type===t)||{}).value||"";return `${g("weekday")} ${_ord(+g("day"))} ${g("month")} ${g("hour")}:${g("minute")}${g("dayPeriod").toLowerCase()}`;}catch{return "";}};
@@ -2935,7 +2939,7 @@ export default function App(){
               <div className="pc-bar"/>
               <div className="pc-body">
                 <div className="pc-top">
-                  <div><div className="pc-addr">{oh.address}</div><div className="pc-suburb">{oh.suburb}</div></div>
+                  <div><div className="pc-addr">{streetLine(oh.address,oh.suburb)}</div><div className="pc-suburb">{oh.suburb}</div></div>
                   <div className="pc-chip">{oh.time}</div>
                 </div>
                 <div className="pc-bot">
@@ -2962,14 +2966,15 @@ export default function App(){
             const price  = p.price || "";
             const contUrl= p.contractUrl || "";
             const pid    = p.id;
+            const auctionDate = p.auctionDate || "";
             const synthOh = { id:`listing_${pid}`, propertyId:pid, address:addr, suburb, beds, baths, car, price, igUrl:p.igUrl||"", contractUrl:contUrl, listingNotes:p.listingNotes||"", time:"", date:"", agent:agentName, _listing:true };
             return (
               <div key={pid} className="pc" style={{borderLeft:`4px solid ${SAND_D}`,cursor:"default"}}>
                 <div className="pc-bar" style={{background:SAND_D}}/>
                 <div className="pc-body">
                   <div className="pc-top">
-                    <div><div className="pc-addr">{addr}</div><div className="pc-suburb">{suburb}</div></div>
-                    <span style={{fontSize:11,color:BROWN_L,fontWeight:500,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:6,padding:"4px 9px",whiteSpace:"nowrap"}}>Listing</span>
+                    <div><div className="pc-addr">{streetLine(addr,suburb)}</div><div className="pc-suburb">{suburb}</div>{auctionDate&&<div className="pc-suburb" style={{color:"#FE5310",fontWeight:700,marginTop:1}}>🔨 Auction {fmtAuction(auctionDate)}</div>}</div>
+                    <span style={{fontSize:11,color:BROWN_L,fontWeight:500,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:6,padding:"4px 9px",whiteSpace:"nowrap"}}>{auctionDate?"Auction":"Listing"}</span>
                   </div>
                   <div className="pc-bot">
                     <span className="pc-type">{[beds&&`${beds}b`,baths&&`${baths}ba`,car&&`${car}c`].filter(Boolean).join(" · ")||"Apartment"}</span>
