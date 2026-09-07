@@ -8,7 +8,7 @@ import wordmark from "./assets/savvi-wordmark.png";
    single n8n webhook, which holds the Attio / MessageMedia / Resend /
    Anthropic keys server-side and requires a session token.
 ════════════════════════════════════════════ */
-const API_BASE = "https://savvi.app.n8n.cloud/webhook/savvi-app";
+const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -669,7 +669,7 @@ const AGENT_FULL={ "Luke":"Luke Saville", "Sam":"Sam Robinson" };
 // if the property has one on file) → Soft Launch Club invite → full-name sign-off.
 // Blank lines between each part so it reads clean. Built client-side + sent via the
 // sendSms custom-message path, so no reel on the property = no walkthrough line.
-const FOLLOWUP_URL = "https://savvi.app.n8n.cloud/webhook/savvi-followup";
+const FOLLOWUP_URL = "https://n8n.getsavvi.com.au/webhook/savvi-followup";
 // Sign SMS with the sending agent's full name (their number is chosen backend-side to match).
 const smsSig = a => AGENT_FULL[String(a||"").trim().split(" ")[0]] || "Luke Saville";
 function buildWelcomeSms({ firstName, address, igUrl, agent, inspectionId }){
