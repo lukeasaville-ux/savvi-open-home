@@ -694,9 +694,12 @@ function buildWelcomeSms({ firstName, address, igUrl, agent, inspectionId }){
 // Sent via the sendSms custom-message path (same transport as the welcome SMS).
 function buildContractSms({ firstName, address, contractUrl, agent }){
   const sig = smsSig(agent);
+  // Link isolated on its own line (nothing before/after it) — the format iMessage/SMS
+  // clients linkify most reliably.
   return [
     `Hi ${firstName||"there"},`,
-    `As promised, here's the contract of sale for ${address||"the property"}: ${contractUrl}`,
+    `As promised, here's the contract of sale for ${address||"the property"}:`,
+    `${contractUrl}`,
     `Thanks,\n${sig}`,
   ].join("\n\n");
 }
