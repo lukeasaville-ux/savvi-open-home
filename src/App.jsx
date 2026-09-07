@@ -1048,7 +1048,7 @@ function PinScreen({ onUnlock }) {
 
   // Wake the n8n backend while the agent is typing their PIN, so the login +
   // opens calls hit a warm container instead of paying a cold-start each.
-  useEffect(() => { call("warmup").catch(() => {}); }, []);
+  /* n8n warm-up ping removed to conserve executions (Cloud execution quota). */
 
   const press = async d => {
     if (digits.length >= 4) return;
@@ -1164,7 +1164,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
   const nameDeb=useRef(null);
   const ref=useRef(null);
 
-  useEffect(()=>{if(open){setStep("mobile");setMatch(null);setNoMatch(false);setSelected(null);setInterest("");setSaving(false);setErr("");setByName(false);setNameQ("");setNameRes([]);setNameSearching(false);setMobile(prefill?.mobile||"");setName(prefill?.name||"");setEmail(prefill?.email||"");call("warmup").catch(()=>{});setTimeout(()=>ref.current?.focus(),400);}}, [open]);
+  useEffect(()=>{if(open){setStep("mobile");setMatch(null);setNoMatch(false);setSelected(null);setInterest("");setSaving(false);setErr("");setByName(false);setNameQ("");setNameRes([]);setNameSearching(false);setMobile(prefill?.mobile||"");setName(prefill?.name||"");setEmail(prefill?.email||"");setTimeout(()=>ref.current?.focus(),400);}}, [open]);
 
   // Name search — for a buyer we've met before whose number we don't have to hand.
   useEffect(()=>{
@@ -2584,7 +2584,7 @@ export default function App(){
 
   const enterOpenHome=async oh=>{
     setOpenHome(oh);setScreen("open");setBFilters([]);
-    call("warmup").catch(()=>{}); // wake n8n so the first buyer-save at this open is fast
+    // (n8n warm-up ping removed to conserve executions)
     if(oh._demo) return;
     // Instant: show cached / in-memory buyers so the list appears with no spinner…
     let hadCache=!!buyers[oh.id];
