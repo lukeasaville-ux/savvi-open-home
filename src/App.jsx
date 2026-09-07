@@ -2942,7 +2942,7 @@ export default function App(){
               <div className="pc-bar"/>
               <div className="pc-body">
                 <div className="pc-top">
-                  <div><div className="pc-addr">{streetLine(oh.address,oh.suburb)}</div><div className="pc-suburb">{oh.suburb}</div></div>
+                  <div><div className="pc-addr">{streetLine(oh.address,oh.suburb)}</div><div className="pc-suburb">{oh.suburb}</div>{oh.auctionDate&&<div className="pc-suburb" style={{color:"#FE5310",fontWeight:700,marginTop:1}}>🔨 Auction {fmtAuction(oh.auctionDate)}</div>}</div>
                   <div className="pc-chip">{oh.time}</div>
                 </div>
                 <div className="pc-bot">
@@ -3011,8 +3011,9 @@ export default function App(){
       <div className="nav-hdr"><button className="back" onClick={()=>setScreen("home")}>← All opens</button></div>
       <div className="prop-hdr">
         <div className="prop-live"><div className="ldot"/><span className="live-lbl">Live open</span></div>
-        <div className="prop-addr">{openHome.address}</div>
+        <div className="prop-addr">{streetLine(openHome.address,openHome.suburb)}</div>
         <div className="prop-sub">{openHome.suburb} · {openHome.time}{openHome.price?` · ${openHome.price}`:""}</div>
+        {openHome.auctionDate&&<div className="prop-sub" style={{color:"#FE5310",fontWeight:700,marginTop:2}}>🔨 Auction {fmtAuction(openHome.auctionDate)}</div>}
       </div>
       <div className="stats">
         <div className="st"><div className="sn">{pb.length}</div><div className="sl">Registered</div></div>
