@@ -1688,12 +1688,13 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         </div>
       </div>
       ) : (<>
-      <a className="crow" href={buyer.mobile?`sms:${toE164AU(buyer.mobile)}`:undefined} style={{textDecoration:"none",color:"inherit",cursor:buyer.mobile?"pointer":"default"}}>
+      <div className="crow">
         <div className="ci" style={{background:"#FFF4D5"}}>📱</div>
         <div style={{flex:1}}><div className="ci-l">MOBILE</div><div className="ci-v">{buyer.mobile||"—"}</div></div>
         {buyer.mobile&&<span className="ci-cp" onClick={e=>{e.preventDefault();e.stopPropagation();navigator.clipboard?.writeText(buyer.mobile).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}}>{copied?"Copied ✓":"Copy"}</span>}
-        {buyer.mobile&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:AMBER}}>Text ›</span>}
-      </a>
+        {buyer.mobile&&<a href={`tel:${toE164AU(buyer.mobile)}`} style={{marginLeft:10,fontSize:12,fontWeight:700,color:"#1E8C50",textDecoration:"none"}}>Call</a>}
+        {buyer.mobile&&<a href={`sms:${toE164AU(buyer.mobile)}`} style={{marginLeft:10,fontSize:12,fontWeight:700,color:AMBER,textDecoration:"none"}}>Text ›</a>}
+      </div>
       <a className="crow" href={buyer.email?`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(buyer.email)}`:undefined} onClick={buyer.email?(e=>openEmail(e,buyer.email)):undefined} target="_blank" rel="noreferrer" style={{marginBottom:8,textDecoration:"none",color:"inherit",cursor:buyer.email?"pointer":"default"}}>
         <div className="ci" style={{background:"#FFF4D5"}}>✉️</div>
         <div style={{flex:1}}><div className="ci-l">EMAIL</div><div className="ci-v">{buyer.email||"—"}</div></div>
@@ -2147,7 +2148,7 @@ const BM_EXAMPLES = [
 
 // Bulk personalised text to a set of buyers (e.g. everyone in the current open-screen
 // filter — all contract-holders, all hot, etc). Reuses the same send path as Buyer Match.
-function BulkTextSheet({ open, onClose, buyers, agentName, label, address }){
+function BulkTextSheet({ open, onClose, buyers, agentName, label, address, onLogNote }){
   const [msg,setMsg]=useState("");
   const [sel,setSel]=useState({});
   const [sending,setSending]=useState(false);
@@ -2169,7 +2170,7 @@ function BulkTextSheet({ open, onClose, buyers, agentName, label, address }){
   useEffect(()=>{ setConfirm(false); },[msg,selected.length]);
   const insertToken=()=>{ const el=msgRef.current; if(!el){setMsg(m=>m+"{first_name}");return;} const a=el.selectionStart??msg.length,b=el.selectionEnd??msg.length; setMsg(msg.slice(0,a)+"{first_name}"+msg.slice(b)); setTimeout(()=>{el.focus();el.selectionStart=el.selectionEnd=a+12;},0); };
   const send=async()=>{ if(sending||!selected.length||!msg.trim())return; setSending(true); setDone(null); let ok=0,fail=0; setProgress({done:0,total:selected.length});
-    for(let i=0;i<selected.length;i++){ const b=selected[i]; try{ const r=await MM.sendMessage({toPhone:b.mobile,message:personalize(msg,b),agent:agentName}); if(r&&r.ok)ok++;else fail++; }catch{fail++;} setProgress({done:i+1,total:selected.length}); }
+    for(let i=0;i<selected.length;i++){ const b=selected[i]; const sent=personalize(msg,b); try{ const r=await MM.sendMessage({toPhone:b.mobile,message:sent,agent:agentName}); if(r&&r.ok){ok++; onLogNote&&onLogNote(b,sent);} else fail++; }catch{fail++;} setProgress({done:i+1,total:selected.length}); }
     setSending(false); setDone({ok,fail}); setProgress(null); };
   if(!open) return null;
   const preview=personalize(msg||"Hi {first_name}, …", selected[0]||withMobile[0]||{name:"there"});
@@ -2407,22 +2408,30 @@ function ContactSearch(){
 /* ════ BUYER FILTER — single dropdown (replaces the row of chips) ════ */
 function BuyerFilter({ options, active, onSelect }){
   const [open,setOpen]=useState(false);
-  const cur=options.find(o=>o.k===active)||options[0];
+  // Multi-select: `active` is an array of selected keys ([] = All). Tap toggles; you can
+  // combine (e.g. Warm + Contract sent = anyone who is warm OR has a contract).
+  const act = Array.isArray(active) ? active : (active&&active!=="all"?[active]:[]);
+  const selLabels = options.filter(o=>o.k!=="all"&&act.includes(o.k)).map(o=>o.l);
+  const btnLabel = act.length===0 ? "All buyers" : (act.length===1 ? selLabels[0] : `${act.length} filters`);
   return (
     <div style={{position:"relative",padding:"4px 0 12px"}}>
-      <button onClick={()=>setOpen(o=>!o)} style={{display:"flex",alignItems:"center",gap:9,background:SAND,border:`1px solid ${SAND_D}`,borderRadius:100,padding:"9px 16px",fontSize:13,fontWeight:700,color:BROWN,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>
-        <span>Filter: {cur.l}{cur.n!=null?` · ${cur.n}`:""}</span>
+      <button onClick={()=>setOpen(o=>!o)} style={{display:"flex",alignItems:"center",gap:9,background:act.length?LINEN:SAND,border:`1px solid ${act.length?BLUE:SAND_D}`,borderRadius:100,padding:"9px 16px",fontSize:13,fontWeight:700,color:BROWN,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>
+        <span>Filter: {btnLabel}</span>
         <span style={{fontSize:9,opacity:.55,transform:open?"rotate(180deg)":"none",transition:"transform .15s"}}>▼</span>
       </button>
       {open&&<>
         <div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:20}}/>
-        <div style={{position:"absolute",top:"100%",left:0,zIndex:21,marginTop:2,background:WHITE,border:`1px solid ${SAND_D}`,borderRadius:12,boxShadow:"0 8px 24px rgba(49,30,16,.16)",overflow:"hidden",minWidth:210,maxWidth:280}}>
-          {options.map((o,i)=>(
-            <button key={o.k} onClick={()=>{onSelect(o.k);setOpen(false);}} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,width:"100%",border:"none",borderTop:i?`1px solid ${SAND}`:"none",background:o.k===active?LINEN:"#fff",padding:"12px 16px",fontSize:14,fontWeight:o.k===active?700:500,color:BROWN,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",textAlign:"left"}}>
-              <span>{o.l}</span>
-              {o.n!=null&&<span style={{fontSize:12.5,color:o.k===active?BLUE_D:BROWN_L,fontWeight:700}}>{o.n}</span>}
+        <div style={{position:"absolute",top:"100%",left:0,zIndex:21,marginTop:2,background:WHITE,border:`1px solid ${SAND_D}`,borderRadius:12,boxShadow:"0 8px 24px rgba(49,30,16,.16)",overflow:"hidden",minWidth:230,maxWidth:290}}>
+          {options.map((o,i)=>{
+            const on = o.k==="all" ? act.length===0 : act.includes(o.k);
+            const exclusive = o.k==="all" || o.k==="enquiry"; // these close the menu; others stay open to combine
+            return (
+            <button key={o.k} onClick={()=>{onSelect(o.k); if(exclusive) setOpen(false);}} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,width:"100%",border:"none",borderTop:i?`1px solid ${SAND}`:"none",background:on?LINEN:"#fff",padding:"12px 16px",fontSize:14,fontWeight:on?700:500,color:BROWN,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",textAlign:"left"}}>
+              <span>{on&&o.k!=="all"?"✓ ":""}{o.l}</span>
+              {o.n!=null&&<span style={{fontSize:12.5,color:on?BLUE_D:BROWN_L,fontWeight:700}}>{o.n}</span>}
             </button>
-          ))}
+          );})}
+          {act.length>0&&<button onClick={()=>{onSelect("all");setOpen(false);}} style={{width:"100%",border:"none",borderTop:`1px solid ${SAND}`,background:"#fff",padding:"11px 16px",fontSize:13,fontWeight:700,color:BLUE_D,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",textAlign:"center"}}>Clear filters</button>}
         </div>
       </>}
     </div>
@@ -2486,15 +2495,19 @@ export default function App(){
   // Interest chips OR within interest; contract/repeat AND on top. e.g. "Contract + Hot".
   const INTEREST_KEYS=["hot","watching","cool"];
   const selInterests=bFilters.filter(k=>INTEREST_KEYS.includes(k));
+  // OR across selected filters (Luke's choice): "Warm + Contract sent" = anyone who is
+  // warm OR has a contract sent. Enquiry is handled separately (enqActive).
   const matchFilter=(b)=>{
-    if(selInterests.length && !selInterests.includes(b.interest)) return false;
-    if(bFilters.includes("contract") && !b.contractSent) return false;
-    if(bFilters.includes("repeat") && !((b.visits||1)>1)) return false;
-    return true;
+    const keys=bFilters.filter(k=>k!=="enquiry");
+    if(!keys.length) return true;
+    return keys.some(k=> k==="contract" ? !!b.contractSent : k==="repeat" ? ((b.visits||1)>1) : (b.interest===k));
   };
   const filterActive=bFilters.length>0;
   const byHeat=(a,b)=>buyerHeat(b).score-buyerHeat(a).score; // strongest buyers first
-  const filteredBuyers=enqActive?enquiries:propReal.filter(matchFilter).slice().sort(byHeat);
+  // Default order = interest level high→low (hot, watching, cool, then none), heat as tiebreak.
+  const _iRank={hot:3,watching:2,cool:1};
+  const byInterest=(a,b)=>((_iRank[b.interest]||0)-(_iRank[a.interest]||0))||(buyerHeat(b).score-buyerHeat(a).score);
+  const filteredBuyers=enqActive?enquiries:propReal.filter(matchFilter).slice().sort(byInterest);
   const countFor=(k)=>k==="enquiry"?enquiries.length:k==="contract"?propReal.filter(b=>b.contractSent).length:k==="repeat"?propReal.filter(b=>(b.visits||1)>1).length:propReal.filter(b=>b.interest===k).length;
   const toggleFilter=(k)=>setBFilters(prev=>prev.includes(k)?prev.filter(x=>x!==k):[...prev,k]);
   const rowOf=(b,kp)=>(
@@ -2518,7 +2531,7 @@ export default function App(){
           <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>
         </div>
       </div>
-      {(b.notes||[]).length>0&&<div className="row-note">{b.notes[b.notes.length-1].text}</div>}
+      {(b.notes||[]).length>0&&(()=>{const ln=b.notes[b.notes.length-1];const d=ln.ts?fmtDateTime(ln.ts):"";return <div className="row-note">{d&&<span style={{fontWeight:800,color:BROWN_L,marginRight:6}}>{d}</span>}{ln.text}</div>;})()}
     </div>
   );
 
@@ -2618,6 +2631,9 @@ export default function App(){
   const updateInterest=useCallback((pid,id,val)=>{
     if(!pid)return;
     setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(b=>b.id===id?{...b,interest:val}:b);return u;});
+    // Also update propBuyers — the listing's buyer list reads from this, so without it the
+    // interest change didn't show on the property until a full reload (Luke's live-update bug).
+    setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(b=>b.id===id?{...b,interest:val}:b);return u;});
     setActive(p=>p?.id===id?{...p,interest:val}:p);
     if(!isDemo&&openHome?.id) Attio.updateInspection(id,{interest:val}).catch(()=>{});
   },[isDemo,openHome]);
@@ -3051,8 +3067,12 @@ export default function App(){
         </div>}
         {/* Filter — a single dropdown to organise callbacks by interest / contract / repeat */}
         {propAll.length>0&&<BuyerFilter
-          active={bFilters[0]||"all"}
-          onSelect={k=>setBFilters(k==="all"?[]:[k])}
+          active={bFilters}
+          onSelect={k=>{
+            if(k==="all"){setBFilters([]);return;}
+            if(k==="enquiry"){setBFilters(prev=>prev[0]==="enquiry"?[]:["enquiry"]);return;}
+            setBFilters(prev=>{const base=prev.filter(x=>x!=="enquiry");return base.includes(k)?base.filter(x=>x!==k):[...base,k];});
+          }}
           options={[{k:"all",l:"All buyers",n:propReal.length}].concat(
             [{k:"hot",l:"🔥 Hot"},{k:"watching",l:"👀 Warm"},{k:"cool",l:"❄️ Cold"},{k:"contract",l:"📄 Contract sent"},{k:"repeat",l:"🔁 Repeat visit"},{k:"enquiry",l:"📨 Enquiries"}]
               .map(f=>({...f,n:countFor(f.k)})).filter(o=>o.n>0)
@@ -3076,11 +3096,11 @@ export default function App(){
             <div style={{fontSize:36,marginBottom:10}}>👥</div>
             <div style={{fontSize:14,lineHeight:1.5}}>No buyers yet — tap Add buyer to register the first.</div>
           </div>}
-          {pbReal.map(b=>rowOf(b,"o"))}
+          {pbReal.slice().sort(byInterest).map(b=>rowOf(b,"o"))}
           {propExtraReal.length>0&&<>
             <div className="sec-lbl" style={{padding:"20px 0 4px"}}>All buyers · this property</div>
             <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Everyone registered to this property to date — call back, add notes or send a contract any day.</div>
-            {propExtraReal.map(b=>rowOf(b,"p"))}
+            {propExtraReal.slice().sort(byInterest).map(b=>rowOf(b,"p"))}
           </>}
           {enquiries.length>0&&<>
             <div className="sec-lbl" style={{padding:"24px 0 4px"}}>📨 Enquiries · {enquiries.length}</div>
@@ -3099,7 +3119,7 @@ export default function App(){
     </button>}
     <AddSheet open={showAdd} onClose={()=>{setShowAdd(false);setAiPrefill(null);}} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)} prefill={aiPrefill}/>
     <AiAssistantSheet open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={handleEnquiry}/>
-    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} label={filterActive?(({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"):"All buyers"}/>
+    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} onLogNote={(b,sent)=>{ if(!isDemo&&openHome?.id&&b?.id) addNote(openHome.id,b.id,`📣 Bulk text sent: "${String(sent).slice(0,80)}${String(sent).length>80?"…":""}"`); }} label={filterActive?(({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"):"All buyers"}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id} propIndex={propIndex} opens={visibleOpens}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
