@@ -2751,7 +2751,7 @@ export default function App(){
       // Send a Savvi tracking link (logs each open, then redirects to the PDF) so text
       // contracts get the same opened/last-viewed tracking as emailed ones — falls back
       // to the raw URL for a not-yet-synced local buyer with no inspection id.
-      const trackUrl = (!isDemo && b._attioInspectionId) ? `https://n8n.getsavvi.com.au/c/${b._attioInspectionId.slice(0,13)}` : openHome.contractUrl;
+      const trackUrl = (!isDemo && b._attioInspectionId) ? `https://go.getsavvi.com.au/c/${b._attioInspectionId.slice(0,13)}` : openHome.contractUrl;
       MM.sendMessage({ toPhone:b.mobile, agent:agentName, message: buildContractSms({ firstName:(b.name||"").split(" ")[0], address:openHome.address, contractUrl:trackUrl, agent:agentName }) })
         .then(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); })
         .catch(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); });
