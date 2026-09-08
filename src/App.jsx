@@ -186,6 +186,7 @@ function normBuyer(b) {
     time: b.time || fmtTs(),
     firstSeen: b.firstSeen || new Date().toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }),
     visits: b.visits || 1,
+    openHomeIds: b.openHomeIds || (b.openHomeId ? [b.openHomeId] : []),
     _attioInspectionId: b.id,
   };
 }
@@ -296,6 +297,7 @@ const Attio = {
         smsSent: !!rval(insp, "sms_sent"), resendId: rval(insp, "resend_id") || null,
         contractOpens: rval(insp, "contract_opens") || "",
         notes: rval(insp, "notes") || "", _createdAt: insp?.created_at || null,
+        openHomeId: rref(insp, "open_home") || null,
       };
     };
     // A buyer can have several inspections for the same property (repeat visits,
@@ -320,6 +322,8 @@ const Attio = {
         // Real visits only — an online enquiry is NOT an inspection, so don't count it
         // (was over-counting, e.g. "3 visits" when they'd been through twice + 1 enquiry).
         visits: (list.filter(b => !/((REA|Domain|Portal)\s+enquiry|Enquiry via (text|sms|email|phone|dm))/i.test(String(b.notes||""))).length) || 1,
+        // Every open-home session this buyer came through (for the "filter by open" picker).
+        openHomeIds: [...new Set(list.map(b => b.openHomeId).filter(Boolean))],
       };
     };
     const openGroups = {}, propGroups = {};
@@ -439,6 +443,37 @@ const Attio = {
       const id = rid(p); const e = ext[id] || {};
       return { id, contactId: id, name: pnm(p) || "Unknown", mobile: pph(p), email: pem(p), interest: e.interest || "", notes: (e.notes || []).join(" • ") };
     });
+  },
+  // Full DetailSheet-ready profile for ONE contact, assembled from all their inspections
+  // across every property — powers the "search a buyer → open their page" flow.
+  async getContactProfile(contactId) {
+    await this.getAllContacts(); // populates _buyerRecCache
+    const insp = _buyerRecCache?.insp || [], ppl = _buyerRecCache?.ppl || [];
+    const rid = r => r?.id?.record_id ?? null;
+    const rref = (r, f) => r?.values?.[f]?.[0]?.target_record_id ?? null;
+    const rval = (r, f) => r?.values?.[f]?.[0]?.value ?? null;
+    const person = ppl.find(p => rid(p) === contactId); if (!person) return null;
+    const nm = person.values?.name?.[0] || {};
+    const name = `${nm.first_name || ""} ${nm.last_name || ""}`.trim() || "Unknown";
+    const mobile = person.values?.phone_numbers?.[0]?.phone_number || "";
+    const email = person.values?.email_addresses?.[0]?.email_address || "";
+    const mine = insp.filter(i => rref(i, "contact") === contactId);
+    const propMeta = await loadPropMeta();
+    const rank = { hot: 3, watching: 2, cool: 1 };
+    const ENQ = s => /((REA|Domain|Portal)\s+enquiry|Enquiry via (text|sms|email|phone|dm))/i.test(String(s || ""));
+    const sorted = [...mine].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    const primary = sorted[0];
+    const primPropId = primary ? rref(primary, "property") : null;
+    const primOhId = primary ? rref(primary, "open_home") : null;
+    const rawNotes = mine.map(i => rval(i, "notes") || "").filter(Boolean).join("\n---\n");
+    let interest = ""; mine.forEach(i => { const it = (rval(i, "interest") || "").toLowerCase(); if ((rank[it] || 0) > (rank[interest] || 0)) interest = it; });
+    const contractSent = mine.some(i => rval(i, "contract_sent") === true || String(rval(i, "contract_sent")) === "true");
+    const byProp = {};
+    mine.forEach(i => { const pr = rref(i, "property"); if (!pr) return; const it = (rval(i, "interest") || "").toLowerCase(); const e = byProp[pr] || (byProp[pr] = { ref: pr, interest: "", visits: 0, enquiredOnly: true }); e.visits++; if (!ENQ(rval(i, "notes"))) e.enquiredOnly = false; if ((rank[it] || 0) > (rank[e.interest] || 0)) e.interest = it; });
+    const otherProps = Object.values(byProp).map(e => { const m = propMeta[e.ref] || {}; return { ...e, address: m.address || "", suburb: m.suburb || "", price: m.price || "" }; });
+    const realVisits = mine.filter(i => !ENQ(rval(i, "notes"))).length || 1;
+    const b = normBuyer({ id: primary ? rid(primary) : contactId, contactId, name, mobile, email, interest, notes: rawNotes, contractSent, visits: realVisits });
+    return { ...b, otherProps, _primPropId: primPropId, _primOhId: primOhId, _primAddr: (propMeta[primPropId] || {}).address || "" };
   },
   // Natural-language search over the whole buyer database. propIndex maps a
   // property record id → "address, suburb" so location questions work too.
@@ -2354,7 +2389,7 @@ function BuyerMatch({ propIndex, agentName }) {
    For quickly finding someone to call, text, or check their notes. (Distinct
    from Buyer Match, which is AI criteria-matching + bulk SMS.)
 ════════════════════════════════════════════ */
-function ContactSearch(){
+function ContactSearch({ onOpen }){
   const [q,setQ]=useState("");
   const [all,setAll]=useState(null);
   const [loading,setLoading]=useState(false);
@@ -2381,13 +2416,14 @@ function ContactSearch(){
           {!loading&&results.length===0&&<div style={{color:BROWN_M,fontSize:13,padding:"14px"}}>No one found for “{q.trim()}”.</div>}
           {!loading&&results.map((b,i)=>(
             <div key={b.id||i} style={{padding:"11px 13px",borderTop:i?`1px solid ${SAND}`:"none"}}>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div onClick={()=>onOpen&&onOpen(b.contactId||b.id)} style={{display:"flex",alignItems:"center",gap:10,cursor:onOpen?"pointer":"default"}}>
                 <div className="av" style={{background:avCol(b),width:36,height:36,fontSize:14}}>{mkI(b.name||"?")}</div>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontWeight:700,color:ESPRESSO,fontSize:14.5}}>{b.name||"Unknown"}</div>
                   <div style={{fontSize:12,color:BROWN_L,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.mobile||b.email||"No contact details on file"}</div>
                 </div>
                 {b.interest&&<span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>}
+                {onOpen&&<span style={{color:BROWN_L,fontSize:20,fontWeight:700,marginLeft:2}}>›</span>}
               </div>
               {b.notes&&<div style={{marginTop:7,background:LINEN,borderRadius:8,padding:"7px 10px",fontSize:12,color:BROWN_M,lineHeight:1.45,borderLeft:`2.5px solid ${BLUE}35`}}>{b.notes.length>220?b.notes.slice(0,220)+"…":b.notes}</div>}
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
@@ -2458,6 +2494,18 @@ export default function App(){
   const[showDetail,setShowDetail]=useState(false);
   const[bFilters,setBFilters]=useState([]); // active keys: hot|watching|cool|contract|repeat (empty = all)
   const[active,setActive]=useState(null);
+  // Contact-search → open that person's full page (their profile across every property).
+  const[searchProfile,setSearchProfile]=useState(null);
+  const[searchDetailOpen,setSearchDetailOpen]=useState(false);
+  const[searchLoadingId,setSearchLoadingId]=useState(null);
+  const openContact=useCallback(async(contactId)=>{
+    if(!contactId)return; setSearchLoadingId(contactId);
+    try{ const p=await Attio.getContactProfile(contactId); if(p){ setSearchProfile(p); setSearchDetailOpen(true); } }
+    catch(e){} finally{ setSearchLoadingId(null); }
+  },[]);
+  // Synthetic open context for the searched contact (their most-recent inspection's property),
+  // so contract/interest actions target the right inspection.
+  const searchOpenHome = searchProfile ? { id: searchProfile._primOhId||`c_${searchProfile.contactId}`, propertyId: searchProfile._primPropId, address: searchProfile._primAddr||"", suburb:"", contractUrl:"", _listing:true } : null;
   const[showSum,setShowSum]=useState(false);
   const[showOk,setShowOk]=useState(false);
   const[lastAdded,setLastAdded]=useState(null);
@@ -2497,7 +2545,7 @@ export default function App(){
   const matchFilter=(b)=>{
     const keys=bFilters.filter(k=>k!=="enquiry");
     if(!keys.length) return true;
-    return keys.some(k=> k==="contract" ? !!b.contractSent : k==="repeat" ? ((b.visits||1)>1) : (b.interest===k));
+    return keys.some(k=> k==="contract" ? !!b.contractSent : k==="repeat" ? ((b.visits||1)>1) : k.slice(0,3)==="oh:" ? (b.openHomeIds||[]).includes(k.slice(3)) : (b.interest===k));
   };
   const filterActive=bFilters.length>0;
   const byHeat=(a,b)=>buyerHeat(b).score-buyerHeat(a).score; // strongest buyers first
@@ -2930,7 +2978,7 @@ export default function App(){
         </div>}
       </div>
 
-      <ContactSearch/>
+      <ContactSearch onOpen={openContact}/>
 
       {!loading&&<div className="seg" style={{marginTop:8,marginBottom:6}}>
         <button className={`seg-b ${homeTab==="opens"?"on":""}`} onClick={()=>setHomeTab("opens")}>🏠 Opens</button>
@@ -3073,7 +3121,14 @@ export default function App(){
           options={[{k:"all",l:"All buyers",n:propReal.length}].concat(
             [{k:"hot",l:"🔥 Hot"},{k:"watching",l:"👀 Warm"},{k:"cool",l:"❄️ Cold"},{k:"contract",l:"📄 Contract sent"},{k:"repeat",l:"🔁 Repeat visit"},{k:"enquiry",l:"📨 Enquiries"}]
               .map(f=>({...f,n:countFor(f.k)})).filter(o=>o.n>0)
-          )}
+          ).concat((()=>{
+            // Filter by which open session they came through — only shown when this
+            // property has more than one open, so the menu stays clean.
+            const propOpens=(visibleOpens||[]).filter(o=>o.propertyId===openHome?.propertyId&&!o._listing&&!o._demo);
+            if(propOpens.length<2) return [];
+            const lbl=o=>{const d=o.date?new Date(o.date+"T00:00:00"):null;const wd=d?d.toLocaleDateString("en-AU",{weekday:"short"}):"";const start=String(o.time||"").split(/[–-]/)[0].trim();return ["📅",wd,start].filter(Boolean).join(" ");};
+            return propOpens.map(o=>({k:"oh:"+o.id,l:lbl(o),n:propReal.filter(b=>(b.openHomeIds||[]).includes(o.id)).length})).filter(o=>o.n>0);
+          })())}
         />}
 
         {buyersLoading&&<div style={{textAlign:"center",padding:"24px"}}><div className="sp"/></div>}
@@ -3122,6 +3177,16 @@ export default function App(){
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
       onAddNote={addNote} onEditNote={editNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}
       onRemoveBuyer={removeBuyer} onTransferBuyer={transferBuyer} onRequestContract={requestContract}/>
+    {/* Contact-search detail: the searched person's full page, with their own inspection as
+        the edit context. View + call/text/email + notes + interest across every property. */}
+    <DetailSheet open={searchDetailOpen} onClose={()=>setSearchDetailOpen(false)} buyer={searchProfile}
+      openHome={searchOpenHome} propId={searchOpenHome?.id} propIndex={propIndex} opens={visibleOpens}
+      onUpdateInterest={(pid,id,val)=>{ setSearchProfile(a=>a&&{...a,interest:val}); if(!isDemo&&id) Attio.updateInspection(id,{interest:val}).catch(()=>{}); }}
+      onAddNote={(pid,id,text)=>{ const agentFull=AGENT_FULL[agentName]||agentName||""; const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:agentFull}; setSearchProfile(a=>{ if(!a) return a; const notes=[...(a.notes||[]),note]; if(!isDemo&&a._attioInspectionId){ const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; Attio.updateInspection(a._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); } return {...a,notes}; }); }}
+      onEditNote={(pid,id,noteId,text)=>{ setSearchProfile(a=>a&&{...a,notes:(a.notes||[]).map(n=>n.id===noteId?{...n,text}:n)}); }}
+      onSetProfile={(pid,id,pr)=>{ setSearchProfile(a=>a&&{...a,aiProfile:pr}); }}
+      onUpdateDetails={(pid,id,d)=>{ setSearchProfile(a=>a&&{...a,name:d.name,mobile:d.mobile,email:d.email}); if(!isDemo&&searchProfile?.contactId) Attio.updatePerson({id:searchProfile.contactId,name:d.name,email:d.email,mobile:d.mobile}).catch(()=>{}); }}
+      onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}}/>
     <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll}/>
     <QuickContractSheet
       open={showQuickContract}
