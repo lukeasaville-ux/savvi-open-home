@@ -317,7 +317,9 @@ const Attio = {
         contractSentTime: src.contractSentTime || (list.find(b => b.contractSentTime) || {}).contractSentTime || null,
         resendId: src.resendId || (list.find(b => b.resendId) || {}).resendId || null,
         contractOpens: [...lines].join("\n"),
-        visits: list.length,
+        // Real visits only — an online enquiry is NOT an inspection, so don't count it
+        // (was over-counting, e.g. "3 visits" when they'd been through twice + 1 enquiry).
+        visits: (list.filter(b => !/((REA|Domain|Portal)\s+enquiry|Enquiry via (text|sms|email|phone|dm))/i.test(String(b.notes||""))).length) || 1,
       };
     };
     const openGroups = {}, propGroups = {};
@@ -621,11 +623,9 @@ async function aiVendorSummary(openHome, buyers, mode) {
   // not named. (Post-open wrap keeps everyone who came through.)
   const named = isCampaign ? buyers.filter(b => !b.isEnquiry) : buyers;
   const enquiryCount = isCampaign ? buyers.filter(b => b.isEnquiry).length : 0;
-  // Buyer background: this contact's notes across EVERY property (one cached call).
-  // Feeds useful buyer facts (first-home-buyer, where they live, budget, must-haves)
-  // into the report when this property's own notes are thin.
-  const bgMap = {};
-  try { const contacts = await Attio.getAllContacts(); (contacts || []).forEach(c => { bgMap[c.contactId] = String(c.notes || "").split(" • ").map(s => s.trim()).filter(Boolean); }); } catch (e) {}
+  // NOTE: cross-property "background" was removed — it was leaking one property's feedback
+  // into another's report (Luke's bug). The vendor update now uses ONLY this property's own
+  // notes for each buyer, so nothing from any other listing can bleed in.
   const j = await call("aiVendorSummary", {
     openHomeId: openHome.id,
     propertyId: openHome.propertyId,
@@ -640,10 +640,7 @@ async function aiVendorSummary(openHome, buyers, mode) {
       // Only feed the "no chat" line when there's genuinely nothing else to say —
       // a contract-taker's story is the contract, so leave that to the flag.
       const notes = noteTexts.length ? noteTexts : (b.contractSent ? [] : (isCampaign ? [] : [VENDOR_NO_NOTE]));
-      // background = this buyer's notes across their whole file (other properties too),
-      // used only for buyer facts when this property's notes are thin.
-      const background = (b.contactId && bgMap[b.contactId]) ? bgMap[b.contactId] : [];
-      return { name: firstName, contactId: b.contactId || null, interest: b.interest, contractSent: !!b.contractSent, visits: b.visits || 1, notes, background };
+      return { name: firstName, contactId: b.contactId || null, interest: b.interest, contractSent: !!b.contractSent, visits: b.visits || 1, notes, background: [] };
     }),
   });
   if (j?.ok) { const t = j.data?.text || j.text || (typeof j.data === "string" ? j.data : ""); if (t) return t; }
