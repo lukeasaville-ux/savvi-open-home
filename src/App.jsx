@@ -446,7 +446,7 @@ const Attio = {
   },
   // Full DetailSheet-ready profile for ONE contact, assembled from all their inspections
   // across every property — powers the "search a buyer → open their page" flow.
-  async getContactProfile(contactId) {
+  async getContactProfile(contactId, propRef) {
     await this.getAllContacts(); // populates _buyerRecCache
     const insp = _buyerRecCache?.insp || [], ppl = _buyerRecCache?.ppl || [];
     const rid = r => r?.id?.record_id ?? null;
@@ -462,18 +462,25 @@ const Attio = {
     const rank = { hot: 3, watching: 2, cool: 1 };
     const ENQ = s => /((REA|Domain|Portal)\s+enquiry|Enquiry via (text|sms|email|phone|dm))/i.test(String(s || ""));
     const sorted = [...mine].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-    const primary = sorted[0];
-    const primPropId = primary ? rref(primary, "property") : null;
+    // Scope the page to a specific property when asked (clicking an "other property" card),
+    // else default to their most-recent inspection.
+    const primary = propRef ? (sorted.find(i => rref(i, "property") === propRef) || sorted[0]) : sorted[0];
+    const curProp = propRef || (primary ? rref(primary, "property") : null);
     const primOhId = primary ? rref(primary, "open_home") : null;
-    const rawNotes = mine.map(i => rval(i, "notes") || "").filter(Boolean).join("\n---\n");
-    let interest = ""; mine.forEach(i => { const it = (rval(i, "interest") || "").toLowerCase(); if ((rank[it] || 0) > (rank[interest] || 0)) interest = it; });
-    const contractSent = mine.some(i => rval(i, "contract_sent") === true || String(rval(i, "contract_sent")) === "true");
+    // Notes + interest are scoped to the CURRENT property's inspections, so the page reads
+    // as "this buyer, on this listing".
+    const curInsp = curProp ? mine.filter(i => rref(i, "property") === curProp) : mine;
+    const scoped = curInsp.length ? curInsp : mine;
+    const rawNotes = scoped.map(i => rval(i, "notes") || "").filter(Boolean).join("\n---\n");
+    let interest = ""; scoped.forEach(i => { const it = (rval(i, "interest") || "").toLowerCase(); if ((rank[it] || 0) > (rank[interest] || 0)) interest = it; });
+    const contractSent = scoped.some(i => rval(i, "contract_sent") === true || String(rval(i, "contract_sent")) === "true");
     const byProp = {};
     mine.forEach(i => { const pr = rref(i, "property"); if (!pr) return; const it = (rval(i, "interest") || "").toLowerCase(); const e = byProp[pr] || (byProp[pr] = { ref: pr, interest: "", visits: 0, enquiredOnly: true }); e.visits++; if (!ENQ(rval(i, "notes"))) e.enquiredOnly = false; if ((rank[it] || 0) > (rank[e.interest] || 0)) e.interest = it; });
-    const otherProps = Object.values(byProp).map(e => { const m = propMeta[e.ref] || {}; return { ...e, address: m.address || "", suburb: m.suburb || "", price: m.price || "" }; });
-    const realVisits = mine.filter(i => !ENQ(rval(i, "notes"))).length || 1;
+    // "Other" = every property EXCEPT the one we're currently viewing.
+    const otherProps = Object.values(byProp).filter(e => e.ref !== curProp).map(e => { const m = propMeta[e.ref] || {}; return { ...e, address: m.address || "", suburb: m.suburb || "", price: m.price || "" }; });
+    const realVisits = scoped.filter(i => !ENQ(rval(i, "notes"))).length || 1;
     const b = normBuyer({ id: primary ? rid(primary) : contactId, contactId, name, mobile, email, interest, notes: rawNotes, contractSent, visits: realVisits });
-    return { ...b, otherProps, _primPropId: primPropId, _primOhId: primOhId, _primAddr: (propMeta[primPropId] || {}).address || "" };
+    return { ...b, otherProps, _primPropId: curProp, _primOhId: primOhId, _primAddr: (propMeta[curProp] || {}).address || "" };
   },
   // Natural-language search over the whole buyer database. propIndex maps a
   // property record id → "address, suburb" so location questions work too.
@@ -732,10 +739,11 @@ function buildContractSms({ firstName, address, contractUrl, agent }){
   // SMS segment now that links aren't auto-shortened. Link still isolated on its own
   // line — the format iMessage/SMS clients linkify most reliably.
   const addr = String(address||"the property").split(",")[0].trim();
+  // Link goes LAST, with nothing after it — iOS Messages is far more likely to unfurl a
+  // link preview card when the URL is the final thing in the message. Sign-off folded up.
   return [
-    `Hi ${firstName||"there"}, here's the contract & Section 32 for ${addr}:`,
+    `Hi ${firstName||"there"}, here's the contract & Section 32 for ${addr} — ${sig}, Savvi:`,
     `${contractUrl}`,
-    `Thanks, ${sig}`,
   ].join("\n");
 }
 const CONTACTS_CACHE=[
@@ -1603,7 +1611,7 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract, hasContrac
 /* ════════════════════════════════════════════
    BUYER DETAIL SHEET
 ════════════════════════════════════════════ */
-function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract}){
+function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact}){
   const[noteText,setNoteText]=useState("");
   const[showNote,setShowNote]=useState(false);
   const[copied,setCopied]=useState(false);
@@ -1789,13 +1797,13 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         if(real){
           return real.length===0
             ? <p className="no-hist">No other property activity yet.</p>
-            : <div className="hist-scroll">{real.map((o,i)=><div key={i} className="hcard">
-                <div className="hc-addr">{o.addr||"Another Savvi listing"}</div>
+            : <div className="hist-scroll">{real.map((o,i)=>{const tappable=onOpenContact&&buyer.contactId&&o.ref;return <div key={i} className="hcard" onClick={tappable?()=>onOpenContact(buyer.contactId,o.ref):undefined} style={tappable?{cursor:"pointer"}:undefined}>
+                <div className="hc-addr" style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}><span>{o.addr||"Another Savvi listing"}</span>{tappable&&<span style={{color:BLUE_D,fontWeight:800,fontSize:16}}>›</span>}</div>
                 <div className="hc-sub">{[o.sub, o.enquiredOnly?"Enquired online":`Inspected${o.visits>1?` · ${o.visits} visits`:""}`].filter(Boolean).join(" · ")}</div>
                 <div className="hc-sep"/>
                 <div className="hc-row"><span className="hc-lbl">Interest</span><span className="hc-val" style={{color:o.interest?iCol(o.interest):"#C0B8A8"}}>{o.interest?iLbl(o.interest):"—"}</span></div>
                 {o.price&&<div className="hc-row"><span className="hc-lbl">Price</span><span className="hc-val">{o.price}</span></div>}
-              </div>)}</div>;
+              </div>;})}</div>;
         }
         return hist.length===0?<p className="no-hist">No prior inspection history.</p>
           :<div className="hist-scroll">{hist.map((h,i)=><div key={i} className="hcard">
@@ -2506,9 +2514,9 @@ export default function App(){
   const[searchProfile,setSearchProfile]=useState(null);
   const[searchDetailOpen,setSearchDetailOpen]=useState(false);
   const[searchLoadingId,setSearchLoadingId]=useState(null);
-  const openContact=useCallback(async(contactId)=>{
+  const openContact=useCallback(async(contactId,propRef)=>{
     if(!contactId)return; setSearchLoadingId(contactId);
-    try{ const p=await Attio.getContactProfile(contactId); if(p){ setSearchProfile(p); setSearchDetailOpen(true); } }
+    try{ const p=await Attio.getContactProfile(contactId,propRef); if(p){ setSearchProfile(p); setSearchDetailOpen(true); } }
     catch(e){} finally{ setSearchLoadingId(null); }
   },[]);
   // Synthetic open context for the searched contact (their most-recent inspection's property),
@@ -3198,7 +3206,7 @@ export default function App(){
       openHome={openHome} propId={openHome?.id} propIndex={propIndex} opens={visibleOpens}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
       onAddNote={addNote} onEditNote={editNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}
-      onRemoveBuyer={removeBuyer} onTransferBuyer={transferBuyer} onRequestContract={requestContract}/>
+      onRemoveBuyer={removeBuyer} onTransferBuyer={transferBuyer} onRequestContract={requestContract} onOpenContact={openContact}/>
     {/* Contact-search detail: the searched person's full page, with their own inspection as
         the edit context. View + call/text/email + notes + interest across every property. */}
     <DetailSheet open={searchDetailOpen} onClose={()=>setSearchDetailOpen(false)} buyer={searchProfile}
@@ -3208,7 +3216,7 @@ export default function App(){
       onEditNote={(pid,id,noteId,text)=>{ setSearchProfile(a=>a&&{...a,notes:(a.notes||[]).map(n=>n.id===noteId?{...n,text}:n)}); }}
       onSetProfile={(pid,id,pr)=>{ setSearchProfile(a=>a&&{...a,aiProfile:pr}); }}
       onUpdateDetails={(pid,id,d)=>{ setSearchProfile(a=>a&&{...a,name:d.name,mobile:d.mobile,email:d.email}); if(!isDemo&&searchProfile?.contactId) Attio.updatePerson({id:searchProfile.contactId,name:d.name,email:d.email,mobile:d.mobile}).catch(()=>{}); }}
-      onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}}/>
+      onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}} onOpenContact={openContact}/>
     <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll}/>
     <QuickContractSheet
       open={showQuickContract}
