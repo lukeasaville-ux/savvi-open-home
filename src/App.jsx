@@ -2481,6 +2481,7 @@ export default function App(){
   const[agentName,setAgentName]=useState(()=>{ try { return SESSION_TOKEN ? (sessionStorage.getItem("savvi_who")||"") : ""; } catch(e){ return ""; } });
   const[screen,setScreen]=useState("home");
   const[homeTab,setHomeTab]=useState("opens"); // opens | match — swipeable tabs on the home screen
+  const[listingQ,setListingQ]=useState(""); // search box to jump to a listing/open without scrolling
   const swipeRef=useRef(null);
   const onHomeTouchStart=e=>{const t=e.touches[0];swipeRef.current={x:t.clientX,y:t.clientY};};
   const onHomeTouchEnd=e=>{
@@ -2950,6 +2951,10 @@ export default function App(){
   visibleOpens.forEach(oh => { if (oh.propertyId) propIndex[oh.propertyId] = `${oh.address||""}${oh.suburb?", "+oh.suburb:""}`.trim(); });
   (allListings||[]).forEach(p => { const pid = p.propertyId||p.id; if (pid && !propIndex[pid]) propIndex[pid] = `${p.address||""}${p.suburb?", "+p.suburb:""}`.trim(); });
   const listingsOnly = allListings.filter(p => !openPropIds.has(Attio.id(p)));
+  // Listing/open search: match on address + suburb so an agent can jump straight to one.
+  const _lq = listingQ.trim().toLowerCase();
+  const _oMatch = oh => !_lq || `${oh.address||""} ${oh.suburb||""}`.toLowerCase().includes(_lq);
+  const _lMatch = p => !_lq || `${p.address||""} ${p.suburb||""}`.toLowerCase().includes(_lq);
 
   const fmtDay = dateStr => {
     if (!dateStr || dateStr === "unknown") return "Scheduled";
@@ -3006,14 +3011,23 @@ export default function App(){
           <strong>Demo mode</strong> — Attio connected but no opens scheduled this week. Add open homes in Attio to see live data here.
         </div>}
 
+        {/* Jump straight to a listing/open by address — no scrolling. */}
+        {!isDemo&&<div style={{padding:"12px 14px 4px"}}>
+          <div style={{position:"relative"}}>
+            <input value={listingQ} onChange={e=>setListingQ(e.target.value)} placeholder="🔍 Find a listing — address"
+              style={{width:"100%",background:WHITE,border:`1.5px solid ${SAND_D}`,borderRadius:100,padding:"11px 40px 11px 16px",fontSize:14,color:BROWN,outline:"none",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}/>
+            {listingQ&&<button onClick={()=>setListingQ("")} aria-label="Clear" style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",width:26,height:26,borderRadius:"50%",background:SAND,border:"none",color:BROWN_M,fontSize:13,cursor:"pointer"}}>✕</button>}
+          </div>
+        </div>}
+
         {/* ── OPEN HOMES: grouped by day ── */}
-        <div className="sec-lbl">{opensStale?"Last Week's Open Homes":"This Week's Open Homes"}</div>
-        {openDays.map(day => (
+        {openDays.filter(d=>opensByDay[d].some(_oMatch)).length>0&&<div className="sec-lbl">{opensStale?"Last Week's Open Homes":"This Week's Open Homes"}</div>}
+        {openDays.filter(d=>opensByDay[d].some(_oMatch)).map(day => (
           <div key={day}>
             <div style={{padding:"6px 20px 4px",fontSize:11,fontWeight:700,color:BLUE_D,textTransform:"uppercase",letterSpacing:.8}}>
               {fmtDay(day)}
             </div>
-            {opensByDay[day].map(oh=><div key={oh.id} className="pc" onClick={()=>enterOpenHome(oh)}>
+            {opensByDay[day].filter(_oMatch).map(oh=><div key={oh.id} className="pc" onClick={()=>enterOpenHome(oh)}>
               <div className="pc-bar"/>
               <div className="pc-body">
                 <div className="pc-top">
@@ -3032,10 +3046,11 @@ export default function App(){
 
         {/* ── ALL LISTINGS: active properties not in opens ── */}
         {!isDemo&&<>
-          <div className="sec-lbl" style={{paddingTop:22}}>All Active Listings</div>
-          <div style={{padding:"0 20px 10px",fontSize:12,color:BROWN_L}}>Register walk-ins and phone enquiries, or send contracts any time</div>
-          {listingsOnly.length===0&&<div style={{padding:"0 20px 16px",fontSize:13,color:BROWN_L}}>All active listings are already in this week's opens.</div>}
-          {listingsOnly.map(p => {
+          {listingsOnly.filter(_lMatch).length>0&&<><div className="sec-lbl" style={{paddingTop:22}}>All Active Listings</div>
+          <div style={{padding:"0 20px 10px",fontSize:12,color:BROWN_L}}>Register walk-ins and phone enquiries, or send contracts any time</div></>}
+          {_lq&&listingsOnly.filter(_lMatch).length===0&&openDays.filter(d=>opensByDay[d].some(_oMatch)).length===0&&<div style={{padding:"18px 20px",fontSize:13.5,color:BROWN_L,textAlign:"center"}}>No listing matches “{listingQ.trim()}”.</div>}
+          {!_lq&&listingsOnly.length===0&&<div style={{padding:"0 20px 16px",fontSize:13,color:BROWN_L}}>All active listings are already in this week's opens.</div>}
+          {listingsOnly.filter(_lMatch).map(p => {
             const addr   = p.address || "Unknown";
             const suburb = p.suburb || "";
             const beds   = p.beds;
