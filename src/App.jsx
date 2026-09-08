@@ -694,14 +694,15 @@ function buildWelcomeSms({ firstName, address, igUrl, agent, inspectionId }){
 // Sent via the sendSms custom-message path (same transport as the welcome SMS).
 function buildContractSms({ firstName, address, contractUrl, agent }){
   const sig = smsSig(agent);
-  // Link isolated on its own line (nothing before/after it) — the format iMessage/SMS
-  // clients linkify most reliably.
+  // Street line only (drop suburb) + single-line spacing so the whole message fits one
+  // SMS segment now that links aren't auto-shortened. Link still isolated on its own
+  // line — the format iMessage/SMS clients linkify most reliably.
+  const addr = String(address||"the property").split(",")[0].trim();
   return [
-    `Hi ${firstName||"there"},`,
-    `As promised, here's the contract of sale for ${address||"the property"}:`,
+    `Hi ${firstName||"there"}, here's the contract & Section 32 for ${addr}:`,
     `${contractUrl}`,
-    `Thanks,\n${sig}`,
-  ].join("\n\n");
+    `Thanks, ${sig}`,
+  ].join("\n");
 }
 const CONTACTS_CACHE=[
   {id:"c1",name:"Sarah Chen",      mobile:"0412 345 678",email:"sarah.chen@gmail.com",  col:"#C75B3A"},
@@ -2689,7 +2690,7 @@ export default function App(){
       // Send a Savvi tracking link (logs each open, then redirects to the PDF) so text
       // contracts get the same opened/last-viewed tracking as emailed ones — falls back
       // to the raw URL for a not-yet-synced local buyer with no inspection id.
-      const trackUrl = (!isDemo && b._attioInspectionId) ? `${FOLLOWUP_URL}?t=${b._attioInspectionId}&c=1` : openHome.contractUrl;
+      const trackUrl = (!isDemo && b._attioInspectionId) ? `https://n8n.getsavvi.com.au/c/${b._attioInspectionId}` : openHome.contractUrl;
       MM.sendMessage({ toPhone:b.mobile, agent:agentName, message: buildContractSms({ firstName:(b.name||"").split(" ")[0], address:openHome.address, contractUrl:trackUrl, agent:agentName }) })
         .then(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); })
         .catch(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); });
