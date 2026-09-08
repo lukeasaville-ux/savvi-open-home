@@ -9,6 +9,8 @@ import wordmark from "./assets/savvi-wordmark.png";
    Anthropic keys server-side and requires a session token.
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
+// Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
+const BUILD = "v9-09b · tap-in";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2991,7 +2993,7 @@ export default function App(){
           {!loading&&<button className="logout-btn" onClick={()=>{logout();setAgentName("");}}>Log out</button>}
         </div>
         <div className="greeting">{melbGreeting()}, {agentName}</div>
-        <div className="hdate">{today}</div>
+        <div className="hdate">{today}<span style={{marginLeft:8,fontSize:9,opacity:.4,letterSpacing:.3}}>{BUILD}</span></div>
         {!loading&&<div className="hdr-chips">
           <div className="opens-chip">{`${visibleOpens.length} open${visibleOpens.length!==1?"s":""}${opensStale?"":" this week"}`}</div>
           <button className="add-listing-btn" onClick={()=>setShowAddListing(true)}>+ Add listing</button>
