@@ -2993,7 +2993,7 @@ export default function App(){
           {!loading&&<button className="logout-btn" onClick={()=>{logout();setAgentName("");}}>Log out</button>}
         </div>
         <div className="greeting">{melbGreeting()}, {agentName}</div>
-        <div className="hdate">{today}<span style={{marginLeft:8,fontSize:9,opacity:.4,letterSpacing:.3}}>{BUILD}</span></div>
+        <div className="hdate" data-build={BUILD}>{today}</div>
         {!loading&&<div className="hdr-chips">
           <div className="opens-chip">{`${visibleOpens.length} open${visibleOpens.length!==1?"s":""}${opensStale?"":" this week"}`}</div>
           <button className="add-listing-btn" onClick={()=>setShowAddListing(true)}>+ Add listing</button>
