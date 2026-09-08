@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v9-09b · tap-in";
+const BUILD = "v10-09c";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1578,14 +1578,19 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract, hasContrac
   // ("clicked" = viewed the contract), and TEXTED contracts via the Savvi tracking link
   // ("opened" = each tap that redirected them to the PDF).
   const emailed = !!buyer.resendId;
-  const views = (buyer.contractOpens || []).filter(o => emailed ? o.kind === "clicked" : o.kind === "opened")
+  // Count EVERY view event (a texted tap-through logs "opened"; an emailed contract-link
+  // click logs "clicked", an email open logs "opened") — the agent just wants how many
+  // times they opened it and when last, regardless of channel.
+  const views = (buyer.contractOpens || []).filter(o => o.kind === "opened" || o.kind === "clicked")
     .slice().sort((a, b) => new Date(a.at) - new Date(b.at));
   // Fall back to Resend's live last-event if the per-event list hasn't synced yet.
   const trackingClicked = tracking && tracking.status === "clicked";
   const viewed = views.length > 0 || (emailed && trackingClicked);
   const lastViewedAt = views.length > 0 ? views[views.length - 1].at : (trackingClicked ? tracking.updatedAt : null);
   const viewCount = views.length;
-  const viewedLine = `Opened ${fmtDateTime(lastViewedAt).replace(", ", " at ")}${viewCount > 1 ? ` (×${viewCount})` : ""}`;
+  const viewedLine = viewCount > 1
+    ? `Opened ${viewCount}× · last ${fmtDateTime(lastViewedAt).replace(", ", " at ")}`
+    : `Opened ${fmtDateTime(lastViewedAt).replace(", ", " at ")}`;
   const emailSub = loadingTrack ? "Checking status…" : (tracking ? statusLabel(tracking.status) : "Email sent");
 
   return (
@@ -2406,8 +2411,7 @@ function BuyerMatch({ propIndex, agentName }) {
    For quickly finding someone to call, text, or check their notes. (Distinct
    from Buyer Match, which is AI criteria-matching + bulk SMS.)
 ════════════════════════════════════════════ */
-function ContactSearch({ onOpen }){
-  const [q,setQ]=useState("");
+function ContactSearch({ onOpen, q, setQ }){
   const [all,setAll]=useState(null);
   const [loading,setLoading]=useState(false);
   const load=()=>{ if(all!==null||loading)return; setLoading(true); Attio.getAllContacts().then(b=>{setAll(b||[]);setLoading(false);}).catch(()=>{setAll([]);setLoading(false);}); };
@@ -2423,14 +2427,13 @@ function ContactSearch({ onOpen }){
     <div style={{padding:"12px 14px 2px"}}>
       <div style={{position:"relative"}}>
         <input value={q} onFocus={load} onChange={e=>setQ(e.target.value)}
-          placeholder="🔍 Find a contact — name or mobile"
+          placeholder="🔍 Find a listing or contact"
           style={{width:"100%",background:WHITE,border:`1.5px solid ${SAND_D}`,borderRadius:100,padding:"11px 40px 11px 16px",fontSize:14,color:BROWN,outline:"none",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}/>
         {q&&<button onClick={()=>setQ("")} aria-label="Clear" style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",width:26,height:26,borderRadius:"50%",background:SAND,border:"none",color:BROWN_M,fontSize:13,cursor:"pointer"}}>✕</button>}
       </div>
-      {show&&(
+      {show&&(loading||results.length>0)&&(
         <div style={{marginTop:8,background:WHITE,borderRadius:14,border:`1px solid ${SAND_D}`,boxShadow:"0 2px 12px rgba(49,30,16,.12)",overflow:"hidden"}}>
-          {loading&&<div style={{display:"flex",alignItems:"center",gap:10,color:BROWN_M,fontSize:13,padding:"14px"}}><div className="sp" style={{width:16,height:16}}/> Loading contacts…</div>}
-          {!loading&&results.length===0&&<div style={{color:BROWN_M,fontSize:13,padding:"14px"}}>No one found for “{q.trim()}”.</div>}
+          {loading&&<div style={{display:"flex",alignItems:"center",gap:10,color:BROWN_M,fontSize:13,padding:"14px"}}><div className="sp" style={{width:16,height:16}}/> Searching…</div>}
           {!loading&&results.map((b,i)=>(
             <div key={b.id||i} style={{padding:"11px 13px",borderTop:i?`1px solid ${SAND}`:"none"}}>
               <div onClick={()=>onOpen&&onOpen(b.contactId||b.id)} style={{display:"flex",alignItems:"center",gap:10,cursor:onOpen?"pointer":"default"}}>
@@ -3000,7 +3003,7 @@ export default function App(){
         </div>}
       </div>
 
-      <ContactSearch onOpen={openContact}/>
+      <ContactSearch onOpen={openContact} q={listingQ} setQ={setListingQ}/>
 
       {!loading&&<div className="seg" style={{marginTop:8,marginBottom:6}}>
         <button className={`seg-b ${homeTab==="opens"?"on":""}`} onClick={()=>setHomeTab("opens")}>🏠 Opens</button>
@@ -3021,16 +3024,7 @@ export default function App(){
           <strong>Demo mode</strong> — Attio connected but no opens scheduled this week. Add open homes in Attio to see live data here.
         </div>}
 
-        {/* Jump straight to a listing/open by address — no scrolling. */}
-        {!isDemo&&<div style={{padding:"12px 14px 4px"}}>
-          <div style={{position:"relative"}}>
-            <input value={listingQ} onChange={e=>setListingQ(e.target.value)} placeholder="🔍 Find a listing — address"
-              style={{width:"100%",background:WHITE,border:`1.5px solid ${SAND_D}`,borderRadius:100,padding:"11px 40px 11px 16px",fontSize:14,color:BROWN,outline:"none",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}/>
-            {listingQ&&<button onClick={()=>setListingQ("")} aria-label="Clear" style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",width:26,height:26,borderRadius:"50%",background:SAND,border:"none",color:BROWN_M,fontSize:13,cursor:"pointer"}}>✕</button>}
-          </div>
-        </div>}
-
-        {/* ── OPEN HOMES: grouped by day ── */}
+        {/* ── OPEN HOMES: grouped by day (filtered by the single search bar above) ── */}
         {openDays.filter(d=>opensByDay[d].some(_oMatch)).length>0&&<div className="sec-lbl">{opensStale?"Last Week's Open Homes":"This Week's Open Homes"}</div>}
         {openDays.filter(d=>opensByDay[d].some(_oMatch)).map(day => (
           <div key={day}>
@@ -3058,7 +3052,6 @@ export default function App(){
         {!isDemo&&<>
           {listingsOnly.filter(_lMatch).length>0&&<><div className="sec-lbl" style={{paddingTop:22}}>All Active Listings</div>
           <div style={{padding:"0 20px 10px",fontSize:12,color:BROWN_L}}>Register walk-ins and phone enquiries, or send contracts any time</div></>}
-          {_lq&&listingsOnly.filter(_lMatch).length===0&&openDays.filter(d=>opensByDay[d].some(_oMatch)).length===0&&<div style={{padding:"18px 20px",fontSize:13.5,color:BROWN_L,textAlign:"center"}}>No listing matches “{listingQ.trim()}”.</div>}
           {!_lq&&listingsOnly.length===0&&<div style={{padding:"0 20px 16px",fontSize:13,color:BROWN_L}}>All active listings are already in this week's opens.</div>}
           {listingsOnly.filter(_lMatch).map(p => {
             const addr   = p.address || "Unknown";
