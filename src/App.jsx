@@ -750,6 +750,9 @@ const iLbl=v=>({hot:"Hot 🔥",watching:"Watching 👀",cool:"Cool ❄️"}[v]||
 const iCol=v=>({hot:"#C0392B",watching:"#B7770D",cool:"#7F8C8D"}[v]||"#5A7FBF");
 const mkI =n=>n.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
 const norm=s=>s.replace(/\s+/g,"");
+// Canonical mobile key for search: digits only, with the +61 / leading 0 stripped, so
+// "0404 433 897", "+61404433897" and "404433897" all match the same buyer.
+const phoneKey=s=>{ let d=String(s||"").replace(/\D/g,""); if(d.indexOf("61")===0) d=d.slice(2); if(d[0]==="0") d=d.slice(1); return d; };
 // Buyer "heat" — a 0-100 strength score, weighted (per Luke) most heavily on repeat
 // inspections, contract requests/sends, how many times the contract's been opened, and
 // notes showing real buying signals (bidding / offer / settlement terms). Returns {score, why}.
@@ -2394,11 +2397,11 @@ function ContactSearch({ onOpen }){
   const [all,setAll]=useState(null);
   const [loading,setLoading]=useState(false);
   const load=()=>{ if(all!==null||loading)return; setLoading(true); Attio.getAllContacts().then(b=>{setAll(b||[]);setLoading(false);}).catch(()=>{setAll([]);setLoading(false);}); };
-  const t=q.trim().toLowerCase(), tn=norm(q);
+  const t=q.trim().toLowerCase(), tq=phoneKey(q);
   const show=t.length>=2;
   const results=(show&&all)?all.filter(b=>
     (b.name||"").toLowerCase().includes(t) ||
-    (tn.length>=3 && norm(b.mobile||"").includes(tn)) ||
+    (tq.length>=3 && phoneKey(b.mobile||"").includes(tq)) ||
     (b.email||"").toLowerCase().includes(t)
   ).slice(0,15):[];
   const avCol=b=>b.col||AVATAR_COLS[Math.abs((b.name||"x").charCodeAt(0)||65)%AVATAR_COLS.length];
