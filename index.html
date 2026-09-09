@@ -25,6 +25,9 @@
   /* Pin the app to the *dynamic* viewport (dvh) so it doesn't jump as Safari's
      toolbar hides/shows, and centre it as a phone-width frame on any device. */
   #root { height: 100vh; height: 100dvh; max-width: 460px; margin: 0 auto; background: #F4F0E8; overflow: hidden; position: relative; }
+  /* On a computer (wide screen), use a bigger centred window — phone layout is untouched
+     (a phone in portrait is ≤460px, well under this breakpoint). */
+  @media (min-width: 760px) { #root { max-width: 700px; box-shadow: 0 0 60px rgba(0,0,0,0.25); } }
 </style>
 </head>
 <body>
