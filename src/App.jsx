@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v10-09c";
+const BUILD = "v11-09d";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3065,14 +3065,16 @@ export default function App(){
             const auctionDate = p.auctionDate || "";
             const synthOh = { id:`listing_${pid}`, propertyId:pid, address:addr, suburb, beds, baths, car, price, igUrl:p.igUrl||"", contractUrl:contUrl, listingNotes:p.listingNotes||"", time:"", date:"", agent:agentName, _listing:true };
             return (
-              <div key={pid} className="pc" style={{borderLeft:`4px solid ${SAND_D}`,cursor:"default"}}>
+              <div key={pid} className="pc" style={{borderLeft:`4px solid ${SAND_D}`}}>
                 <div className="pc-bar" style={{background:SAND_D}}/>
                 <div className="pc-body">
-                  <div className="pc-top">
+                  {/* Tap the info area to open the listing's full buyer list (everyone who's
+                      inspected/enquired on this property to date). */}
+                  <div className="pc-top" onClick={()=>enterOpenHome(synthOh)} style={{cursor:"pointer"}}>
                     <div><div className="pc-addr">{streetLine(addr,suburb)}</div><div className="pc-suburb">{suburb}</div>{auctionDate&&<div className="pc-suburb" style={{color:"#FE5310",fontWeight:700,marginTop:1}}>🔨 Auction {fmtAuction(auctionDate)}</div>}</div>
-                    <span style={{fontSize:11,color:BROWN_L,fontWeight:500,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:6,padding:"4px 9px",whiteSpace:"nowrap"}}>{auctionDate?"Auction":"Listing"}</span>
+                    <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:11,color:BROWN_L,fontWeight:500,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:6,padding:"4px 9px",whiteSpace:"nowrap"}}>{auctionDate?"Auction":"Listing"}</span><span style={{color:BLUE_D,fontWeight:800,fontSize:18}}>›</span></div>
                   </div>
-                  <div className="pc-bot">
+                  <div className="pc-bot" onClick={()=>enterOpenHome(synthOh)} style={{cursor:"pointer"}}>
                     <span className="pc-type">{[beds&&`${beds}b`,baths&&`${baths}ba`,car&&`${car}c`].filter(Boolean).join(" · ")||"Apartment"}</span>
                     <span className="pc-price">{price}</span>
                   </div>
@@ -3103,16 +3105,16 @@ export default function App(){
       <SBar/>
       <div className="nav-hdr"><button className="back" onClick={()=>setScreen("home")}>← All opens</button></div>
       <div className="prop-hdr">
-        <div className="prop-live"><div className="ldot"/><span className="live-lbl">Live open</span></div>
+        <div className="prop-live"><div className="ldot" style={openHome._listing?{background:SAND_D}:undefined}/><span className="live-lbl">{openHome._listing?"Listing":"Live open"}</span></div>
         <div className="prop-addr">{streetLine(openHome.address,openHome.suburb)}</div>
-        <div className="prop-sub">{openHome.suburb} · {openHome.time}{openHome.price?` · ${openHome.price}`:""}</div>
+        <div className="prop-sub">{[openHome.suburb,openHome.time,openHome.price].filter(Boolean).join(" · ")}</div>
         {openHome.auctionDate&&<div className="prop-sub" style={{color:"#FE5310",fontWeight:700,marginTop:2}}>🔨 Auction {fmtAuction(openHome.auctionDate)}</div>}
       </div>
-      <div className="stats">
-        <div className="st"><div className="sn">{pb.length}</div><div className="sl">Registered</div></div>
-        <div className="st"><div className="sn h">{pb.filter(b=>b.interest==="hot").length}</div><div className="sl">Hot</div></div>
-        <div className="st"><div className="sn w">{pb.filter(b=>b.interest==="watching").length}</div><div className="sl">Watching</div></div>
-      </div>
+      {(()=>{const sb=openHome._listing?propReal:pb;return <div className="stats">
+        <div className="st"><div className="sn">{sb.length}</div><div className="sl">{openHome._listing?"Buyers":"Registered"}</div></div>
+        <div className="st"><div className="sn h">{sb.filter(b=>b.interest==="hot").length}</div><div className="sl">Hot</div></div>
+        <div className="st"><div className="sn w">{sb.filter(b=>b.interest==="watching").length}</div><div className="sl">Watching</div></div>
+      </div>;})()}
       <div className="acts">
         <button className="btn-blue" onClick={()=>setShowAdd(true)}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
@@ -3168,15 +3170,18 @@ export default function App(){
 
         {!buyersLoading&&!filterActive&&<>
           {filteredBuyers.filter(b=>b.mobile).length>0&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:14,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>📣 Text all {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
-          <div className="sec-lbl" style={{padding:"2px 0 10px"}}>At this open</div>
-          {pbReal.length===0&&<div style={{textAlign:"center",padding:"36px 16px",color:"#C0B8A8"}}>
-            <div style={{fontSize:36,marginBottom:10}}>👥</div>
-            <div style={{fontSize:14,lineHeight:1.5}}>No buyers yet — tap Add buyer to register the first.</div>
-          </div>}
-          {pbReal.slice().sort(byInterest).map(b=>rowOf(b,"o"))}
-          {propExtraReal.length>0&&<>
-            <div className="sec-lbl" style={{padding:"20px 0 4px"}}>All buyers · this property</div>
+          {!openHome._listing&&<>
+            <div className="sec-lbl" style={{padding:"2px 0 10px"}}>At this open</div>
+            {pbReal.length===0&&<div style={{textAlign:"center",padding:"36px 16px",color:"#C0B8A8"}}>
+              <div style={{fontSize:36,marginBottom:10}}>👥</div>
+              <div style={{fontSize:14,lineHeight:1.5}}>No buyers yet — tap Add buyer to register the first.</div>
+            </div>}
+            {pbReal.slice().sort(byInterest).map(b=>rowOf(b,"o"))}
+          </>}
+          {(propExtraReal.length>0||openHome._listing)&&<>
+            <div className="sec-lbl" style={{padding:openHome._listing?"2px 0 4px":"20px 0 4px"}}>{openHome._listing?"Buyers · this property":"All buyers · this property"}</div>
             <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Everyone registered to this property to date — call back, add notes or send a contract any day.</div>
+            {propExtraReal.length===0&&openHome._listing&&<div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8"}}><div style={{fontSize:36,marginBottom:10}}>👥</div><div style={{fontSize:14,lineHeight:1.5}}>No buyers registered on this listing yet — tap Add buyer to add one.</div></div>}
             {propExtraReal.slice().sort(byInterest).map(b=>rowOf(b,"p"))}
           </>}
           {enquiries.length>0&&<>
