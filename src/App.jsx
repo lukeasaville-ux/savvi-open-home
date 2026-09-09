@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v12-09e";
+const BUILD = "v13-09a-crm";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2490,9 +2490,383 @@ function BuyerFilter({ options, active, onSelect }){
     </div>
   );
 }
+/* ════════════════════════════════════════════
+   DESKTOP CRM  (wide screens only — the phone layout is untouched)
+   A HubSpot-style shell: left sidebar + a main pane with Dashboard, Opens,
+   Listings, Contacts and Buyer Match tabs. Reuses every existing data function
+   (getOpenHomesThisWeek / getAllActiveListings / getBuyersFor / getAllContacts /
+   getContactProfile) and opens the existing DetailSheet for a full contact view.
+════════════════════════════════════════════ */
+const CRM_CSS = `
+.crm{position:fixed;inset:0;z-index:20;display:flex;background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BROWN};}
+.crm *{box-sizing:border-box;}
+/* Sidebar */
+.crm-side{width:236px;flex-shrink:0;background:${ESPRESSO};color:${CREAM};display:flex;flex-direction:column;padding:22px 14px 16px;}
+.crm-logo{width:118px;height:auto;margin:4px 8px 26px;}
+.crm-nav{display:flex;flex-direction:column;gap:3px;flex:1;}
+.crm-navb{display:flex;align-items:center;gap:11px;width:100%;text-align:left;background:none;border:none;color:#C9B79A;font-family:inherit;font-size:14.5px;font-weight:600;padding:11px 13px;border-radius:11px;cursor:pointer;transition:background .12s,color .12s;}
+.crm-navb:hover{background:rgba(255,244,213,.07);color:${CREAM};}
+.crm-navb.on{background:${BLUE_D};color:#fff;}
+.crm-navb .ic{font-size:16px;width:20px;text-align:center;}
+.crm-navb .ct{margin-left:auto;font-size:11.5px;font-weight:800;background:rgba(255,244,213,.14);color:#E6D6B5;border-radius:100px;padding:1px 8px;}
+.crm-navb.on .ct{background:rgba(255,255,255,.22);color:#fff;}
+.crm-user{border-top:1px solid rgba(255,244,213,.14);padding-top:14px;margin-top:8px;display:flex;align-items:center;gap:10px;}
+.crm-uav{width:34px;height:34px;border-radius:50%;background:${BLUE_D};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;}
+.crm-uname{font-size:13.5px;font-weight:700;color:${CREAM};line-height:1.2;}
+.crm-logout{font-size:11.5px;color:#C9B79A;background:none;border:none;cursor:pointer;padding:0;font-family:inherit;}
+.crm-logout:hover{color:#fff;text-decoration:underline;}
+/* Main */
+.crm-main{flex:1;display:flex;flex-direction:column;min-width:0;}
+.crm-top{display:flex;align-items:center;gap:16px;padding:20px 32px 16px;border-bottom:1px solid ${SAND};background:#fff;}
+.crm-h1{font-family:'Newsreader',serif;font-size:26px;font-weight:700;color:${BROWN};margin:0;line-height:1.1;}
+.crm-sub{font-size:13px;color:${BROWN_L};margin-top:2px;}
+.crm-search{margin-left:auto;position:relative;}
+.crm-search input{width:280px;padding:10px 14px 10px 34px;border:1px solid ${SAND_D};border-radius:11px;font-family:inherit;font-size:13.5px;background:${LINEN};color:${BROWN};outline:none;}
+.crm-search input:focus{border-color:${BLUE};background:#fff;}
+.crm-search .si{position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:13px;color:${BROWN_L};}
+.crm-body{flex:1;overflow-y:auto;padding:24px 32px 60px;}
+/* Cards / stats */
+.crm-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:26px;}
+.crm-stat{background:#fff;border:1px solid ${SAND};border-radius:16px;padding:18px 20px;}
+.crm-stat .sv{font-family:'Newsreader',serif;font-size:34px;font-weight:700;line-height:1;color:${BROWN};}
+.crm-stat .sl{font-size:12.5px;color:${BROWN_L};margin-top:7px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;}
+.crm-stat.hot .sv{color:${AMBER};}
+.crm-grid2{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start;}
+.crm-panel{background:#fff;border:1px solid ${SAND};border-radius:16px;overflow:hidden;}
+.crm-ph{padding:15px 18px;border-bottom:1px solid ${SAND};font-weight:800;font-size:13.5px;color:${BROWN};display:flex;align-items:center;justify-content:space-between;}
+.crm-ph .lnk{font-size:12px;font-weight:700;color:${BLUE_D};cursor:pointer;}
+/* Table */
+.crm-tbl{width:100%;border-collapse:collapse;}
+.crm-tbl th{text-align:left;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:${BROWN_L};padding:11px 18px;border-bottom:1px solid ${SAND};background:${LINEN};position:sticky;top:0;}
+.crm-tbl td{padding:13px 18px;border-bottom:1px solid ${SAND};font-size:13.5px;color:${BROWN};vertical-align:middle;}
+.crm-tbl tr{cursor:pointer;transition:background .1s;}
+.crm-tbl tbody tr:hover{background:${LINEN};}
+.crm-tbl tr:last-child td{border-bottom:none;}
+.crm-addr{font-weight:700;color:${BROWN};}
+.crm-muted{color:${BROWN_L};font-size:12.5px;}
+.crm-ib{display:inline-block;font-size:11px;font-weight:800;padding:2px 9px;border-radius:100px;white-space:nowrap;}
+.crm-ib.hot{background:#FDE7DF;color:#C0392B;}
+.crm-ib.watching{background:#FBF0D8;color:#B7770D;}
+.crm-ib.cool{background:${LINEN};color:${BROWN_L};}
+.crm-chip{display:inline-block;font-size:11.5px;font-weight:700;color:${BLUE_D};background:${CREAM};border:1px solid ${SAND_D};border-radius:100px;padding:3px 10px;}
+.crm-av{width:32px;height:32px;border-radius:50%;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0;}
+/* Two-pane (opens / listings) */
+.crm-split{display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:22px;align-items:start;}
+.crm-daygrp{margin-bottom:6px;}
+.crm-daylbl{font-size:11px;font-weight:800;color:${BLUE_D};text-transform:uppercase;letter-spacing:.7px;padding:8px 4px 6px;}
+.crm-oc{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid ${SAND};border-radius:13px;padding:13px 15px;margin-bottom:9px;cursor:pointer;transition:border-color .12s,box-shadow .12s;}
+.crm-oc:hover{border-color:${BLUE};}
+.crm-oc.on{border-color:${BLUE_D};box-shadow:0 0 0 2px ${BLUE_D} inset;}
+.crm-oc .ba{width:4px;align-self:stretch;border-radius:4px;background:${BLUE};}
+.crm-oc.lst .ba{background:${SAND_D};}
+.crm-empty{text-align:center;padding:60px 20px;color:${BROWN_L};}
+.crm-empty .em{font-size:40px;margin-bottom:12px;}
+.crm-brow{display:flex;align-items:flex-start;gap:12px;padding:13px 0;border-bottom:1px solid ${SAND};cursor:pointer;}
+.crm-brow:hover{background:${LINEN};margin:0 -12px;padding-left:12px;padding-right:12px;border-radius:8px;}
+.crm-brow:last-child{border-bottom:none;}
+.crm-dethead{background:#fff;border:1px solid ${SAND};border-radius:16px;padding:20px 22px;margin-bottom:16px;}
+`;
+
+function crmInitials(n){ return (String(n||"").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2))||"?"; }
+function crmColor(n){ const p=["#5A7FBF","#C0392B","#B7770D","#2D8A5E","#7A5C48","#8A5FBF"]; let h=0; for(const c of String(n||"")) h=(h*31+c.charCodeAt(0))>>>0; return p[h%p.length]; }
+
+function CrmBuyerRow({b,onOpen}){
+  const h=buyerHeat(b);
+  return (
+    <div className="crm-brow" onClick={()=>onOpen&&onOpen(b)}>
+      <div className="crm-av" style={{background:crmColor(b.name),width:38,height:38,fontSize:14}}>{crmInitials(b.name)}</div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontWeight:700,fontSize:14}}>{b.name}</div>
+        <div className="crm-muted">{b.mobile||b.email||"—"}{(b.visits||1)>1?` · 🔁 ${b.visits}× inspected`:""}</div>
+        <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:4}}>
+          {b.isEnquiry&&<span className="crm-ib" style={{background:"#E8EEFB",color:"#5A7FBF"}}>📨 Enquiry</span>}
+          {b.contractSent&&<span className="crm-ib" style={{background:GRN_BG,color:GRN}}>📄 Contract sent</span>}
+        </div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5}}>
+        {h.score>0&&<span style={{fontSize:11,fontWeight:800,color:h.score>=70?"#C0392B":h.score>=40?"#B7770D":BROWN_L}}>🔥 {h.score10}/10</span>}
+        {b.interest&&<span className={`crm-ib ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>}
+      </div>
+    </div>
+  );
+}
+
+function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allListings, listingsOnly, propIndex, onOpenContact, onLogout, searchLoadingId }){
+  const [tab,setTab]=useState("dashboard");
+  const [sel,setSel]=useState(null);              // selected {kind, oh} for opens/listings panes
+  const [bcache,setBcache]=useState({});          // key → {loading, open:[], property:[]}
+  const [contacts,setContacts]=useState(null);
+  const [contactsLoading,setContactsLoading]=useState(false);
+  const [cq,setCq]=useState("");                  // contacts search
+  const [dq,setDq]=useState("");                  // opens/listings search
+
+  const loadBuyers=useCallback((key,ohId,propId)=>{
+    setBcache(prev=>{ if(prev[key]&&(prev[key].loading||prev[key].open)) return prev; return {...prev,[key]:{loading:true,open:[],property:[]}}; });
+    Attio.getBuyersFor(ohId,propId).then(r=>{
+      if(r&&r.ok) setBcache(prev=>({...prev,[key]:{loading:false,open:r.open||[],property:r.property||[]}}));
+      else setBcache(prev=>({...prev,[key]:{loading:false,open:[],property:[]}}));
+    }).catch(()=>setBcache(prev=>({...prev,[key]:{loading:false,open:[],property:[]}})));
+  },[]);
+
+  const loadContacts=useCallback(()=>{
+    if(contacts!==null||contactsLoading) return;
+    setContactsLoading(true);
+    Attio.getAllContacts().then(list=>{ setContacts(list||[]); setContactsLoading(false); }).catch(()=>{ setContacts([]); setContactsLoading(false); });
+  },[contacts,contactsLoading]);
+
+  // Contacts power the dashboard's hot-buyer count too — load them on mount.
+  useEffect(()=>{ loadContacts(); },[]);
+
+  const selectOpen=(oh)=>{ const key=oh.id; setSel({kind:oh._listing?"listing":"open",oh}); loadBuyers(key, oh._listing?null:oh.id, oh.propertyId); };
+
+  const IRANK={hot:3,watching:2,cool:1};
+  const hotContacts=(contacts||[]).filter(c=>c.interest==="hot");
+  const contactCount=(contacts||[]).length;
+
+  const TABS=[
+    {k:"dashboard",l:"Dashboard",ic:"◧"},
+    {k:"opens",l:"Opens",ic:"🏠",ct:opens.length},
+    {k:"listings",l:"Listings",ic:"🏢",ct:allListings.length},
+    {k:"contacts",l:"Contacts",ic:"👤",ct:contactCount||null},
+    {k:"match",l:"Buyer Match",ic:"🎯"},
+  ];
+
+  // Synthetic open context for a listing row (mirrors the phone flow).
+  const listingOh=(p)=>{ const pid=p.propertyId||p.id; return { id:`listing_${pid}`, propertyId:pid, address:p.address||"Unknown", suburb:p.suburb||"", beds:p.beds,baths:p.baths,car:p.car, price:p.price||"", contractUrl:p.contractUrl||"", igUrl:p.igUrl||"", auctionDate:p.auctionDate||"", _listing:true }; };
+
+  const specOf=(o)=>[o.beds&&`${o.beds}b`,o.baths&&`${o.baths}ba`,o.car&&`${o.car}c`].filter(Boolean).join(" · ")||"Apartment";
+
+  // ── Detail pane for a selected open/listing ──
+  const renderDetail=()=>{
+    if(!sel) return <div className="crm-panel"><div className="crm-empty"><div className="em">👉</div><div>Select {tab==="opens"?"an open home":"a listing"} to see its buyers.</div></div></div>;
+    const oh=sel.oh; const c=bcache[oh.id]||{};
+    const list=(c.property||[]).slice(); // all buyers on this property
+    const real=list.filter(b=>!b.isEnquiry).sort((a,b)=>((IRANK[b.interest]||0)-(IRANK[a.interest]||0))||(buyerHeat(b).score-buyerHeat(a).score));
+    const enq=list.filter(b=>b.isEnquiry);
+    const propRef=oh.propertyId;
+    return (
+      <div>
+        <div className="crm-dethead">
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+            <div style={{width:8,height:8,borderRadius:"50%",background:oh._listing?SAND_D:BLUE}}/>
+            <span style={{fontSize:11.5,fontWeight:800,textTransform:"uppercase",letterSpacing:.6,color:BROWN_L}}>{oh._listing?"Listing":"Open home"}{oh.time?` · ${oh.time}`:""}</span>
+          </div>
+          <div style={{fontFamily:"'Newsreader',serif",fontSize:22,fontWeight:700,color:BROWN}}>{streetLine(oh.address,oh.suburb)}</div>
+          <div className="crm-muted" style={{marginTop:2}}>{[oh.suburb,specOf(oh),oh.price].filter(Boolean).join(" · ")}</div>
+          {oh.auctionDate&&<div style={{color:AMBER,fontWeight:700,fontSize:12.5,marginTop:4}}>🔨 Auction {fmtAuction(oh.auctionDate)}</div>}
+          {!c.loading&&<div style={{display:"flex",gap:22,marginTop:14}}>
+            <div><div style={{fontFamily:"'Newsreader',serif",fontSize:24,fontWeight:700}}>{real.length}</div><div className="crm-muted">Buyers</div></div>
+            <div><div style={{fontFamily:"'Newsreader',serif",fontSize:24,fontWeight:700,color:"#C0392B"}}>{real.filter(b=>b.interest==="hot").length}</div><div className="crm-muted">Hot</div></div>
+            <div><div style={{fontFamily:"'Newsreader',serif",fontSize:24,fontWeight:700,color:"#B7770D"}}>{real.filter(b=>b.interest==="watching").length}</div><div className="crm-muted">Watching</div></div>
+            {enq.length>0&&<div><div style={{fontFamily:"'Newsreader',serif",fontSize:24,fontWeight:700,color:BLUE_D}}>{enq.length}</div><div className="crm-muted">Enquiries</div></div>}
+          </div>}
+        </div>
+        <div className="crm-panel">
+          <div className="crm-ph">Buyers · this property</div>
+          <div style={{padding:"4px 18px 10px"}}>
+            {c.loading&&<div style={{textAlign:"center",padding:"40px"}}><div className="sp"/></div>}
+            {!c.loading&&real.length===0&&enq.length===0&&<div className="crm-empty"><div className="em">👥</div><div>No buyers registered on this property yet.</div></div>}
+            {!c.loading&&real.map(b=><CrmBuyerRow key={b.id} b={b} onOpen={()=>onOpenContact(b.contactId,propRef)}/>)}
+            {!c.loading&&enq.length>0&&<>
+              <div className="crm-daylbl" style={{paddingTop:14}}>📨 Online enquiries</div>
+              {enq.map(b=><CrmBuyerRow key={b.id} b={b} onOpen={()=>onOpenContact(b.contactId,propRef)}/>)}
+            </>}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── Body per tab ──
+  const _dqm=dq.trim().toLowerCase();
+  const body=()=>{
+    if(tab==="dashboard") return (
+      <>
+        <div className="crm-stats">
+          <div className="crm-stat"><div className="sv">{opens.length}</div><div className="sl">Opens{opensStale?"":" this week"}</div></div>
+          <div className="crm-stat"><div className="sv">{allListings.length}</div><div className="sl">Active listings</div></div>
+          <div className="crm-stat hot"><div className="sv">{contacts===null?"—":hotContacts.length}</div><div className="sl">Hot buyers</div></div>
+          <div className="crm-stat"><div className="sv">{contacts===null?"—":contactCount}</div><div className="sl">Total contacts</div></div>
+        </div>
+        <div className="crm-grid2">
+          <div className="crm-panel">
+            <div className="crm-ph">{opensStale?"Last week's opens":"This week's opens"}<span className="lnk" onClick={()=>setTab("opens")}>View all →</span></div>
+            {opens.length===0
+              ? <div className="crm-empty" style={{padding:"40px 20px"}}><div className="em">📅</div><div>No opens scheduled.</div></div>
+              : openDays.map(day=>(
+                <div key={day}>
+                  <div className="crm-daylbl" style={{padding:"10px 18px 2px"}}>{day==="unknown"?"Scheduled":new Date(day+"T00:00:00").toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"})}</div>
+                  <table className="crm-tbl"><tbody>
+                    {opensByDay[day].map(oh=>(
+                      <tr key={oh.id} onClick={()=>{setTab("opens");selectOpen(oh);}}>
+                        <td><div className="crm-addr">{streetLine(oh.address,oh.suburb)}</div><div className="crm-muted">{oh.suburb}</div></td>
+                        <td style={{textAlign:"right"}}><span className="crm-chip">{oh.time}</span></td>
+                      </tr>
+                    ))}
+                  </tbody></table>
+                </div>
+              ))}
+          </div>
+          <div className="crm-panel">
+            <div className="crm-ph">🔥 Hot buyers<span className="lnk" onClick={()=>setTab("contacts")}>All contacts →</span></div>
+            {contacts===null
+              ? <div style={{textAlign:"center",padding:"40px"}}><div className="sp"/></div>
+              : hotContacts.length===0
+              ? <div className="crm-empty" style={{padding:"40px 20px"}}><div className="em">🔍</div><div>No hot buyers flagged yet.</div></div>
+              : <table className="crm-tbl"><tbody>
+                  {hotContacts.slice(0,10).map(c=>(
+                    <tr key={c.contactId} onClick={()=>onOpenContact(c.contactId)}>
+                      <td><div style={{display:"flex",alignItems:"center",gap:10}}><div className="crm-av" style={{background:crmColor(c.name)}}>{crmInitials(c.name)}</div><div><div style={{fontWeight:700}}>{c.name}</div><div className="crm-muted">{c.mobile||c.email||"—"}</div></div></div></td>
+                      <td style={{textAlign:"right"}}><span className="crm-ib hot">Hot 🔥</span></td>
+                    </tr>
+                  ))}
+                </tbody></table>}
+          </div>
+        </div>
+      </>
+    );
+
+    if(tab==="opens"){
+      const days=openDays.filter(d=>opensByDay[d].some(o=>!_dqm||`${o.address||""} ${o.suburb||""}`.toLowerCase().includes(_dqm)));
+      return (
+        <div className="crm-split">
+          <div>
+            {opens.length===0&&<div className="crm-empty"><div className="em">📅</div><div>No opens scheduled this week.</div></div>}
+            {days.map(day=>(
+              <div className="crm-daygrp" key={day}>
+                <div className="crm-daylbl">{day==="unknown"?"Scheduled":new Date(day+"T00:00:00").toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"})}</div>
+                {opensByDay[day].filter(o=>!_dqm||`${o.address||""} ${o.suburb||""}`.toLowerCase().includes(_dqm)).map(oh=>(
+                  <div key={oh.id} className={`crm-oc ${sel&&sel.oh.id===oh.id?"on":""}`} onClick={()=>selectOpen(oh)}>
+                    <div className="ba"/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div className="crm-addr">{streetLine(oh.address,oh.suburb)}</div>
+                      <div className="crm-muted">{oh.suburb} · {specOf(oh)}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}><span className="crm-chip">{oh.time}</span></div>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+          {renderDetail()}
+        </div>
+      );
+    }
+
+    if(tab==="listings"){
+      const rows=allListings.filter(p=>!_dqm||`${p.address||""} ${p.suburb||""}`.toLowerCase().includes(_dqm));
+      return (
+        <div className="crm-split">
+          <div>
+            {allListings.length===0&&<div className="crm-empty"><div className="em">🏢</div><div>No active listings loaded.</div></div>}
+            {rows.map(p=>{ const oh=listingOh(p); const isOpen=opens.some(o=>o.propertyId===(p.propertyId||p.id));
+              return (
+                <div key={oh.id} className={`crm-oc lst ${sel&&sel.oh.id===oh.id?"on":""}`} onClick={()=>selectOpen(oh)}>
+                  <div className="ba"/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div className="crm-addr">{streetLine(oh.address,oh.suburb)}</div>
+                    <div className="crm-muted">{oh.suburb} · {specOf(oh)}</div>
+                  </div>
+                  <div style={{textAlign:"right",display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
+                    {oh.price&&<span className="crm-muted" style={{fontWeight:700}}>{oh.price}</span>}
+                    {isOpen&&<span className="crm-ib" style={{background:GRN_BG,color:GRN}}>Open this week</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {renderDetail()}
+        </div>
+      );
+    }
+
+    if(tab==="contacts"){
+      const _cq=cq.trim().toLowerCase();
+      const key=s=>{ let d=String(s||"").replace(/\D/g,""); if(d.indexOf("61")===0)d=d.slice(2); if(d[0]==="0")d=d.slice(1); return d; };
+      const rows=(contacts||[]).filter(c=>{ if(!_cq) return true; const dq=_cq.replace(/\D/g,""); return `${c.name||""} ${c.email||""}`.toLowerCase().includes(_cq)||(dq&&key(c.mobile).includes(key(dq))); })
+        .sort((a,b)=>((IRANK[b.interest]||0)-(IRANK[a.interest]||0))||String(a.name).localeCompare(String(b.name)));
+      return (
+        <div className="crm-panel">
+          <div className="crm-ph">{contacts===null?"Contacts":`${rows.length} contact${rows.length===1?"":"s"}`}{_cq?` matching "${cq}"`:""}</div>
+          {contacts===null||contactsLoading
+            ? <div style={{textAlign:"center",padding:"50px"}}><div className="sp"/></div>
+            : rows.length===0
+            ? <div className="crm-empty"><div className="em">🔍</div><div>No contacts match.</div></div>
+            : <div style={{maxHeight:"none"}}><table className="crm-tbl">
+                <thead><tr><th>Name</th><th>Mobile</th><th>Email</th><th>Interest</th></tr></thead>
+                <tbody>
+                  {rows.map(c=>(
+                    <tr key={c.contactId} onClick={()=>onOpenContact(c.contactId)}>
+                      <td><div style={{display:"flex",alignItems:"center",gap:10}}><div className="crm-av" style={{background:crmColor(c.name)}}>{crmInitials(c.name)}</div><span style={{fontWeight:700}}>{c.name}{searchLoadingId===c.contactId?" …":""}</span></div></td>
+                      <td className="crm-muted">{c.mobile||"—"}</td>
+                      <td className="crm-muted">{c.email||"—"}</td>
+                      <td>{c.interest?<span className={`crm-ib ${iCl(c.interest)}`}>{iLbl(c.interest)}</span>:<span className="crm-muted">—</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table></div>}
+        </div>
+      );
+    }
+
+    if(tab==="match") return <div style={{maxWidth:720}}><BuyerMatch propIndex={propIndex} agentName={agentName}/></div>;
+    return null;
+  };
+
+  const titles={dashboard:["Dashboard",melbGreeting()+", "+agentName],opens:["Open Homes","This week's inspections and their buyers"],listings:["Listings","Every active property"],contacts:["Contacts","Everyone in your CRM"],match:["Buyer Match","Find the right buyers for a property"]};
+  const showSearch=(tab==="contacts"||tab==="opens"||tab==="listings");
+
+  return (
+    <div className="crm">
+      <style>{CRM_CSS}</style>
+      <div className="crm-side">
+        <img className="crm-logo" src={wordmark} alt="Savvi"/>
+        <div className="crm-nav">
+          {TABS.map(t=>(
+            <button key={t.k} className={`crm-navb ${tab===t.k?"on":""}`} onClick={()=>{setTab(t.k);setDq("");}}>
+              <span className="ic">{t.ic}</span>{t.l}{t.ct?<span className="ct">{t.ct}</span>:null}
+            </button>
+          ))}
+        </div>
+        <div className="crm-user">
+          <div className="crm-uav">{crmInitials(agentName)}</div>
+          <div><div className="crm-uname">{agentName}</div><button className="crm-logout" onClick={onLogout}>Log out</button></div>
+        </div>
+      </div>
+      <div className="crm-main">
+        <div className="crm-top">
+          <div><h1 className="crm-h1">{titles[tab][0]}</h1><div className="crm-sub">{titles[tab][1]}</div></div>
+          {showSearch&&<div className="crm-search">
+            <span className="si">🔍</span>
+            <input value={tab==="contacts"?cq:dq} onChange={e=>tab==="contacts"?setCq(e.target.value):setDq(e.target.value)} placeholder={tab==="contacts"?"Search name, mobile or email…":"Search address…"}/>
+          </div>}
+        </div>
+        <div className="crm-body">{body()}</div>
+      </div>
+    </div>
+  );
+}
+
 export default function App(){
   const[agentName,setAgentName]=useState(()=>{ try { return SESSION_TOKEN ? (sessionStorage.getItem("savvi_who")||"") : ""; } catch(e){ return ""; } });
   const[screen,setScreen]=useState("home");
+  // Desktop CRM: on a genuinely wide screen (computer), show a HubSpot-style CRM shell
+  // instead of the phone layout. A phone in portrait is ≤460px — well under this — so the
+  // phone experience is completely untouched. ≥1000px = computer.
+  const[isDesktop,setIsDesktop]=useState(()=>{ try{ return typeof window!=="undefined" && window.innerWidth>=1000; }catch(e){ return false; } });
+  useEffect(()=>{
+    const onResize=()=>{ try{ setIsDesktop(window.innerWidth>=1000); }catch(e){} };
+    window.addEventListener("resize",onResize);
+    return ()=>window.removeEventListener("resize",onResize);
+  },[]);
+  // The phone frame caps #root at a phone/window width (index.html). In CRM mode we let the
+  // shell fill the whole viewport; restore the cap the moment we leave CRM mode.
+  useEffect(()=>{
+    const root=typeof document!=="undefined"?document.getElementById("root"):null;
+    if(!root) return;
+    if(isDesktop && agentName){ root.style.maxWidth="none"; root.style.boxShadow="none"; root.style.background=LINEN; }
+    else { root.style.maxWidth=""; root.style.boxShadow=""; root.style.background=""; }
+  },[isDesktop,agentName]);
   const[homeTab,setHomeTab]=useState("opens"); // opens | match — swipeable tabs on the home screen
   const[listingQ,setListingQ]=useState(""); // search box to jump to a listing/open without scrolling
   const swipeRef=useRef(null);
@@ -2987,6 +3361,9 @@ export default function App(){
   return <div className="app">
     <style>{CSS}</style>
 
+    {isDesktop&&<DesktopCRM agentName={agentName} opens={visibleOpens} openDays={openDays} opensByDay={opensByDay} opensStale={opensStale} allListings={allListings} listingsOnly={listingsOnly} propIndex={propIndex} onOpenContact={openContact} onLogout={()=>{logout();setAgentName("");}} searchLoadingId={searchLoadingId}/>}
+
+    {!isDesktop&&<>
     {/* ── HOME ── */}
     <div className={`scr ${screen==="home"?"on":"ol"}`} onTouchStart={onHomeTouchStart} onTouchEnd={onHomeTouchEnd}>
       <SBar/>
@@ -3193,6 +3570,7 @@ export default function App(){
         <div style={{height:80}}/>
       </div>
     </div>}
+    </>}
 
     {/* ── SHEETS ── */}
     {/* Thumb-reachable Add buyer — pinned to the frame on the open screen */}
