@@ -5,6 +5,15 @@
 
 ---
 
+## SESSION UPDATE — 7 Sep 2026 (backend MIGRATED off n8n Cloud → self-hosted)
+
+The backend now runs on a **self-hosted n8n** (DigitalOcean Sydney droplet, `209.38.85.26`, domain **`n8n.getsavvi.com.au`**), NOT n8n Cloud. Reason: Cloud hit the monthly execution quota AND the 60s task-runner limit that was silently under-sending the heavy Code-node jobs. Self-hosting removes both. Full details (SSH, stack, workflow IDs, ops) in the memory `savvi-selfhost-n8n.md`.
+
+- **New webhook base:** `https://n8n.getsavvi.com.au/webhook/savvi-app` (app) + `/webhook/savvi-followup`. App `src/App.jsx` (API_BASE, FOLLOWUP_URL), all 7 Claude scheduled tasks, and the workflows' embedded URLs are repointed. Deployed + verified live (login→token, getListings=13 real listings, CORS, production SSL).
+- **Backend workflow id is now `LbKvpOKvtbBOnjnr`** (was `u5zjVOYd20rcFbux` on Cloud). Public API base `https://n8n.getsavvi.com.au/api/v1`; `N8N_API_KEY` in `.env` is now the self-hosted key. **API edits take effect immediately** — the old Cloud "changes only go live via Publish" gotcha (§5/§10) NO LONGER APPLIES.
+- **SSH:** `ssh -i ~/.ssh/savvi_n8n_key root@209.38.85.26`; stack at `/opt/savvi` (docker compose: n8n + postgres + caddy). `/opt/savvi/.env` holds `N8N_ENCRYPTION_KEY` — do NOT lose it.
+- **n8n Cloud (`savvi.app.n8n.cloud`) is kept as a temporary bridge** (its webhook workflows still active so already-sent SMS links resolve) until the **Cloud Pro plan is cancelled ~14 Sep 2026** (reminder task `savvi-cancel-n8n-pro`). Cloud schedule workflows are already deactivated.
+
 ## SESSION UPDATE — 5 Jul 2026 (secure rebuild built & verified; PR open)
 
 The full secure app is **built and verified on branch `rebuild/vite-secure`**; a PR to `main` is open. **Merging it deploys the full app live** (Pages source is now "GitHub Actions"; `deploy.yml` builds `dist` and publishes).
@@ -46,7 +55,7 @@ The full secure app is **built and verified on branch `rebuild/vite-secure`**; a
 |---|---|---|
 | Box+Dice (MRI) | Listings source of truth / trust accounting | savvi.boxdice.com.au |
 | Attio | CRM (people, properties, open_homes, inspections) | key in n8n only |
-| n8n Cloud | Automation + app backend | savvi.app.n8n.cloud; holds ALL app keys |
+| n8n (self-hosted) | Automation + app backend | **n8n.getsavvi.com.au** (DO Sydney droplet `209.38.85.26`); holds ALL app keys. (Old Cloud `savvi.app.n8n.cloud` = bridge until Pro cancelled ~14 Sep) |
 | Resend | Transactional email (contracts) | key in n8n only |
 | MessageMedia (Sinch) | SMS | key+secret in n8n only |
 | DocuSign | Listing authorities | account-level |

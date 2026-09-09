@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v13-09a-crm";
+const BUILD = "v14-10a-match";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2270,8 +2270,29 @@ function BulkTextSheet({ open, onClose, buyers, agentName, label, address, onLog
    every buyer's notes/history (aiQuery backend), pulls the matches, then you
    pick who's in and send each a personalised text about a new listing.
 ════════════════════════════════════════════ */
-function BuyerMatch({ propIndex, agentName }) {
-  const [q, setQ] = useState("");
+// Contextual buyer-match: from a specific listing/open, auto-surface the buyers
+// most likely to want it (built from its suburb/price/beds) and text them in one go.
+function MatchSheet({ open, onClose, openHome, excludeIds = [], agentName, propIndex }){
+  const drag = useSheetDrag(onClose);
+  if(!open || !openHome) return null;
+  const q = [openHome.suburb, openHome.price, (openHome.beds ? openHome.beds + " bed" : "")].filter(Boolean).join(" ");
+  return <div className="ov s" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",maxHeight:"92vh",display:"flex",flexDirection:"column",...drag.style}} {...drag.handlers}>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
+      <div style={{overflowY:"auto"}}>
+        <div style={{padding:"2px 14px 4px"}}>
+          <div style={{fontFamily:"'Newsreader',serif",fontSize:21,fontWeight:700,color:ESPRESSO}}>🎯 Buyers who match</div>
+          <div style={{fontSize:13,color:BROWN_L,margin:"2px 0 4px",lineHeight:1.45}}>{streetLine(openHome.address,openHome.suburb)} — ranked on price, area &amp; beds from what they've actually inspected. Not already registered here. Text the right ones in one go.</div>
+        </div>
+        <BuyerMatch propIndex={propIndex} agentName={agentName} initialQuery={q} autoRun excludeIds={excludeIds} embedded/>
+        <div style={{height:20}}/>
+      </div>
+    </div>
+  </div>;
+}
+
+function BuyerMatch({ propIndex, agentName, initialQuery = "", autoRun = false, excludeIds = [], embedded = false }) {
+  const [q, setQ] = useState(initialQuery);
   const [busy, setBusy] = useState(false);
   const [matches, setMatches] = useState(null);
   const [err, setErr] = useState("");
@@ -2288,13 +2309,19 @@ function BuyerMatch({ propIndex, agentName }) {
     if (query) setQ(query);
     setBusy(true); setErr(""); setMatches(null); setDone(null); setProgress(null);
     try {
-      const res = await Attio.matchBuyers(qq);
+      let res = await Attio.matchBuyers(qq);
+      // In contextual mode, drop buyers already registered on this property —
+      // you'd contact them anyway; this surfaces NEW prospects to tell.
+      if (excludeIds && excludeIds.length) { const ex = new Set(excludeIds); res = res.filter(b => !ex.has(b.contactId) && !ex.has(b.id)); }
       setMatches(res);
       const s = {}; res.forEach(b => { s[b.id] = !!b.mobile; }); // preselect everyone we can actually text
       setSel(s);
     } catch (e) { setErr("Search failed — please try again."); }
     setBusy(false);
   };
+  // Contextual mode: auto-run the property-derived query once on mount.
+  const didAuto = useRef(false);
+  useEffect(() => { if (autoRun && initialQuery && !didAuto.current) { didAuto.current = true; run(initialQuery); } }, [autoRun, initialQuery]);
 
   const toggle = id => setSel(s => ({ ...s, [id]: !s[id] }));
   const selected = (matches || []).filter(b => sel[b.id] && b.mobile);
@@ -2333,9 +2360,9 @@ function BuyerMatch({ propIndex, agentName }) {
 
   return (
     <div className="bm-wrap">
-      <div className="bm-intro">
+      {!embedded && <div className="bm-intro">
         Describe the property you've got (or the criteria) and I'll find the buyers most likely to want it — matched on what they've actually inspected (price range, area, beds), not just notes. Then text them all in one go.
-      </div>
+      </div>}
 
       <div style={{ display:"flex", gap:8 }}>
         <input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") run(); }}
@@ -2595,6 +2622,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const [tab,setTab]=useState("dashboard");
   const [sel,setSel]=useState(null);              // selected {kind, oh} for opens/listings panes
   const [bcache,setBcache]=useState({});          // key → {loading, open:[], property:[]}
+  const [matchOh,setMatchOh]=useState(null);      // property to run contextual buyer-match against
   const [contacts,setContacts]=useState(null);
   const [contactsLoading,setContactsLoading]=useState(false);
   const [cq,setCq]=useState("");                  // contacts search
@@ -2660,6 +2688,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
             <div><div style={{fontFamily:"'Newsreader',serif",fontSize:24,fontWeight:700,color:"#B7770D"}}>{real.filter(b=>b.interest==="watching").length}</div><div className="crm-muted">Watching</div></div>
             {enq.length>0&&<div><div style={{fontFamily:"'Newsreader',serif",fontSize:24,fontWeight:700,color:BLUE_D}}>{enq.length}</div><div className="crm-muted">Enquiries</div></div>}
           </div>}
+          {!c.loading&&<button onClick={()=>setMatchOh(oh)} style={{marginTop:16,display:"inline-flex",alignItems:"center",gap:6,background:CREAM,border:`1px solid ${SAND_D}`,color:BLUE_D,fontWeight:800,fontSize:13,borderRadius:100,padding:"8px 15px",cursor:"pointer",fontFamily:"inherit"}}>🎯 Find matching buyers to text</button>}
         </div>
         <div className="crm-panel">
           <div className="crm-ph">Buyers · this property</div>
@@ -2843,6 +2872,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
         </div>
         <div className="crm-body">{body()}</div>
       </div>
+      {matchOh && <MatchSheet open onClose={()=>setMatchOh(null)} openHome={matchOh} excludeIds={((bcache[matchOh.id]||{}).property||[]).map(b=>b.contactId).filter(Boolean)} agentName={agentName} propIndex={propIndex}/>}
     </div>
   );
 }
@@ -2914,6 +2944,7 @@ export default function App(){
   const[showAssistant,setShowAssistant]=useState(false);
   const[showInfo,setShowInfo]=useState(false);
   const[showBulk,setShowBulk]=useState(false);
+  const[showMatch,setShowMatch]=useState(false);
   const[aiPrefill,setAiPrefill]=useState(null);
   const[quickContractProp,setQuickContractProp]=useState(null);
 
@@ -3503,6 +3534,9 @@ export default function App(){
         <button className="btn-outline" style={{flex:1}} onClick={()=>setShowSum(true)}>📩 Vendor update</button>
         {listingHasInfo(openHome)&&<button className="btn-outline" style={{flex:1}} onClick={()=>setShowInfo(s=>!s)}>🔑 Listing info {showInfo?"▲":"▼"}</button>}
       </div>
+      <div className="acts" style={{paddingTop:8}}>
+        <button className="btn-outline" style={{flex:1}} onClick={()=>setShowMatch(true)}>🎯 Matching buyers</button>
+      </div>
 
       {showInfo&&<OpenListingInfo openHome={openHome}/>}
 
@@ -3596,6 +3630,7 @@ export default function App(){
       onUpdateDetails={(pid,id,d)=>{ setSearchProfile(a=>a&&{...a,name:d.name,mobile:d.mobile,email:d.email}); if(!isDemo&&searchProfile?.contactId) Attio.updatePerson({id:searchProfile.contactId,name:d.name,email:d.email,mobile:d.mobile}).catch(()=>{}); }}
       onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}} onOpenContact={openContact}/>
     <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll}/>
+    <MatchSheet open={showMatch} onClose={()=>setShowMatch(false)} openHome={openHome} excludeIds={propAll.map(b=>b.contactId).filter(Boolean)} agentName={agentName} propIndex={propIndex}/>
     <QuickContractSheet
       open={showQuickContract}
       prop={quickContractProp}
