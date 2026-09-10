@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v29-inspected";
+const BUILD = "v30-owners";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -126,7 +126,7 @@ async function loadPropMeta() {
     (j?.data || []).forEach(p => {
       const id = p?.id?.record_id; if (!id) return;
       const v = f => p?.values?.[f]?.[0]?.value;
-      map[id] = { address: v("address") || "", suburb: v("suburb") || "", price: v("price_guide") || v("price") || v("display_price") || "", beds: v("beds") ?? null, baths: v("baths") ?? null, car: v("car_spaces") ?? v("car") ?? null };
+      map[id] = { address: v("address") || "", suburb: v("suburb") || "", price: v("price_guide") || v("price") || v("display_price") || "", beds: v("beds") ?? null, baths: v("baths") ?? null, car: v("car_spaces") ?? v("car") ?? null, vendorIds: (p?.values?.vendor || []).map(x => x.target_record_id).filter(Boolean), statusText: (v("status_text") || "").toLowerCase(), settlementDate: v("settlement_date") || null, soldPrice: (p?.values?.sold_price?.[0]?.currency_value ?? null), campaignStart: v("campaign_start") || null, auctionDate: v("auction_date") || null, listingNotes: v("listing_notes") || "" };
     });
     _propMetaCache = { t: Date.now(), map };
   } catch (e) {}
@@ -501,7 +501,10 @@ const Attio = {
       if (last > c.lastActivity) c.lastActivity = last;
     });
     Object.values(byC).forEach(c => { c.insps.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)); c.notes.sort((a, b) => new Date(a.ts || 0) - new Date(b.ts || 0)); c.visits = c.insps.filter(i => !i.isEnquiry).length || 1; });
-    return { contacts: Object.values(byC), propMeta, at: Date.now() };
+    // Owners: every person linked as vendor on a property, with what they own and its state.
+    const owners = {};
+    Object.entries(propMeta).forEach(([ref, m]) => { (m.vendorIds || []).forEach(pid => { const c = byC[pid]; if (!c) return; const o = owners[pid] || (owners[pid] = { ...c, props: [] }); o.props.push({ ref, address: m.address, suburb: m.suburb, statusText: m.statusText || "listed", settlementDate: m.settlementDate, soldPrice: m.soldPrice, campaignStart: m.campaignStart, auctionDate: m.auctionDate, pastOwners: (m.listingNotes.match(/Past owners?: ([^\n]+)/) || [])[1] || "", coOwners: (m.listingNotes.match(/Co-owners?: ([^\n]+)/) || [])[1] || "" }); }); });
+    return { contacts: Object.values(byC), owners: Object.values(owners), propMeta, at: Date.now() };
   },
   async getContactProfile(contactId, propRef) {
     await this.getAllContacts(); // populates _buyerRecCache
@@ -3292,6 +3295,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const [tq,setTq]=useState(""); const [tf,setTf]=useState("all");     // detail table search + filter
   const [cq,setCq]=useState(""); const [cf,setCf]=useState("all"); const [csort,setCsort]=useState({k:"last",d:-1}); const [csel,setCsel]=useState({}); const [chl,setChl]=useState(-1);
   const [cbulk,setCbulk]=useState(false); const [showDupes,setShowDupes]=useState(false); const [showInfo,setShowInfo]=useState(false);
+  const [oq,setOq]=useState(""); const [of,setOf]=useState("all");
   const [feedFilter,setFeedFilter]=useState("all");
 
   const loadIndex=useCallback(async(force)=>{ if(indexing) return; if(!force&&index&&Date.now()-indexAt<10*60*1000) return; setIndexing(true); try{ const ix=await Attio.getCrmIndex(); if(ix) { setIndex(ix); setIndexAt(Date.now()); } }catch(e){} setIndexing(false); },[index,indexAt,indexing]);
@@ -3422,14 +3426,17 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   useEffect(()=>{ if(tab!=="contacts") return; const k=e=>{ if(e.target&&/INPUT|TEXTAREA/.test(e.target.tagName)) return; if(e.key==="ArrowDown"){ e.preventDefault(); setChl(h=>Math.min(cRows.length-1,h+1)); } else if(e.key==="ArrowUp"){ e.preventDefault(); setChl(h=>Math.max(0,h-1)); } else if(e.key==="Enter"&&chl>=0&&cRows[chl]){ onOpenContact(cRows[chl].contactId,cRows[chl].insps[0]?.propertyRef||null); } }; window.addEventListener("keydown",k); return ()=>window.removeEventListener("keydown",k); },[tab,cRows,chl,onOpenContact]);
   const bulkContacts=cselected.map(c=>({ id:c.contactId, contactId:c.contactId, name:c.name, mobile:c.mobile, email:c.email, interest:c.interest, notes:c.notes, _attioInspectionId:c.insps[0]?.id||null, _inspNotes:c.insps[0]?.notes||[] }));
 
+  // ── Owners ──
+  const oRows=useMemo(()=>{ if(!index) return []; const q=oq.trim().toLowerCase(); const pk=phoneKey(oq); const live=p=>!["sold","withdrawn","off-market","under offer"].includes(p.statusText); return index.owners.map(o=>({...o,props:o.props.filter(p=>of==="all"||(of==="listed"?live(p):p.statusText===of))})).filter(o=>o.props.length).filter(o=>!q||(o.name||"").toLowerCase().includes(q)||(o.email||"").toLowerCase().includes(q)||(pk.length>=3&&phoneKey(o.mobile||"").includes(pk))||o.props.some(p=>(p.address||"").toLowerCase().includes(q))).sort((a,b)=>(b.props[0].campaignStart||"").localeCompare(a.props[0].campaignStart||"")); },[index,oq,of]);
+
   // ── Today ──
   const feedRows=feed.filter(r=>feedFilter==="all"||r.k===feedFilter);
   const feedCounts=feed.reduce((m,r)=>{ m[r.k]=(m[r.k]||0)+1; return m; },{});
   const todayOpens=(openDays||[]).map(d=>({d,list:(opensByDay[d]||[])})).filter(x=>x.list.length);
 
-  const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:allListings.length},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"match",l:"Buyer match",ic:"◎"}];
-  const title={today:"Today",opens:"Open homes",listings:"Listings",contacts:"Contacts",match:"Buyer match"}[tab];
-  const subtitle={today:new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"}),opens:`${opens.length} this week`,listings:`${allListings.length} active`,contacts:contacts?`${contacts.length} people · ${hotCount} hot`:"loading…",match:"Describe a property, find the buyers"}[tab];
+  const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:allListings.length},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"owners",l:"Owners",ic:"⌘",ct:index?index.owners.length:null},{k:"match",l:"Buyer match",ic:"◎"}];
+  const title={today:"Today",opens:"Open homes",listings:"Listings",contacts:"Contacts",owners:"Owners",match:"Buyer match"}[tab];
+  const subtitle={today:new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"}),opens:`${opens.length} this week`,listings:`${allListings.length} active`,contacts:contacts?`${contacts.length} people · ${hotCount} hot`:"loading…",owners:index?`${index.owners.length} people who own property with Savvi`:"loading…",match:"Describe a property, find the buyers"}[tab];
   const _q=dq.trim().toLowerCase(); const _m=o=>!_q||((o.address||"")+" "+(o.suburb||"")).toLowerCase().includes(_q);
 
   return <div className="crm">
@@ -3542,6 +3549,26 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
               {contacts&&cRows.length>400&&<div className="crm-empty" style={{padding:14}}>Showing the first 400 of {cRows.length}. Narrow it with search or a filter.</div>}
             </div>
             {cselected.length>0&&<div className="crm-bulkbar">{cselected.length} selected<button className="crm-btn p" onClick={()=>setCbulk(true)}>Text {cselected.length} {cselected.length===1?"person":"people"}</button><button className="crm-btn" onClick={()=>setCsel({})}>Clear</button><span style={{marginLeft:"auto",fontWeight:500,color:BROWN_L}}>↑ ↓ to move · Enter to open</span></div>}
+          </div>}
+
+          {tab==="owners"&&<div className="crm-card tbl">
+            <div className="crm-filters">
+              {[["all","Everyone"],["listed","Listed now"],["sold","Sold with Savvi"],["off-market","Off market"],["withdrawn","Withdrawn"]].map(([k,l])=><button key={k} className={`fchip${of===k?" on":""}`} onClick={()=>setOf(k)}>{l}<span className="n">{k==="all"?(index?index.owners.length:0):(index?index.owners.filter(o=>o.props.some(p=>(k==="listed"?!["sold","withdrawn","off-market","under offer"].includes(p.statusText):p.statusText===k))).length:0)}</span></button>)}
+              <input value={oq} onChange={e=>setOq(e.target.value)} placeholder="Search owner, mobile, email or address…"/>
+            </div>
+            {!index&&<div style={{textAlign:"center",padding:40}}><div className="sp"/></div>}
+            {index&&oRows.length===0&&<div className="crm-empty"><div className="em">⌘</div><div>No owners match.</div></div>}
+            {index&&oRows.length>0&&<table className="crm-tbl">
+              <thead><tr><th className="ns">Owner</th><th className="ns">Mobile</th><th className="ns">Property</th><th className="ns">Status</th><th className="ns">Listed</th><th className="ns">Also a buyer?</th></tr></thead>
+              <tbody>{oRows.map(o=>o.props.map((pr,i)=><tr key={o.contactId+pr.ref} className="r" onClick={()=>onOpenContact(o.contactId,o.insps[0]?.propertyRef||null)}>
+                {i===0&&<td rowSpan={o.props.length}><div style={{display:"flex",alignItems:"center",gap:10}}><div className="av" style={{background:crmColor(o.name),width:30,height:30,fontSize:11}}>{crmInitials(o.name)}</div><div><div className="nm">{o.name}</div><div className="mut">{o.email||""}</div></div></div></td>}
+                {i===0&&<td rowSpan={o.props.length} className="num">{o.mobile||<span className="mut">—</span>}</td>}
+                <td><div style={{fontWeight:600,color:ESPRESSO}}>{streetLine(pr.address,pr.suburb)}</div><div className="mut">{pr.suburb}{pr.coOwners?` · with ${pr.coOwners}`:""}{pr.pastOwners?` · bought from ${pr.pastOwners}`:""}</div></td>
+                <td>{(()=>{ const st=pr.statusText||"listed"; const map={sold:["Sold","ok"],withdrawn:["Withdrawn","cool"],"off-market":["Off market","info"],"under offer":["Under offer","warn"]}; const [t,c]=map[st]||["Listed","hot"]; return <span className={`chip ${c}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{t}</span>; })()}</td>
+                <td className="mut num">{pr.campaignStart?new Date(pr.campaignStart+"T00:00:00").toLocaleDateString("en-AU",{month:"short",year:"numeric"}):"—"}</td>
+                {i===0&&<td rowSpan={o.props.length}>{o.insps.length?<span className="chip info" style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{o.insps.length} inspection{o.insps.length===1?"":"s"}</span>:<span className="mut">—</span>}</td>}
+              </tr>))}</tbody>
+            </table>}
           </div>}
 
           {tab==="match"&&<div className="crm-card" style={{padding:"18px 20px"}}><BuyerMatch propIndex={propIndex} agentName={agentName}/></div>}
