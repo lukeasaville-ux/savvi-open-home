@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v21-10h-dedupe";
+const BUILD = "v22-10i-enquiry";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1140,6 +1140,10 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 .pill:disabled{opacity:.35;cursor:default;}
 .dv2 .notes-w{padding:0 16px 12px;}
 .dv2 .add-note-btn{padding:10px 13px;}
+.seg3 button.on{background:${WHITE};color:${BROWN};box-shadow:0 1px 2px rgba(49,30,16,.10);}
+.chips{display:flex;gap:6px;margin-top:8px;}
+.chip{border:1px solid ${SAND_D};background:${WHITE};color:${BROWN_L};border-radius:100px;padding:6px 12px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:12px;font-weight:700;cursor:pointer;}
+.chip.on{background:${BROWN};color:${CREAM};border-color:${BROWN};}
 `;
 
 /* ════════════════════════════════════════════
@@ -1264,6 +1268,12 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
   const[nameQ,setNameQ]=useState("");
   const[nameRes,setNameRes]=useState([]);
   const[nameSearching,setNameSearching]=useState(false);
+  // How this buyer came in: a physical inspection at this open, or an ENQUIRY (phone/
+  // email/text) — enquiries are property-level (no open), sit in their own section,
+  // don't count as a visit, and don't get the "thanks for coming through" SMS.
+  const[kind,setKind]=useState("inspection");
+  const[enqVia,setEnqVia]=useState("phone");
+  useEffect(()=>{ if(open){ setKind(openHome?._listing?"enquiry":"inspection"); setEnqVia("phone"); } },[open]);
   const debounce=useRef(null);
   const nameDeb=useRef(null);
   const ref=useRef(null);
@@ -1315,6 +1325,12 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
     const col=sel?.col||AVATAR_COLS[Math.abs((nm.charCodeAt(0)||65)%AVATAR_COLS.length)];
     const tempId="tmp"+Date.now();
     const pid=openHome?.id;
+    const isEnq=kind==="enquiry";
+    const agentFull=AGENT_FULL[agentName]||agentName||"";
+    // The note text is what marks a record as an enquiry everywhere else in the app
+    // (the "Enquiry via …" pattern), so it must be written for manual enquiries too.
+    const enqNote=isEnq?`Enquiry via ${enqVia}: logged by ${agentFull||"agent"}`:null;
+    const enqTs=new Date().toISOString();
 
     // OPTIMISTIC: show the buyer + success overlay INSTANTLY. At an open with a queue
     // of people we must never block on Attio/SMS — those run in the background below.
@@ -1326,7 +1342,10 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
       initials:mkI(nm),col,
       contractSent:false,contractSentTime:null,offered:false,
       smsSent:false,
-      aiProfile:null,notes:[],
+      aiProfile:null,
+      notes:isEnq?[{id:"n"+Date.now(),text:enqNote,ts:enqTs,agent:agentFull}]:[],
+      isEnquiry:isEnq,
+      openHomeId:isEnq?null:(openHome?.id||null),
       firstSeen:new Date().toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"}),
       _attioInspectionId:null,
       _pending: !openHome?._demo,
@@ -1339,9 +1358,14 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
     (async()=>{
       let contactId=sel?.id, inspectionId=null;
       if(!contactId){ const r=await Attio.createPerson({name:nm,email:em,mobile:mob}).catch(()=>({ok:false})); if(r.ok) contactId=r.id; }
-      if(contactId){ const r=await Attio.createInspection({contactId,propertyId:openHome?.propertyId,openHomeId:openHome?.id,interest:interestVal,agent:agentName}).catch(()=>({ok:false})); if(r.ok) inspectionId=r.id; }
+      // An enquiry is property-level: no open_home on the record.
+      if(contactId){ const r=await Attio.createInspection({contactId,propertyId:openHome?.propertyId,openHomeId:isEnq?null:openHome?.id,interest:interestVal,agent:agentName}).catch(()=>({ok:false})); if(r.ok) inspectionId=r.id; }
       if(contactId&&inspectionId){
         onReconcile&&onReconcile(pid,tempId,{id:inspectionId,contactId,_attioInspectionId:inspectionId,_pending:false});
+        if(isEnq){
+          Attio.updateInspection(inspectionId,{notes:`${enqTs}\t${agentFull}\t${enqNote}`}).catch(()=>{});
+          return; // no welcome SMS for an enquiry — they haven't been through the property
+        }
         // Welcome SMS — first inspection of this property only.
         const alreadyInspected=(propContactIds||[]).includes(contactId);
         if(mob && !alreadyInspected){
@@ -1355,11 +1379,24 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
     })();
   };
 
+  // Inspection / Enquiry switch, shown on the final step before saving.
+  const kindPicker=(
+    <div className="fg" style={{paddingTop:0,paddingBottom:8}}>
+      <label className="fl">How did they come in?</label>
+      <div className="seg3" style={{margin:0}}>
+        <button type="button" className={kind==="inspection"?"on":""} onClick={()=>setKind("inspection")}>Inspection</button>
+        <button type="button" className={kind==="enquiry"?"on":""} onClick={()=>setKind("enquiry")}>Enquiry</button>
+      </div>
+      {kind==="enquiry"&&<div className="chips">{[["phone","Phone"],["email","Email"],["text","Text"]].map(([v,l])=><button type="button" key={v} className={`chip${enqVia===v?" on":""}`} onClick={()=>setEnqVia(v)}>{l}</button>)}</div>}
+    </div>
+  );
+  const submitLabel=kind==="enquiry"?"Log enquiry":"Register buyer";
+
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
     <div className="sh" onClick={e=>e.stopPropagation()}>
       <div className="hndl"/>
-      <div className="sh-ttl">{step==="mobile"?"Add buyer":step==="newdetails"?"New contact":"Register buyer"}</div>
-      <div className="sh-sub">{step==="mobile"?openHome?.address:step==="newdetails"?"Fill in their details":"Confirm and register"}</div>
+      <div className="sh-ttl">{step==="mobile"?"Add buyer":step==="newdetails"?"New contact":submitLabel}</div>
+      <div className="sh-sub">{step==="mobile"?openHome?.address:step==="newdetails"?"Fill in their details":(kind==="enquiry"?"Confirm and log":"Confirm and register")}</div>
 
       {step==="mobile"&&byName&&<>
         <div className="fg"><label className="fl">Buyer's name</label>
@@ -1400,8 +1437,9 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
         <div className="fg"><label className="fl">Full name</label><input className="fi" type="text" placeholder="e.g. Tom Nguyen" value={name} onChange={e=>setName(e.target.value)} onBlur={e=>setName(titleName(e.target.value))} autoCapitalize="words" autoFocus/></div>
         <div className="fg"><label className="fl">Email</label><input className="fi" type="email" placeholder="name@email.com" value={email} onChange={e=>setEmail(e.target.value)}/></div>
         {err&&<div style={{color:AMBER_D,fontSize:13,padding:"0 0 8px",lineHeight:1.4}}>{err}</div>}
-        <div className="fg" style={{paddingBottom:0}}><button className="btn-dark" style={{margin:0,width:"100%"}} disabled={!name||saving} onClick={()=>{if(name)save();}}>{saving?<><span className="sp-sm"/>Registering…</>:"Register buyer"}</button></div>
-        {openHome?.igUrl&&<p style={{fontSize:12,color:GRN,textAlign:"center",padding:"10px 16px 0"}}>SMS with the walkthrough video link will be sent automatically</p>}
+        {kindPicker}
+        <div className="fg" style={{paddingBottom:0}}><button className="btn-dark" style={{margin:0,width:"100%"}} disabled={!name||saving} onClick={()=>{if(name)save();}}>{saving?<><span className="sp-sm"/>Saving…</>:submitLabel}</button></div>
+        {openHome?.igUrl&&kind!=="enquiry"&&<p style={{fontSize:12,color:GRN,textAlign:"center",padding:"10px 16px 0"}}>SMS with the walkthrough video link will be sent automatically</p>}
       </>}
 
       {step==="confirm"&&<>
@@ -1411,13 +1449,14 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
           <span className="sel-ch" onClick={()=>setStep(selected?"mobile":"newdetails")}>Change</span>
         </div>
         {err&&<div style={{color:AMBER_D,fontSize:13,padding:"0 0 8px",lineHeight:1.4}}>{err}</div>}
+        {kindPicker}
         <div className="fg" style={{paddingBottom:0}}>
           <button className="btn-dark" style={{margin:0,width:"100%"}} disabled={saving} onClick={save}>
-            {saving?<><span className="sp-sm"/>Registering…</>:"Register buyer"}
+            {saving?<><span className="sp-sm"/>Saving…</>:submitLabel}
           </button>
         </div>
         <p style={{fontSize:12,color:BROWN_L,textAlign:"center",padding:"10px 16px 0"}}>You can set how interested they are later, from their profile.</p>
-        {openHome?.igUrl&&<p style={{fontSize:12,color:GRN,textAlign:"center",padding:"6px 16px 0"}}>SMS with the walkthrough video link will be sent automatically</p>}
+        {openHome?.igUrl&&kind!=="enquiry"&&<p style={{fontSize:12,color:GRN,textAlign:"center",padding:"6px 16px 0"}}>SMS with the walkthrough video link will be sent automatically</p>}
       </>}
       <div style={{height:20}}/>
     </div>
@@ -3440,7 +3479,10 @@ export default function App(){
   },[isDemo,agentName,openHome,addNote]);
 
   const handleSave=b=>{
-    setBuyers(p=>({...p,[openHome.id]:[b,...(p[openHome.id]||[])]}));
+    // An enquiry is property-level: it belongs in the property list (Enquiries
+    // section), not under "At this open".
+    if(b.isEnquiry) setPropBuyers(p=>({...p,[openHome.id]:[b,...(p[openHome.id]||[])]}));
+    else setBuyers(p=>({...p,[openHome.id]:[b,...(p[openHome.id]||[])]}));
     setLastAdded(b);setShowAdd(false);
     setTimeout(()=>setShowOk(true),220);
   };
@@ -3517,6 +3559,7 @@ export default function App(){
   const reconcileBuyer=useCallback((pid,tempId,patch)=>{
     if(!pid)return;
     setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(b=>b.id===tempId?{...b,...patch}:b);return u;});
+    setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(b=>b.id===tempId?{...b,...patch}:b);return u;}); // enquiries live here
     setActive(p=>p?.id===tempId?{...p,...patch}:p);
     setLastAdded(la=>la&&la.id===tempId?{...la,...patch}:la);
   },[]);
