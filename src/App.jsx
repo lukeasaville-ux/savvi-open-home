@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v22-10i-enquiry";
+const BUILD = "v23-card3";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1144,6 +1144,14 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 .chips{display:flex;gap:6px;margin-top:8px;}
 .chip{border:1px solid ${SAND_D};background:${WHITE};color:${BROWN_L};border-radius:100px;padding:6px 12px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:12px;font-weight:700;cursor:pointer;}
 .chip.on{background:${BROWN};color:${CREAM};border-color:${BROWN};}
+/* v3 tweaks: bio at the top and smaller; a sticky "Add a note" dock at the bottom */
+.dv2 .ai-box{margin:10px 16px 0;padding:10px 13px;background:${CREAM};border:1px solid ${SAND_D};border-radius:12px;}
+.dv2 .ai-hdr{margin-bottom:6px;}
+.dv2 .ai-bio{font-size:12.5px;line-height:1.5;}
+.dv2 .stage-pill{margin-bottom:6px;padding:3px 9px;font-size:10.5px;}
+.note-dock{position:sticky;bottom:0;background:${WHITE};border-top:1px solid ${SAND_D};padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));z-index:4;box-shadow:0 -6px 16px rgba(49,30,16,.06);}
+.note-dock .note-area{margin-bottom:8px;}
+.dock-btn{width:100%;padding:14px;border:none;border-radius:12px;background:${BLUE_D};color:#fff;font-family:'Neue Haas Unica Pro',sans-serif;font-size:14px;font-weight:800;cursor:pointer;}
 `;
 
 /* ════════════════════════════════════════════
@@ -1784,13 +1792,28 @@ function SendCard({ buyer, propId, hasContract, onSendContract, onTextContract, 
     </div>
   );
   const canForms=!!buyer._attioInspectionId&&!!onSend;
+  // Offer / bid form status: Sent → Opened → Submitted, from the buyer's notes (the
+  // send + submission are both logged there) and the "offer-opened"/"bid-opened"
+  // lines the form pages append to contract_opens when the buyer opens them.
+  const fmtAt=ts=>ts?fmtDateTime(ts).replace(", "," at "):"";
+  const latestNote=re=>{ const ns=(buyer.notes||[]).filter(n=>re.test(n.text||"")); return ns.length?ns.reduce((a,b)=>(new Date(b.ts||0)>new Date(a.ts||0)?b:a)):null; };
+  const formStatus=kind=>{
+    const done=latestNote(kind==="offer"?/^\s*\[Offer\]/i:/^\s*\[Bid registration\]/i);
+    if(done) return { sub:`Submitted${done.ts?" · "+fmtAt(done.ts):""}`, ok:true };
+    const opens=(buyer.contractOpens||[]).filter(o=>o.kind===kind+"-opened").map(o=>o.at).sort();
+    if(opens.length) return { sub:`Opened${opens.length>1?` ${opens.length}×`:""} · ${fmtAt(opens[opens.length-1])} · not submitted yet`, ok:false };
+    const sent=latestNote(kind==="offer"?/(Text sent:[^]*\/offer\/|Emailed offer form)/i:/(Text sent:[^]*\/bid\/|Emailed bid registration)/i);
+    if(sent) return { sub:`Sent${sent.ts?" · "+fmtAt(sent.ts):""} · not opened yet`, ok:false };
+    return null;
+  };
+  const oSt=canForms?formStatus("offer"):null, bSt=canForms?formStatus("bid"):null;
   return <div className="send">
     <div className="send-h">Send to buyer</div>
     {hasContract
       ? row("c","Contract of sale",cSub,cOk,()=>onTextContract&&onTextContract(propId,buyer),()=>onSendContract&&onSendContract(propId,buyer))
       : row("c","Contract of sale",cSub,false,null,null,!requested&&onRequestContract&&<button className="pill g" onClick={()=>onRequestContract(propId,buyer)}>Request</button>)}
-    {canForms&&row("o","Offer form","Price, deposit, settlement and terms",false,()=>onSend("offer","text",buyer,propId),()=>onSend("offer","email",buyer,propId))}
-    {canForms&&row("b","Bid registration","Auction bidder registration",false,()=>onSend("bid","text",buyer,propId),()=>onSend("bid","email",buyer,propId))}
+    {canForms&&row("o","Offer form",oSt?oSt.sub:"Price, deposit, settlement and terms",!!(oSt&&oSt.ok),()=>onSend("offer","text",buyer,propId),()=>onSend("offer","email",buyer,propId))}
+    {canForms&&row("b","Bid registration",bSt?bSt.sub:"Auction bidder registration",!!(bSt&&bSt.ok),()=>onSend("bid","text",buyer,propId),()=>onSend("bid","email",buyer,propId))}
   </div>;
 }
 
@@ -1891,7 +1914,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
           <div style={{flex:1,minWidth:0}}>
             <div className="det-nm">{buyer.name}</div>
             <div className="det-meta">
-              {(()=>{const h=buyerHeat(buyer);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:6,background:c.bg,color:c.fg}}>{h.score10}/10{h.why.length?` · ${h.why[0]}`:""}</span>;})()}
+              {(()=>{const h=buyerHeat(buyer);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:6,background:c.bg,color:c.fg}}>🔥 {h.score10}/10{h.why.length?` · ${h.why[0]}`:""}</span>;})()}
               {buyer.contractSent&&<span className="ctr-badge">Contract sent</span>}
               {buyer.smsSent&&<span className="sms-badge">SMS sent</span>}
               {days!==null&&<span style={{fontSize:10,color:BROWN_L,fontWeight:500}}>{days}d in system</span>}
@@ -1900,8 +1923,9 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         </div>
       </div>
 
-      {/* Interest: one slim segmented control (was a three-tile grid with its own header) */}
-      <div className="seg3">{ISET.map(o=><button key={o.v} className={buyer.interest===o.v?(o.v==="hot"?"on-hot":o.v==="watching"?"on-wat":"on-cool"):""} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}>{o.l}</button>)}</div>
+      {/* Bio first, compact — the read-before-you-talk summary */}
+      <AiProfile profile={buyer.aiProfile} onRegen={()=>{onSetProfile(propId,buyer.id,null);setTimeout(()=>genProfile(buyer,propId,crossNotes),100);}}/>
+      <div style={{height:10}}/>
 
       {editing ? (
       <div style={{padding:"0 16px 14px"}}>
@@ -1917,14 +1941,20 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         </div>
       </div>
       ) : (<>
-      {/* Quick actions: one row instead of two bordered contact cards + an edit button */}
-      <div className="qa">
-        <a className={buyer.mobile?"":"dis"} href={buyer.mobile?`tel:${toE164AU(buyer.mobile)}`:undefined} onClick={()=>{setCallNote("");setCallOpen(true);}}>Call</a>
-        <a className={buyer.mobile?"":"dis"} href={buyer.mobile?`sms:${toE164AU(buyer.mobile)}`:undefined}>Text</a>
-        <a className={buyer.email?"":"dis"} href={buyer.email?`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(buyer.email)}`:undefined} onClick={buyer.email?(e=>openEmail(e,buyer.email)):undefined} target="_blank" rel="noreferrer">Email</a>
-        <button className={buyer.mobile?"":"dis"} onClick={()=>{navigator.clipboard?.writeText(buyer.mobile||"").catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}}>{copied?"Copied":"Copy"}</button>
+      {/* Contact rows — the original layout Luke prefers */}
+      <div className="crow">
+        <div className="ci" style={{background:"#FFF4D5"}}>📱</div>
+        <div style={{flex:1}}><div className="ci-l">MOBILE</div><div className="ci-v">{buyer.mobile||"—"}</div></div>
+        {buyer.mobile&&<span className="ci-cp" onClick={e=>{e.preventDefault();e.stopPropagation();navigator.clipboard?.writeText(buyer.mobile).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}}>{copied?"Copied ✓":"Copy"}</span>}
+        {buyer.mobile&&<a href={`tel:${toE164AU(buyer.mobile)}`} onClick={()=>{setCallNote("");setCallOpen(true);}} style={{marginLeft:10,fontSize:12,fontWeight:700,color:"#1E8C50",textDecoration:"none"}}>Call</a>}
+        {buyer.mobile&&<a href={`sms:${toE164AU(buyer.mobile)}`} style={{marginLeft:10,fontSize:12,fontWeight:700,color:AMBER,textDecoration:"none"}}>Text ›</a>}
       </div>
-      <div className="qa-meta"><span>{[buyer.mobile,buyer.email].filter(Boolean).join("  ·  ")||"No contact details yet"}</span><span className="qa-edit" onClick={startEdit}>Edit</span></div>
+      <a className="crow" href={buyer.email?`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(buyer.email)}`:undefined} onClick={buyer.email?(e=>openEmail(e,buyer.email)):undefined} target="_blank" rel="noreferrer" style={{marginBottom:4,textDecoration:"none",color:"inherit",cursor:buyer.email?"pointer":"default"}}>
+        <div className="ci" style={{background:"#FFF4D5"}}>✉️</div>
+        <div style={{flex:1}}><div className="ci-l">EMAIL</div><div className="ci-v">{buyer.email||"—"}</div></div>
+        {buyer.email&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:AMBER}}>Email ›</span>}
+      </a>
+      <div style={{padding:"0 16px 12px",textAlign:"right"}}><span className="qa-edit" style={{fontSize:12}} onClick={startEdit}>Edit name, mobile or email</span></div>
       {callOpen&&<div style={{margin:"0 16px 12px",padding:"12px 13px",border:`1px solid ${SAND_D}`,borderRadius:11,background:LINEN}}>
         <div style={{fontSize:12.5,fontWeight:800,color:BROWN,marginBottom:8}}>Log call with {(buyer.name||"").split(" ")[0]}</div>
         <textarea value={callNote} onChange={e=>setCallNote(e.target.value)} placeholder="What did you discuss? (optional)" style={{width:"100%",minHeight:66,padding:10,border:`1px solid ${SAND_D}`,borderRadius:9,fontSize:14,fontFamily:"'Neue Haas Unica Pro',sans-serif",resize:"vertical",outline:"none",boxSizing:"border-box"}}/>
@@ -1935,9 +1965,13 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
       </div>}
       </>)}
 
-      <AiProfile profile={buyer.aiProfile} onRegen={()=>{onSetProfile(propId,buyer.id,null);setTimeout(()=>genProfile(buyer,propId,crossNotes),100);}}/>
-
       <SendCard buyer={buyer} propId={propId} hasContract={!!openHome?.contractUrl} onSendContract={onSendContract} onTextContract={onTextContract} onRequestContract={onRequestContract} onSend={onSendLink}/>
+
+      {/* Interest: the three tiles (Luke's preferred picker) */}
+      <div className="sec-w"><div className="sec-i">Update interest</div></div>
+      <div className="cgr">{ISET.map(o=><div key={o.v} className={`cb ${buyer.interest===o.v?(o.v==="hot"?"ah":o.v==="watching"?"aw":"ac"):""}`} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}>
+        <div style={{fontSize:18,marginBottom:2}}>{o.e}</div><div style={{fontSize:12,fontWeight:700}}>{o.l}</div>
+      </div>)}</div>
 
       <div className="sec-w"><div className="sec-i">Notes</div></div>
       <div className="notes-w">
@@ -1956,15 +1990,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
             </div>
           </>}
         </div>)}</div>}
-        {showNote?<>
-          <textarea className="note-area" placeholder="Price feedback, buyer profile, who they inspect with…" value={noteText} onChange={e=>setNoteText(e.target.value)} autoFocus/>
-          <div className="note-row">
-            <button className="ns-save" disabled={!noteText.trim()} onClick={saveNote}>Save note</button>
-            <button className="ns-can" onClick={()=>{setShowNote(false);setNoteText("");}}>Cancel</button>
-          </div>
-        </>:<button className="add-note-btn" onClick={()=>setShowNote(true)}>
-          <div><div className="add-note-lbl">Add a note</div><div className="add-note-sub">Price feedback, profile, who they inspect with</div></div>
-        </button>}
+        {(buyer.notes||[]).length===0&&<p className="no-hist" style={{padding:"0 0 6px"}}>No notes yet. Tap "Add a note" below.</p>}
       </div>
 
       <div className="sec-w"><div className="sec-i">Other property activity</div></div>
@@ -2021,6 +2047,18 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         <button className="btn-cream" onClick={onClose} style={{padding:"15px"}}>Close</button>
       </div>
       <div style={{height:12}}/>
+
+      {/* Pinned to the bottom of the sheet (sticky) so a note is one thumb-tap away the
+          moment a buyer loads — no scrolling down to the Notes section. */}
+      <div className="note-dock">
+        {showNote?<>
+          <textarea className="note-area" placeholder="Price feedback, buyer profile, who they inspect with…" value={noteText} onChange={e=>setNoteText(e.target.value)} autoFocus/>
+          <div className="note-row">
+            <button className="ns-save" disabled={!noteText.trim()} onClick={saveNote}>Save note</button>
+            <button className="ns-can" onClick={()=>{setShowNote(false);setNoteText("");}}>Cancel</button>
+          </div>
+        </>:<button className="dock-btn" onClick={()=>setShowNote(true)}>Add a note</button>}
+      </div>
     </div>
   </div>;
 }
@@ -2785,7 +2823,7 @@ function CrmBuyerRow({b,onOpen}){
         </div>
       </div>
       <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5}}>
-        {h.score>0&&<span style={{fontSize:11,fontWeight:800,color:h.score>=70?"#C0392B":h.score>=40?"#B7770D":BROWN_L}}>{h.score10}/10</span>}
+        {h.score>0&&<span style={{fontSize:11,fontWeight:800,color:h.score>=70?"#C0392B":h.score>=40?"#B7770D":BROWN_L}}>🔥 {h.score10}/10</span>}
         {b.interest&&<span className={`crm-ib ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>}
       </div>
     </div>
@@ -3172,7 +3210,7 @@ export default function App(){
           </div>
         </div>
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
-          {(()=>{const h=buyerHeat(b);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"2px 7px",borderRadius:8,background:c.bg,color:c.fg,whiteSpace:"nowrap"}}>{h.score10}/10</span>;})()}
+          {(()=>{const h=buyerHeat(b);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"2px 7px",borderRadius:8,background:c.bg,color:c.fg,whiteSpace:"nowrap"}}>🔥 {h.score10}/10</span>;})()}
           <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>
         </div>
       </div>
