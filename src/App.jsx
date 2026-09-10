@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v27-desktop2";
+const BUILD = "v28-workspace";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3020,7 +3020,32 @@ const CRM_CSS = `
 .crm-filters .fchip .n{opacity:.6;margin-left:4px;font-weight:600;}
 .crm-filters input{margin-left:auto;background:${LINEN};border:1.5px solid ${SAND_D};border-radius:9px;padding:7px 12px;font-size:12.5px;outline:none;font-family:inherit;color:${BROWN};min-width:220px;}
 .crm-filters input:focus{border-color:${BLUE};background:${WHITE};}
-.crm-tblwrap{overflow:auto;max-height:calc(100vh - 330px);}
+.crm-tblwrap{overflow:visible;}
+.crm-card.tbl{overflow:visible;}
+.crm-card.tbl .crm-tbl th{top:0;}
+/* Listing workspace */
+.ws{display:flex;flex-direction:column;gap:14px;}
+.ws-head{background:${WHITE};border:1px solid ${SAND_D};border-radius:14px;padding:12px 20px 14px;}
+.ws-nav{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.crm-linkbtn.dark{color:${BLUE_D};padding:4px 6px;}
+.crm-linkbtn.dark:hover{background:${LINEN};color:${BLUE_D};}
+.ws-switch{border:1px solid ${SAND_D};background:${LINEN};color:${BROWN};border-radius:8px;padding:5px 10px;font-family:inherit;font-size:12.5px;font-weight:700;max-width:420px;}
+.ws-title{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;}
+.ws-title .kicker{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1.2px;color:${BROWN_L};margin-bottom:4px;}
+.ws-title .kicker .auct{color:#FE5310;}
+.ws-title h2{font-family:'Newsreader',serif;font-size:26px;font-weight:700;color:${ESPRESSO};margin:0;line-height:1.1;}
+.ws-title .meta{font-size:13px;color:${BROWN_L};margin-top:3px;}
+.ws-tally{display:flex;gap:22px;flex-shrink:0;padding-top:4px;}
+.ws-tally .n{font-family:'Newsreader',serif;font-size:24px;font-weight:700;color:${ESPRESSO};line-height:1;font-variant-numeric:tabular-nums;text-align:center;}
+.ws-tally .l{font-size:11px;color:${BROWN_L};margin-top:4px;font-weight:600;text-align:center;}
+.ws-tally .h .n{color:#C0392B;}.ws-tally .w .n{color:#B7770D;}.ws-tally .e .n{color:${BLUE_D};}
+.ws-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid ${SAND};}
+.crm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-bottom:8px;}
+.crm-lcard{background:${WHITE};border:1px solid ${SAND_D};border-radius:13px;padding:14px 16px;cursor:pointer;transition:border-color .12s,transform .12s;}
+.crm-lcard:hover{border-color:${BLUE};transform:translateY(-1px);}
+.crm-lcard .kicker{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:1.1px;color:${BROWN_L};margin-bottom:6px;}
+.crm-lcard .a{font-family:'Newsreader',serif;font-size:18px;font-weight:700;color:${ESPRESSO};}
+.crm-lcard .s{font-size:12.5px;color:${BROWN_L};margin-top:3px;}
 .crm-bulkbar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:${CREAM};border-top:1px solid ${SAND_D};font-size:12.5px;font-weight:700;color:${BROWN};}
 .heat{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:800;padding:2px 7px;border-radius:6px;font-variant-numeric:tabular-nums;}
 .heat.h{background:#FDE7DF;color:#C0392B;}.heat.m{background:#FBF0D8;color:#B7770D;}.heat.l{background:${LINEN};color:${BROWN_L};}
@@ -3274,32 +3299,51 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const gopen=(r)=>{ setGq(""); setGqOpen(false); if(r.kind==="p"){ onOpenContact(r.c.contactId,r.c.insps[0]?.propertyRef||null); } else { setTab("listings"); select(listingOh(r.p)); } };
   const gflat=[...gres.people.map(c=>({kind:"p",c})),...gres.props.map(p=>({kind:"l",p}))];
 
-  // ── Detail workspace (opens / listings) — reads the App's open-scoped state ──
+  // ── Listing workspace (opens / listings) — reads the App's open-scoped state ──
+  // The listing IS the page: a slim header, every action across the top, then the
+  // buyers as a full-width table that scrolls with the page (no nested scroll boxes).
   const pb=crm.pb||[], propAll=crm.propAll||[], propReal=crm.propReal||[], enquiries=crm.enquiries||[];
   const isLive=sel&&!sel._listing;
-  const tRows=useMemo(()=>{ const src=tf==="enquiry"?enquiries:tf==="open"?pb.filter(b=>!b.isEnquiry):propReal; const q=tq.trim().toLowerCase(); return src.filter(b=>tf==="all"||tf==="enquiry"||tf==="open"?true:tf==="contract"?!!b.contractSent:tf==="repeat"?(b.visits||1)>1:b.interest===tf).filter(b=>!q||(b.name||"").toLowerCase().includes(q)||(b.mobile||"").includes(q)||(b.email||"").toLowerCase().includes(q)).sort((a,b)=>(({hot:3,watching:2,cool:1})[b.interest]||0)-(({hot:3,watching:2,cool:1})[a.interest]||0)||buyerHeat(b).score-buyerHeat(a).score); },[tf,tq,pb,propReal,enquiries]);
+  const [wsel,setWsel]=useState({}); const [wbulk,setWbulk]=useState(false);
+  useEffect(()=>{ setWsel({}); },[sel?.id]);
+  const tRows=useMemo(()=>{ const src=tf==="enquiry"?enquiries:tf==="open"?pb.filter(b=>!b.isEnquiry):propReal; const q=tq.trim().toLowerCase(); return src.filter(b=>tf==="all"||tf==="enquiry"||tf==="open"?true:tf==="contract"?!!b.contractSent:tf==="repeat"?(b.visits||1)>1:tf==="offer"?(b.notes||[]).some(n=>/^\s*\[(Offer|Bid registration)\]/i.test(n.text||"")):b.interest===tf).filter(b=>!q||(b.name||"").toLowerCase().includes(q)||(b.mobile||"").includes(q)||(b.email||"").toLowerCase().includes(q)).sort((a,b)=>(({hot:3,watching:2,cool:1})[b.interest]||0)-(({hot:3,watching:2,cool:1})[a.interest]||0)||buyerHeat(b).score-buyerHeat(a).score); },[tf,tq,pb,propReal,enquiries]);
   const openBuyer=(b)=>{ crm.setActive(b); crm.setShowDetail(true); };
-  const tFilters=[["all","All",propReal.length],isLive?["open","At this open",pb.filter(b=>!b.isEnquiry).length]:null,["hot","Hot",propAll.filter(b=>b.interest==="hot").length],["watching","Watching",propAll.filter(b=>b.interest==="watching").length],["cool","Cool",propAll.filter(b=>b.interest==="cool").length],["contract","Contract sent",propReal.filter(b=>b.contractSent).length],["repeat","Repeat",propReal.filter(b=>(b.visits||1)>1).length],["enquiry","Enquiries",enquiries.length]].filter(Boolean);
-  const renderDetail=()=>{
-    if(!sel) return <div className="crm-card"><div className="crm-empty"><div className="em">👈</div><div>Pick {tab==="opens"?"an open home":"a listing"} to work it: buyers, texts, contracts, vendor update.</div></div></div>;
+  const wselected=tRows.filter(b=>wsel[b.id]);
+  const wAllOn=tRows.length>0&&tRows.every(b=>wsel[b.id]);
+  const emailBuyers=(list)=>{ const to=list.map(b=>b.email).filter(Boolean); if(!to.length) return; const subj=encodeURIComponent(`${streetLine(sel.address,sel.suburb)}: update from Savvi`); window.open(`https://outlook.office.com/mail/deeplink/compose?bcc=${encodeURIComponent(to.join(";"))}&subject=${subj}`,"_blank","noopener"); };
+  const formStatus=(b)=>{ const ns=b.notes||[]; const done=ns.find(n=>/^\s*\[Offer\]/i.test(n.text||""))?"Offer in":ns.find(n=>/^\s*\[Bid registration\]/i.test(n.text||""))?"Registered":null; if(done) return {t:done,c:"ok"}; const op=(b.contractOpens||[]).find(o=>o.kind==="offer-opened"||o.kind==="bid-opened"); if(op) return {t:op.kind==="bid-opened"?"Bid form opened":"Offer form opened",c:"info"}; const sent=ns.some(n=>/(Text sent:[^]*\/(bid|offer)\/|Emailed (offer form|bid registration))/i.test(n.text||"")); return sent?{t:"Link sent",c:"info"}:null; };
+  const tFilters=[["all","All",propReal.length],isLive?["open","At this open",pb.filter(b=>!b.isEnquiry).length]:null,["hot","Hot",propAll.filter(b=>b.interest==="hot").length],["watching","Watching",propAll.filter(b=>b.interest==="watching").length],["cool","Cool",propAll.filter(b=>b.interest==="cool").length],["contract","Contract sent",propReal.filter(b=>b.contractSent).length],["offer","Offers & bids",propAll.filter(b=>(b.notes||[]).some(n=>/^\s*\[(Offer|Bid registration)\]/i.test(n.text||""))).length],["repeat","Repeat",propReal.filter(b=>(b.visits||1)>1).length],["enquiry","Enquiries",enquiries.length]].filter(Boolean);
+  const allOhs=[...(opens||[]),...(allListings||[]).map(listingOh)];
+  const renderWorkspace=()=>{
     const oh=sel; const loading=crm.buyersLoading;
-    return <div className="crm-detail">
-      <div className="crm-dethead">
-        <div className="kicker"><span className="crm-dot" style={{background:oh._listing?SAND_D:BLUE}}/>{oh._listing?"Listing":"Open home"}{oh.time?` · ${oh.time}`:""}{oh.date?` · ${new Date(oh.date+"T00:00:00").toLocaleDateString("en-AU",{weekday:"short",day:"numeric",month:"short"})}`:""}</div>
-        <h2>{streetLine(oh.address,oh.suburb)}</h2>
-        <div className="meta">{[oh.suburb,specOf(oh),oh.price].filter(Boolean).join(" · ")}</div>
-        {oh.auctionDate&&<div className="auct">Auction {fmtAuction(oh.auctionDate)}</div>}
-        {!loading&&<div className="crm-tally">
-          <div><div className="n">{propReal.length}</div><div className="l">Buyers · campaign</div></div>
-          {isLive&&<div><div className="n">{pb.filter(b=>!b.isEnquiry).length}</div><div className="l">At this open</div></div>}
-          <div className="h"><div className="n">{propAll.filter(b=>b.interest==="hot").length}</div><div className="l">Hot</div></div>
-          <div className="w"><div className="n">{propAll.filter(b=>b.interest==="watching").length}</div><div className="l">Watching</div></div>
-          <div><div className="n">{propReal.filter(b=>b.contractSent).length}</div><div className="l">Contracts sent</div></div>
-          {enquiries.length>0&&<div className="e"><div className="n">{enquiries.length}</div><div className="l">Enquiries</div></div>}
-        </div>}
-        <div className="crm-tools">
+    return <div className="ws">
+      <div className="ws-head">
+        <div className="ws-nav">
+          <button className="crm-linkbtn dark" onClick={()=>setSel(null)}>← All {tab==="opens"?"opens":"listings"}</button>
+          <select className="ws-switch" value={oh.id} onChange={e=>{ const o=allOhs.find(x=>x.id===e.target.value); if(o) select(o); }}>
+            {(opens||[]).length>0&&<optgroup label="This week's opens">{(opens||[]).map(o=><option key={o.id} value={o.id}>{streetLine(o.address,o.suburb)} · {o.time||""}</option>)}</optgroup>}
+            <optgroup label="Listings">{(allListings||[]).map(p=>{ const l=listingOh(p); return <option key={l.id} value={l.id}>{streetLine(p.address,p.suburb)}</option>; })}</optgroup>
+          </select>
+        </div>
+        <div className="ws-title">
+          <div style={{minWidth:0}}>
+            <div className="kicker"><span className="crm-dot" style={{background:oh._listing?SAND_D:BLUE}}/>{oh._listing?"Listing":"Open home"}{oh.time?` · ${oh.time}`:""}{oh.date?` · ${crm.fmtDay?crm.fmtDay(oh.date):oh.date}`:""}{oh.auctionDate?<span className="auct"> · Auction {fmtAuction(oh.auctionDate)}</span>:null}</div>
+            <h2>{streetLine(oh.address,oh.suburb)}</h2>
+            <div className="meta">{[oh.suburb,specOf(oh),oh.price].filter(Boolean).join(" · ")}</div>
+          </div>
+          {!loading&&<div className="ws-tally">
+            <div><div className="n">{propReal.length}</div><div className="l">Buyers</div></div>
+            {isLive&&<div><div className="n">{pb.filter(b=>!b.isEnquiry).length}</div><div className="l">At this open</div></div>}
+            <div className="h"><div className="n">{propAll.filter(b=>b.interest==="hot").length}</div><div className="l">Hot</div></div>
+            <div className="w"><div className="n">{propAll.filter(b=>b.interest==="watching").length}</div><div className="l">Watching</div></div>
+            <div><div className="n">{propReal.filter(b=>b.contractSent).length}</div><div className="l">Contracts</div></div>
+            <div className="e"><div className="n">{enquiries.length}</div><div className="l">Enquiries</div></div>
+          </div>}
+        </div>
+        <div className="ws-actions">
           <button className="crm-btn p" onClick={()=>crm.setShowAdd(true)}>+ Add buyer / enquiry</button>
           <button className="crm-btn" disabled={!propAll.some(b=>b.mobile)} onClick={()=>{ crm.setBFilters([]); crm.setShowBulk(true); }}>Text buyers</button>
+          <button className="crm-btn" disabled={!propAll.some(b=>b.email)} onClick={()=>emailBuyers(propReal)}>Email buyers</button>
           <button className="crm-btn" onClick={()=>crm.openQuickContract(oh)}>Send contract</button>
           <button className="crm-btn" onClick={()=>crm.setShowSum(true)}>Vendor update</button>
           <button className="crm-btn" onClick={()=>crm.setShowMatch(true)}>Matching buyers</button>
@@ -3309,28 +3353,48 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
         </div>
         {showInfo&&<div className="crm-info"><OpenListingInfo openHome={oh}/></div>}
       </div>
-      <div className="crm-card">
+      <div className="crm-card tbl">
         <div className="crm-filters">
           {tFilters.map(([k,l,n])=><button key={k} className={`fchip${tf===k?" on":""}`} onClick={()=>setTf(k)}>{l}<span className="n">{n}</span></button>)}
           <input value={tq} onChange={e=>setTq(e.target.value)} placeholder="Search this listing's buyers…"/>
         </div>
-        <div className="crm-tblwrap">
-          {loading&&<div style={{textAlign:"center",padding:40}}><div className="sp"/></div>}
-          {!loading&&tRows.length===0&&<div className="crm-empty"><div className="em">👥</div><div>{propAll.length?"No buyers match that filter.":"No buyers on this listing yet."}</div></div>}
-          {!loading&&tRows.length>0&&<table className="crm-tbl">
-            <thead><tr><th className="ns">Buyer</th><th className="ns">Mobile</th><th className="ns">Interest</th><th className="ns">Heat</th><th className="ns">Contract</th><th className="ns">Visits</th><th className="ns">Last note</th></tr></thead>
-            <tbody>{tRows.map(b=>{ const ln=crmHumanNote(b); return <tr key={b.id} className="r" onClick={()=>openBuyer(b)}>
-              <td><div style={{display:"flex",alignItems:"center",gap:10}}><div className="av" style={{background:b.col||crmColor(b.name),width:28,height:28,fontSize:11}}>{b.initials||crmInitials(b.name)}</div><div><div className="nm">{b.name}</div><div className="mut">{b.email||""}</div></div></div></td>
-              <td className="num">{b.mobile||<span className="mut">—</span>}</td>
-              <td><IBadge v={b.interest} dash/></td>
-              <td><HeatBadge b={b}/></td>
-              <td>{b.contractSent?<span className="chip ok" style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>Sent{(b.contractOpens||[]).some(o=>o.kind==="opened"||o.kind==="clicked")?" · opened":""}</span>:<span className="mut">—</span>}</td>
-              <td className="num">{b.isEnquiry?<span className="mut">enquiry</span>:(b.visits||1)}</td>
-              <td className="wrap" style={{maxWidth:360}}><div className="mut" style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:340}}>{ln?ln.text:"—"}</div>{ln&&ln.ts&&<div className="mut" style={{fontSize:11}}>{crmAgo(ln.ts)}</div>}</td>
-            </tr>; })}</tbody>
-          </table>}
-        </div>
+        {wselected.length>0&&<div className="crm-bulkbar">{wselected.length} selected<button className="crm-btn p" disabled={!wselected.some(b=>b.mobile)} onClick={()=>setWbulk(true)}>Text {wselected.length}</button><button className="crm-btn" disabled={!wselected.some(b=>b.email)} onClick={()=>emailBuyers(wselected)}>Email {wselected.filter(b=>b.email).length}</button><button className="crm-btn" onClick={()=>setWsel({})}>Clear</button></div>}
+        {loading&&<div style={{textAlign:"center",padding:40}}><div className="sp"/></div>}
+        {!loading&&tRows.length===0&&<div className="crm-empty"><div className="em">👥</div><div>{propAll.length?"No buyers match that filter.":"No buyers on this listing yet."}</div></div>}
+        {!loading&&tRows.length>0&&<table className="crm-tbl">
+          <thead><tr>
+            <th className="ns" style={{width:34}}><span className={`crm-ck${wAllOn?" on":""}`} onClick={()=>{ const s={}; if(!wAllOn) tRows.forEach(b=>{ s[b.id]=true; }); setWsel(s); }}>{wAllOn?"✓":""}</span></th>
+            <th className="ns">Buyer</th><th className="ns">Mobile</th><th className="ns">Interest</th><th className="ns">Heat</th><th className="ns">Contract</th><th className="ns">Offer / bid</th><th className="ns">Visits</th><th className="ns">Last note</th>
+          </tr></thead>
+          <tbody>{tRows.map(b=>{ const ln=crmHumanNote(b); const fs=formStatus(b); const co=(b.contractOpens||[]).filter(o=>o.kind==="opened"||o.kind==="clicked").length; return <tr key={b.id} className="r" onClick={()=>openBuyer(b)}>
+            <td onClick={e=>{ e.stopPropagation(); setWsel(s=>({...s,[b.id]:!s[b.id]})); }}><span className={`crm-ck${wsel[b.id]?" on":""}`}>{wsel[b.id]?"✓":""}</span></td>
+            <td><div style={{display:"flex",alignItems:"center",gap:10}}><div className="av" style={{background:b.col||crmColor(b.name),width:30,height:30,fontSize:11}}>{b.initials||crmInitials(b.name)}</div><div><div className="nm">{b.name}</div><div className="mut">{b.email||""}</div></div></div></td>
+            <td className="num">{b.mobile||<span className="mut">—</span>}</td>
+            <td><IBadge v={b.interest} dash/></td>
+            <td><HeatBadge b={b}/></td>
+            <td>{b.contractSent?<span className={`chip ${co?"ok":"info"}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{co?`Opened ${co}×`:"Sent"}</span>:<span className="mut">—</span>}</td>
+            <td>{fs?<span className={`chip ${fs.c}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{fs.t}</span>:<span className="mut">—</span>}</td>
+            <td className="num">{b.isEnquiry?<span className="mut">enquiry</span>:(b.visits||1)}</td>
+            <td className="wrap" style={{minWidth:260,maxWidth:520}}><div className="mut" style={{whiteSpace:"normal",lineHeight:1.4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{ln?ln.text:"—"}</div>{ln&&ln.ts&&<div className="mut" style={{fontSize:11,marginTop:2}}>{crmAgo(ln.ts)}{ln.agent?` · ${ln.agent}`:""}</div>}</td>
+          </tr>; })}</tbody>
+        </table>}
       </div>
+    </div>;
+  };
+  const renderPicker=()=>{
+    const q=dq.trim().toLowerCase(); const m=o=>!q||((o.address||"")+" "+(o.suburb||"")).toLowerCase().includes(q);
+    const card=(o,extra)=><div key={o.id} className="crm-lcard" onClick={()=>select(o)}>
+      <div className="kicker"><span className="crm-dot" style={{background:o.auctionDate?"#FE5310":o._listing?SAND_D:BLUE}}/>{o._listing?"Listing":o.time||"Open"}{o.auctionDate?<span style={{color:"#FE5310",fontWeight:800}}> · Auction {fmtAuction(o.auctionDate)}</span>:null}</div>
+      <div className="a">{streetLine(o.address,o.suburb)}</div>
+      <div className="s">{[o.suburb,specOf(o),o.price].filter(Boolean).join(" · ")}</div>
+      {extra}
+    </div>;
+    return <div className="ws">
+      <div className="crm-filters" style={{border:"none",padding:"0 0 14px"}}><input value={dq} onChange={e=>setDq(e.target.value)} placeholder={tab==="opens"?"Filter opens…":"Filter listings…"} style={{marginLeft:0,minWidth:320}}/><span style={{marginLeft:"auto",fontSize:12.5,color:BROWN_L}}>Pick one to work it</span></div>
+      {tab==="opens"&&(openDays||[]).filter(d=>(opensByDay[d]||[]).some(m)).map(d=><div key={d}><div className="crm-daylbl" style={{padding:"6px 2px 8px"}}>{crm.fmtDay?crm.fmtDay(d):d}</div><div className="crm-grid">{(opensByDay[d]||[]).filter(m).map(o=>card(o))}</div></div>)}
+      {tab==="opens"&&opens.filter(m).length===0&&<div className="crm-empty">No opens match.</div>}
+      {tab==="listings"&&<div className="crm-grid">{(allListings||[]).filter(m).map(p=>card(listingOh(p)))}</div>}
+      {tab==="listings"&&(allListings||[]).filter(m).length===0&&<div className="crm-empty">No listings match.</div>}
     </div>;
   };
 
@@ -3427,18 +3491,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
             </div>
           </>}
 
-          {(tab==="opens"||tab==="listings")&&<div className="crm-split">
-            <div className="crm-list">
-              <div className="lh"><input value={dq} onChange={e=>setDq(e.target.value)} placeholder={tab==="opens"?"Filter opens…":"Filter listings…"}/></div>
-              <div className="lb">
-                {tab==="opens"&&(openDays||[]).filter(d=>(opensByDay[d]||[]).some(_m)).map(d=><div key={d}><div className="crm-daylbl">{crm.fmtDay?crm.fmtDay(d):d}</div>{(opensByDay[d]||[]).filter(_m).map(o=><div key={o.id} className={`crm-row${sel&&sel.id===o.id?" on":""}`} onClick={()=>select(o)}><span className="crm-dot" style={{background:o.auctionDate?"#FE5310":BLUE}}/><div style={{minWidth:0}}><div className="t">{streetLine(o.address,o.suburb)}</div><div className="s">{[o.time,o.suburb,o.price].filter(Boolean).join(" · ")}</div></div></div>)}</div>)}
-                {tab==="opens"&&opens.filter(_m).length===0&&<div className="crm-empty">No opens match.</div>}
-                {tab==="listings"&&(allListings||[]).filter(_m).map(p=>{ const oh=listingOh(p); return <div key={oh.id} className={`crm-row${sel&&sel.id===oh.id?" on":""}`} onClick={()=>select(oh)}><span className="crm-dot" style={{background:p.auctionDate?"#FE5310":SAND_D}}/><div style={{minWidth:0}}><div className="t">{streetLine(p.address,p.suburb)}</div><div className="s">{[p.suburb,specOf(p),p.price].filter(Boolean).join(" · ")}</div></div>{p.auctionDate&&<div className="r"><div className="m" style={{color:"#FE5310",fontWeight:800}}>Auction</div></div>}</div>; })}
-                {tab==="listings"&&(allListings||[]).filter(_m).length===0&&<div className="crm-empty">No listings match.</div>}
-              </div>
-            </div>
-            {renderDetail()}
-          </div>}
+          {(tab==="opens"||tab==="listings")&&(sel?renderWorkspace():renderPicker())}
 
           {tab==="contacts"&&<div className="crm-card">
             <div className="crm-filters">
@@ -3480,6 +3533,9 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
         </div>
       </div>
     </main>
+    {/* Selected rows on the listing workspace → same bulk sheet the phone uses, templates included */}
+    {sel&&<BulkTextSheet open={wbulk} onClose={()=>setWbulk(false)} buyers={wselected} agentName={agentName} label={`${wselected.length} selected`} address={sel.address} suburb={sel.suburb} isAuction={!!sel.auctionDate}
+      onLogNote={(b,sent)=>{ if(crm.addNote&&crm.openHome?.id&&b?.id) crm.addNote(crm.openHome.id,b.id,`Text sent: "${sent}"`); }}/>}
     {/* Contact-level bulk text (custom message only — link templates need a listing context) */}
     <BulkTextSheet open={cbulk} onClose={()=>setCbulk(false)} buyers={bulkContacts} agentName={agentName} label="Contacts" address="" templates={false}
       onLogNote={(b,sent)=>{ if(!b._attioInspectionId) return; const agentFull=AGENT_FULL[agentName]||agentName||""; const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; const notes=[...(b._inspNotes||[]),{ts:new Date().toISOString(),agent:agentFull,text:`Text sent: "${sent}"`}]; Attio.updateInspection(b._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); }}/>
@@ -4059,7 +4115,7 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  const crm={ openHome, enterOpenHome, pb, propAll, propReal, enquiries, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setShowMatch, setShowAssistant, setShowAddListing, setBFilters, fmtDay, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
+  const crm={ openHome, enterOpenHome, pb, propAll, propReal, enquiries, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setShowMatch, setShowAssistant, setShowAddListing, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
