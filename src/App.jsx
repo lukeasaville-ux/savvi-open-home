@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v19-10f-forms2";
+const BUILD = "v20-10g-card";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -265,16 +265,28 @@ const Attio = {
   // One fetch → "at this open" + "all buyers ever registered to this property" (deduped by contact).
   async getBuyersFor(openHomeId, propertyId) {
     let inspData, pplData;
-    if (_buyerRecCache && (Date.now() - _buyerRecCache.t) < 60000) {
-      inspData = _buyerRecCache.insp; pplData = _buyerRecCache.ppl;
-    } else {
-      const [inspJ, pplJ] = await Promise.all([
-        call("listRecords", { objectSlug: "inspections" }),
-        call("listRecords", { objectSlug: "people" }),
-      ]);
-      if (!inspJ?.ok) return { ok: false, open: [], property: [] };
-      inspData = inspJ.data || []; pplData = pplJ?.data || [];
-      _buyerRecCache = { t: Date.now(), insp: inspData, ppl: pplData };
+    // Fast path: the backend returns ONLY this property's inspections, those contacts'
+    // other inspections (for cross-property activity) and just those people — a few
+    // dozen records instead of every person + inspection in the CRM (the old way).
+    if (propertyId) {
+      try {
+        const f = await call("getBuyersFor", { propertyId, openHomeId });
+        if (f?.ok && Array.isArray(f.insp)) { inspData = f.insp; pplData = f.ppl || []; }
+      } catch (e) {}
+    }
+    if (!inspData) {
+      // Fallback: the full pull (also what search / buyer-match use).
+      if (_buyerRecCache && (Date.now() - _buyerRecCache.t) < 60000) {
+        inspData = _buyerRecCache.insp; pplData = _buyerRecCache.ppl;
+      } else {
+        const [inspJ, pplJ] = await Promise.all([
+          call("listRecords", { objectSlug: "inspections" }),
+          call("listRecords", { objectSlug: "people" }),
+        ]);
+        if (!inspJ?.ok) return { ok: false, open: [], property: [] };
+        inspData = inspJ.data || []; pplData = pplJ?.data || [];
+        _buyerRecCache = { t: Date.now(), insp: inspData, ppl: pplData };
+      }
     }
     const inspJ = { data: inspData }, pplJ = { data: pplData };
     const rid = r => r?.id?.record_id ?? null;
@@ -315,8 +327,15 @@ const Attio = {
       const src = list.find(b => String(b.contractOpens || "").trim())
                 || [...list].reverse().find(b => b.contractSent)
                 || list[0];
+      // Notes: UNION across every inspection in the group, oldest first. A repeat visit
+      // creates a fresh inspection record, and showing only that record's notes made
+      // earlier notes look "lost" (they were still in Attio on the older record).
+      const seenN = new Set(), noteLines = [];
+      list.forEach(b => String(b.notes || "").split("\n---\n").map(s => s.trim()).filter(Boolean).forEach(l => { if (!seenN.has(l)) { seenN.add(l); noteLines.push(l); } }));
+      noteLines.sort((a, b) => (/^\d{4}-/.test(a) ? a.slice(0, 24) : "~").localeCompare(/^\d{4}-/.test(b) ? b.slice(0, 24) : "~"));
       return {
         ...src,
+        notes: noteLines.join("\n---\n"),
         contractSent: list.some(b => b.contractSent),
         contractSentTime: src.contractSentTime || (list.find(b => b.contractSentTime) || {}).contractSentTime || null,
         resendId: src.resendId || (list.find(b => b.resendId) || {}).resendId || null,
@@ -357,11 +376,15 @@ const Attio = {
       if (openHomeId && oh === openHomeId) (openGroups[k] = openGroups[k] || []).push(b);
       if (propertyId && pr === propertyId) (propGroups[k] = propGroups[k] || []).push(b);
     });
-    return {
-      ok: true,
-      open: attachOther(Object.values(openGroups).map(mergeGroup).map(normBuyer), propertyId),
-      property: attachOther(Object.values(propGroups).map(mergeGroup).map(normBuyer), propertyId),
-    };
+    const property = attachOther(Object.values(propGroups).map(mergeGroup).map(normBuyer), propertyId);
+    // An open-scoped card only groups the inspections FROM THAT OPEN; borrow the
+    // property-level merge so notes/visits/contract state from earlier visits still show.
+    const byKey = {}; property.forEach(p => { byKey[p.contactId || p.id] = p; });
+    const open = attachOther(Object.values(openGroups).map(mergeGroup).map(normBuyer), propertyId).map(c => {
+      const p = byKey[c.contactId || c.id]; if (!p) return c;
+      return { ...c, notes: p.notes, visits: p.visits, openHomeIds: p.openHomeIds, contractSent: c.contractSent || p.contractSent, contractSentTime: c.contractSentTime || p.contractSentTime, resendId: c.resendId || p.resendId, contractOpens: p.contractOpens, otherProps: p.otherProps };
+    });
+    return { ok: true, open, property };
   },
   // One row per buyer (deduped by contact) with every note they have across all
   // inspections joined together — the corpus the AI query reads over.
@@ -1089,6 +1112,32 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 .bm-count{font-size:11px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:${BLUE_D};margin-bottom:2px;}
 .bm-tok{display:inline-flex;align-items:center;gap:5px;background:${CREAM};border:1px solid ${SAND_D};border-radius:100px;padding:4px 11px;font-size:12px;font-weight:600;color:${BROWN};cursor:pointer;font-family:inherit;}
 .bm-prev{background:${LINEN};border:1px solid ${SAND_D};border-left:3px solid ${BLUE};border-radius:10px;padding:11px 13px;font-size:13px;color:${BROWN};line-height:1.5;white-space:pre-wrap;}
+/* ── buyer detail v2: compact layout (fewer boxes, slimmer controls) ── */
+.dv2 .det-top{padding:14px 18px 10px;border-bottom:none;}
+.dv2 .det-nm{margin-bottom:6px;}
+.dv2 .ai-box{margin:0 16px 10px;padding:11px 13px;background:${LINEN};border:1px solid ${SAND_D};border-radius:12px;}
+.seg3{display:flex;gap:4px;background:${LINEN};border:1px solid ${SAND_D};border-radius:100px;padding:3px;margin:0 16px 10px;}
+.seg3 button{flex:1;border:none;background:transparent;border-radius:100px;padding:8px 6px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:12.5px;font-weight:700;color:${BROWN_L};cursor:pointer;}
+.seg3 button.on-hot{background:#FDECEA;color:#C0392B;}.seg3 button.on-wat{background:#FEF9E7;color:#B7770D;}.seg3 button.on-cool{background:#EEF1F4;color:#5B6B78;}
+.qa{display:flex;gap:6px;margin:0 16px 6px;}
+.qa a,.qa button{flex:1;display:flex;align-items:center;justify-content:center;padding:10px 4px;border-radius:10px;border:1px solid ${SAND_D};background:${WHITE};font-family:'Neue Haas Unica Pro',sans-serif;font-size:12.5px;font-weight:700;color:${BROWN};text-decoration:none;cursor:pointer;}
+.qa a.dis,.qa button.dis{opacity:.35;pointer-events:none;}
+.qa-meta{margin:0 16px 12px;font-size:12px;color:${BROWN_L};line-height:1.5;display:flex;justify-content:space-between;gap:10px;}
+.qa-meta span:first-child{min-width:0;overflow-wrap:anywhere;}
+.qa-edit{color:${BLUE_D};font-weight:700;cursor:pointer;flex-shrink:0;}
+.send{margin:0 16px 12px;border:1px solid ${SAND_D};border-radius:13px;background:${WHITE};overflow:hidden;}
+.send-h{padding:9px 13px 7px;font-size:10px;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;color:${BROWN_L};background:${LINEN};border-bottom:1px solid ${SAND_D};}
+.send-r{display:flex;align-items:center;gap:10px;padding:10px 13px;border-bottom:1px solid ${SAND};}
+.send-r:last-child{border-bottom:none;}
+.send-l{font-size:13px;font-weight:600;color:${BROWN};}
+.send-s{font-size:11px;color:${BROWN_L};margin-top:1px;}
+.send-s.ok{color:${GRN};}
+.send-b{margin-left:auto;display:flex;gap:5px;flex:0 0 auto;}
+.pill{border:none;border-radius:100px;padding:6px 11px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:11.5px;font-weight:700;cursor:pointer;}
+.pill.t{background:${GRN};color:#fff;}.pill.e{background:${BLUE};color:#fff;}.pill.g{background:${LINEN};color:${BROWN_M};border:1px solid ${SAND_D};}.pill.done{background:${GRN_BG};color:${GRN};}
+.pill:disabled{opacity:.35;cursor:default;}
+.dv2 .notes-w{padding:0 16px 12px;}
+.dv2 .add-note-btn{padding:10px 13px;}
 `;
 
 /* ════════════════════════════════════════════
@@ -1653,6 +1702,57 @@ function OfferBidRows({ buyer, propId, onSend }){
   );
 }
 
+// One compact "Send to buyer" card: contract of sale + offer form + bid registration,
+// each sendable by Text / Email. Replaces the three stacked boxes it used to be.
+function SendCard({ buyer, propId, hasContract, onSendContract, onTextContract, onRequestContract, onSend }){
+  const [tracking,setTracking]=useState(null);
+  const [loadingTrack,setLoadingTrack]=useState(false);
+  const [sent,setSent]=useState({});
+  useEffect(()=>{
+    if(buyer?.contractSent&&buyer?.resendId&&!tracking){
+      setLoadingTrack(true);
+      Resend.getEmailStatus(buyer.resendId).then(s=>{setTracking(s);setLoadingTrack(false);});
+    }
+  },[buyer?.resendId,buyer?.contractSent]);
+  if(!buyer) return null;
+  const canText=!!buyer.mobile, canEmail=!!buyer.email;
+  const flash=k=>{ setSent(s=>({...s,[k]:true})); setTimeout(()=>setSent(s=>({...s,[k]:false})),2500); };
+  // Contract status line (opened/clicked events from either channel, else Resend's last event)
+  const views=(buyer.contractOpens||[]).filter(o=>o.kind==="opened"||o.kind==="clicked").slice().sort((a,b)=>new Date(a.at)-new Date(b.at));
+  const emailed=!!buyer.resendId;
+  const clicked=!!(tracking&&tracking.status==="clicked");
+  const viewed=views.length>0||(emailed&&clicked);
+  const lastAt=views.length?views[views.length-1].at:(clicked?tracking.updatedAt:null);
+  const requested=(buyer.notes||[]).some(n=>/contract requested/i.test(n.text||""));
+  let cSub="", cOk=false;
+  if(!hasContract) cSub=requested?"Requested · sends automatically once uploaded":"No contract uploaded yet";
+  else if(!buyer.contractSent) cSub="Not sent yet";
+  else {
+    cOk=true;
+    if(viewed) cSub=`Opened${views.length>1?` ${views.length}×`:""} · ${fmtDateTime(lastAt).replace(", "," at ")}`;
+    else cSub=`Sent ${buyer.contractSentTime||""}`.trim()+(emailed?(loadingTrack?" · checking":tracking?` · ${({delivered:"Delivered",opened:"Opened",clicked:"Link clicked",bounced:"Bounced"})[tracking.status]||"Sent"}`:""):" · by text");
+  }
+  const row=(key,label,sub,ok,onT,onE,extra)=>(
+    <div className="send-r" key={key}>
+      <div style={{flex:1,minWidth:0}}><div className="send-l">{label}</div><div className={`send-s${ok?" ok":""}`}>{sub}</div></div>
+      <div className="send-b">
+        {extra}
+        {onT&&<button className={`pill ${sent[key+"t"]?"done":"t"}`} disabled={!canText} onClick={()=>{ if(onT()!==false) flash(key+"t"); }}>{sent[key+"t"]?"Sent":"Text"}</button>}
+        {onE&&<button className={`pill ${sent[key+"e"]?"done":"e"}`} disabled={!canEmail} onClick={()=>{ if(onE()!==false) flash(key+"e"); }}>{sent[key+"e"]?"Sent":(key==="c"&&emailed?"Resend":"Email")}</button>}
+      </div>
+    </div>
+  );
+  const canForms=!!buyer._attioInspectionId&&!!onSend;
+  return <div className="send">
+    <div className="send-h">Send to buyer</div>
+    {hasContract
+      ? row("c","Contract of sale",cSub,cOk,()=>onTextContract&&onTextContract(propId,buyer),()=>onSendContract&&onSendContract(propId,buyer))
+      : row("c","Contract of sale",cSub,false,null,null,!requested&&onRequestContract&&<button className="pill g" onClick={()=>onRequestContract(propId,buyer)}>Request</button>)}
+    {canForms&&row("o","Offer form","Price, deposit, settlement and terms",false,()=>onSend("offer","text",buyer,propId),()=>onSend("offer","email",buyer,propId))}
+    {canForms&&row("b","Bid registration","Auction bidder registration",false,()=>onSend("bid","text",buyer,propId),()=>onSend("bid","email",buyer,propId))}
+  </div>;
+}
+
 function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink}){
   const[noteText,setNoteText]=useState("");
   const[showNote,setShowNote]=useState(false);
@@ -1741,17 +1841,16 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
   const days=daysSince(buyer.firstSeen);
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}} {...drag.handlers}>
+    <div className="sh dv2" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}} {...drag.handlers}>
       <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
       <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,lineHeight:1,cursor:"pointer",zIndex:5,fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>✕</button>
       <div className="det-top">
         <div className="det-row" style={{paddingRight:40}}>
           <div className="av" style={{background:buyer.col,width:52,height:52,fontSize:20}}>{buyer.initials}</div>
-          <div style={{flex:1}}>
+          <div style={{flex:1,minWidth:0}}>
             <div className="det-nm">{buyer.name}</div>
             <div className="det-meta">
               {(()=>{const h=buyerHeat(buyer);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:6,background:c.bg,color:c.fg}}>{h.score10}/10{h.why.length?` · ${h.why[0]}`:""}</span>;})()}
-              {buyer.interest ? <span className={`ibadge ${iCl(buyer.interest)}`}>{iLbl(buyer.interest)}</span> : <span style={{fontSize:11,fontWeight:700,color:BLUE,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:6,padding:"3px 8px"}}>Set interest ↓</span>}
               {buyer.contractSent&&<span className="ctr-badge">Contract sent</span>}
               {buyer.smsSent&&<span className="sms-badge">SMS sent</span>}
               {days!==null&&<span style={{fontSize:10,color:BROWN_L,fontWeight:500}}>{days}d in system</span>}
@@ -1760,8 +1859,8 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         </div>
       </div>
 
-      <AiProfile profile={buyer.aiProfile} onRegen={()=>{onSetProfile(propId,buyer.id,null);setTimeout(()=>genProfile(buyer,propId,crossNotes),100);}}/>
-      <div style={{height:12}}/>
+      {/* Interest: one slim segmented control (was a three-tile grid with its own header) */}
+      <div className="seg3">{ISET.map(o=><button key={o.v} className={buyer.interest===o.v?(o.v==="hot"?"on-hot":o.v==="watching"?"on-wat":"on-cool"):""} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}>{o.l}</button>)}</div>
 
       {editing ? (
       <div style={{padding:"0 16px 14px"}}>
@@ -1777,42 +1876,31 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         </div>
       </div>
       ) : (<>
-      <div className="crow">
-        <div className="ci" style={{background:"#FFF4D5"}}>📱</div>
-        <div style={{flex:1}}><div className="ci-l">MOBILE</div><div className="ci-v">{buyer.mobile||"—"}</div></div>
-        {buyer.mobile&&<span className="ci-cp" onClick={e=>{e.preventDefault();e.stopPropagation();navigator.clipboard?.writeText(buyer.mobile).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}}>{copied?"Copied ✓":"Copy"}</span>}
-        {buyer.mobile&&<a href={`tel:${toE164AU(buyer.mobile)}`} onClick={()=>{setCallNote("");setCallOpen(true);}} style={{marginLeft:10,fontSize:12,fontWeight:700,color:"#1E8C50",textDecoration:"none"}}>Call</a>}
-        {buyer.mobile&&<a href={`sms:${toE164AU(buyer.mobile)}`} style={{marginLeft:10,fontSize:12,fontWeight:700,color:AMBER,textDecoration:"none"}}>Text ›</a>}
+      {/* Quick actions: one row instead of two bordered contact cards + an edit button */}
+      <div className="qa">
+        <a className={buyer.mobile?"":"dis"} href={buyer.mobile?`tel:${toE164AU(buyer.mobile)}`:undefined} onClick={()=>{setCallNote("");setCallOpen(true);}}>Call</a>
+        <a className={buyer.mobile?"":"dis"} href={buyer.mobile?`sms:${toE164AU(buyer.mobile)}`:undefined}>Text</a>
+        <a className={buyer.email?"":"dis"} href={buyer.email?`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(buyer.email)}`:undefined} onClick={buyer.email?(e=>openEmail(e,buyer.email)):undefined} target="_blank" rel="noreferrer">Email</a>
+        <button className={buyer.mobile?"":"dis"} onClick={()=>{navigator.clipboard?.writeText(buyer.mobile||"").catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}}>{copied?"Copied":"Copy"}</button>
       </div>
-      {callOpen&&<div style={{margin:"2px 0 10px",padding:"12px 13px",border:`1px solid ${SAND_D}`,borderRadius:11,background:LINEN}}>
+      <div className="qa-meta"><span>{[buyer.mobile,buyer.email].filter(Boolean).join("  ·  ")||"No contact details yet"}</span><span className="qa-edit" onClick={startEdit}>Edit</span></div>
+      {callOpen&&<div style={{margin:"0 16px 12px",padding:"12px 13px",border:`1px solid ${SAND_D}`,borderRadius:11,background:LINEN}}>
         <div style={{fontSize:12.5,fontWeight:800,color:BROWN,marginBottom:8}}>Log call with {(buyer.name||"").split(" ")[0]}</div>
         <textarea value={callNote} onChange={e=>setCallNote(e.target.value)} placeholder="What did you discuss? (optional)" style={{width:"100%",minHeight:66,padding:10,border:`1px solid ${SAND_D}`,borderRadius:9,fontSize:14,fontFamily:"'Neue Haas Unica Pro',sans-serif",resize:"vertical",outline:"none",boxSizing:"border-box"}}/>
         <div style={{display:"flex",gap:8,marginTop:8}}>
           <button onClick={()=>{setCallOpen(false);setCallNote("");}} style={{flex:1,padding:"10px",borderRadius:9,border:`1px solid ${SAND_D}`,background:WHITE,color:BROWN_L,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Cancel</button>
-          <button onClick={()=>{ const first=(buyer.name||"").split(" ")[0]||""; const txt=callNote.trim()?`Called ${first} — ${callNote.trim()}`:`Called ${first}`; if(onAddNote&&propId) onAddNote(propId,buyer.id,txt); setCallOpen(false); setCallNote(""); }} style={{flex:1,padding:"10px",borderRadius:9,border:"none",background:BLUE_D,color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Log call</button>
+          <button onClick={()=>{ const first=(buyer.name||"").split(" ")[0]||""; const txt=callNote.trim()?`Called ${first}: ${callNote.trim()}`:`Called ${first}`; if(onAddNote&&propId) onAddNote(propId,buyer.id,txt); setCallOpen(false); setCallNote(""); }} style={{flex:1,padding:"10px",borderRadius:9,border:"none",background:BLUE_D,color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Log call</button>
         </div>
       </div>}
-      <a className="crow" href={buyer.email?`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(buyer.email)}`:undefined} onClick={buyer.email?(e=>openEmail(e,buyer.email)):undefined} target="_blank" rel="noreferrer" style={{marginBottom:8,textDecoration:"none",color:"inherit",cursor:buyer.email?"pointer":"default"}}>
-        <div className="ci" style={{background:"#FFF4D5"}}>✉️</div>
-        <div style={{flex:1}}><div className="ci-l">EMAIL</div><div className="ci-v">{buyer.email||"—"}</div></div>
-        {buyer.email&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:AMBER}}>Email ›</span>}
-      </a>
-      <div style={{padding:"0 16px 12px"}}>
-        <button className="btn-ghost" style={{margin:0}} onClick={startEdit}>✏️ Edit name, mobile or email</button>
-      </div>
       </>)}
 
-      <ContractBox buyer={buyer} propId={propId} onSendContract={onSendContract} onTextContract={onTextContract} hasContract={!!openHome?.contractUrl} onRequestContract={onRequestContract}/>
-      <OfferBidRows buyer={buyer} propId={propId} onSend={onSendLink}/>
+      <AiProfile profile={buyer.aiProfile} onRegen={()=>{onSetProfile(propId,buyer.id,null);setTimeout(()=>genProfile(buyer,propId,crossNotes),100);}}/>
 
-      <div className="sec-w"><div className="sec-i">Update interest</div></div>
-      <div className="cgr">{ISET.map(o=><div key={o.v} className={`cb ${buyer.interest===o.v?(o.v==="hot"?"ah":o.v==="watching"?"aw":"ac"):""}`} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}>
-        <div style={{fontSize:18,marginBottom:2}}>{o.e}</div><div style={{fontSize:12,fontWeight:700}}>{o.l}</div>
-      </div>)}</div>
+      <SendCard buyer={buyer} propId={propId} hasContract={!!openHome?.contractUrl} onSendContract={onSendContract} onTextContract={onTextContract} onRequestContract={onRequestContract} onSend={onSendLink}/>
 
       <div className="sec-w"><div className="sec-i">Notes</div></div>
       <div className="notes-w">
-        {(buyer.notes||[]).length>0&&<div className="note-feed">{[...(buyer.notes||[])].reverse().map(n=><div key={n.id} className="note-item">
+        {(buyer.notes||[]).length>0&&<div className="note-feed">{[...(buyer.notes||[])].reverse().filter(n=>!/^\s*\[[a-z0-9_-]+\]\s*$/i.test(n.text||"")).map(n=><div key={n.id} className="note-item">
           {editNoteId===n.id?<>
             <textarea className="note-area" value={editNoteText} onChange={e=>setEditNoteText(e.target.value)} autoFocus/>
             <div className="note-row">
@@ -1834,7 +1922,6 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
             <button className="ns-can" onClick={()=>{setShowNote(false);setNoteText("");}}>Cancel</button>
           </div>
         </>:<button className="add-note-btn" onClick={()=>setShowNote(true)}>
-          <span style={{fontSize:17}}>📝</span>
           <div><div className="add-note-lbl">Add a note</div><div className="add-note-sub">Price feedback, profile, who they inspect with</div></div>
         </button>}
       </div>
@@ -1870,11 +1957,11 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
 
       {/* Move a mis-registered buyer to the right open, or remove them from this one. */}
       {onRemoveBuyer&&buyer._attioInspectionId&&<div style={{padding:"16px 16px 0"}}>
-        {!manage?<button className="btn-ghost" style={{margin:0}} onClick={()=>setManage(true)}>⚙️ Move or remove from this open</button>:<>
+        {!manage?<button className="btn-ghost" style={{margin:0}} onClick={()=>setManage(true)}>Move or remove from this open</button>:<>
           <div className="sec-w" style={{padding:0,marginBottom:8}}><div className="sec-i">Manage registration</div></div>
           {!xfer?<>
-            <button className="btn-ghost" style={{margin:"0 0 8px"}} onClick={()=>setXfer(true)}>↔️ Move to another open</button>
-            <button onClick={()=>{ if(window.confirm(`Remove ${buyer.name} from this open? They'll stay in your CRM and any other opens.`)){ onRemoveBuyer(propId,buyer); onClose(); } }} style={{width:"100%",padding:"12px",borderRadius:11,border:`1px solid ${AMBER_D}`,background:"#fff",color:AMBER_D,fontWeight:800,fontSize:13.5,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>🗑 Remove from this open</button>
+            <button className="btn-ghost" style={{margin:"0 0 8px"}} onClick={()=>setXfer(true)}>Move to another open</button>
+            <button onClick={()=>{ if(window.confirm(`Remove ${buyer.name} from this open? They'll stay in your CRM and any other opens.`)){ onRemoveBuyer(propId,buyer); onClose(); } }} style={{width:"100%",padding:"12px",borderRadius:11,border:`1px solid ${AMBER_D}`,background:"#fff",color:AMBER_D,fontWeight:800,fontSize:13.5,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Remove from this open</button>
             <button className="btn-cream" style={{marginTop:8}} onClick={()=>setManage(false)}>Cancel</button>
           </>:<>
             <div style={{fontSize:12.5,color:BROWN_L,padding:"0 0 8px"}}>Move <strong>{buyer.name}</strong> into:</div>
