@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v25-card4";
+const BUILD = "v26-undo";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1138,6 +1138,12 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 .pill{border:none;border-radius:100px;padding:6px 11px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:11.5px;font-weight:700;cursor:pointer;}
 .pill.t{background:${GRN};color:#fff;}.pill.e{background:${BLUE};color:#fff;}.pill.g{background:${LINEN};color:${BROWN_M};border:1px solid ${SAND_D};}.pill.done{background:${GRN_BG};color:${GRN};}
 .pill:disabled{opacity:.35;cursor:default;}
+.pill.u{background:#FDECEA;color:#C0392B;border:1px solid #C0392B55;font-variant-numeric:tabular-nums;}
+/* The compact bio box is a FIXED height in every state (loading / empty / loaded), so the
+   profile arriving a couple of seconds after the card opens can't shift the buttons
+   under a finger that's already moving. "More" expands it explicitly. */
+.dv2 .ai-box{height:94px;box-sizing:border-box;overflow:hidden;}
+.dv2 .ai-box.open{height:auto;}
 .dv2 .notes-w{padding:0 16px 12px;}
 .dv2 .add-note-btn{padding:10px 13px;}
 .seg3 button.on{background:${WHITE};color:${BROWN};box-shadow:0 1px 2px rgba(49,30,16,.10);}
@@ -1266,7 +1272,7 @@ function AiProfile({profile,onRegen,compact=false}){
   const pill=cfg&&<div className="stage-pill" style={{background:cfg.bg,color:cfg.col,border:`1px solid ${cfg.dot}40`}}>
     <div className="stage-dot" style={{background:cfg.dot}}/>{profile.stage} stage{compact?"":" buyer"}
   </div>;
-  return <div className="ai-box">
+  return <div className={`ai-box${compact&&more?" open":""}`}>
     <div className="ai-hdr"><span className="ai-lbl">Buyer profile</span>
       {compact&&profile&&!profile.loading&&pill}
       {profile&&!profile.loading&&<span className="ai-regen" onClick={onRegen}>Refresh ↻</span>}
@@ -1794,6 +1800,20 @@ function SendCard({ buyer, propId, hasContract, onSendContract, onTextContract, 
   if(!buyer) return null;
   const canText=!!buyer.mobile, canEmail=!!buyer.email;
   const flash=k=>{ setSent(s=>({...s,[k]:true})); setTimeout(()=>setSent(s=>({...s,[k]:false})),2500); };
+  // Undo window: a tap on Text/Email arms a 5s countdown (pill turns into "Undo · 5") and
+  // the send only fires when it hits zero — an accidental tap is reversible. Keyed by
+  // buyer so switching cards can't show another buyer's countdown. Closing the sheet
+  // (unmount) fires anything still pending rather than silently dropping it.
+  const [pending,setPending]=useState({});
+  const pendRef=useRef({});
+  const cancel=k=>{ const e=pendRef.current[k]; if(e){ clearInterval(e.iv); delete pendRef.current[k]; } setPending(p=>{ const q={...p}; delete q[k]; return q; }); };
+  const arm=(k,fn)=>{
+    if(pendRef.current[k]){ cancel(k); return; }
+    let left=5; setPending(p=>({...p,[k]:left}));
+    const iv=setInterval(()=>{ left--; if(left<=0){ clearInterval(iv); delete pendRef.current[k]; setPending(p=>{ const q={...p}; delete q[k]; return q; }); if(fn()!==false) flash(k); } else setPending(p=>({...p,[k]:left})); },1000);
+    pendRef.current[k]={iv,fn};
+  };
+  useEffect(()=>()=>{ Object.values(pendRef.current).forEach(e=>{ clearInterval(e.iv); try{ e.fn(); }catch(err){} }); pendRef.current={}; },[]);
   // Contract status line (opened/clicked events from either channel, else Resend's last event)
   const views=(buyer.contractOpens||[]).filter(o=>o.kind==="opened"||o.kind==="clicked").slice().sort((a,b)=>new Date(a.at)-new Date(b.at));
   const emailed=!!buyer.resendId;
@@ -1809,16 +1829,23 @@ function SendCard({ buyer, propId, hasContract, onSendContract, onTextContract, 
     if(viewed) cSub=`Opened${views.length>1?` ${views.length}×`:""} · ${fmtDateTime(lastAt).replace(", "," at ")}`;
     else cSub=`Sent ${buyer.contractSentTime||""}`.trim()+(emailed?(loadingTrack?" · checking":tracking?` · ${({delivered:"Delivered",opened:"Opened",clicked:"Link clicked",bounced:"Bounced"})[tracking.status]||"Sent"}`:""):" · by text");
   }
-  const row=(key,label,sub,ok,onT,onE,extra)=>(
-    <div className="send-r" key={key}>
-      <div style={{flex:1,minWidth:0}}><div className="send-l">{label}</div><div className={`send-s${ok?" ok":""}`}>{sub}</div></div>
+  const row=(key,label,sub,ok,onT,onE,extra)=>{
+    const kt=`${buyer.id}:${key}t`, ke=`${buyer.id}:${key}e`;
+    const pt=pending[kt], pe=pending[ke];
+    const line=pt?`Texting in ${pt}s… tap Undo to stop`:pe?`Emailing in ${pe}s… tap Undo to stop`:sub;
+    return <div className="send-r" key={key}>
+      <div style={{flex:1,minWidth:0}}><div className="send-l">{label}</div><div className={`send-s${ok&&!pt&&!pe?" ok":""}`}>{line}</div></div>
       <div className="send-b">
-        {extra}
-        {onT&&<button className={`pill ${sent[key+"t"]?"done":"t"}`} disabled={!canText} onClick={()=>{ if(onT()!==false) flash(key+"t"); }}>{sent[key+"t"]?"Sent":"Text"}</button>}
-        {onE&&<button className={`pill ${sent[key+"e"]?"done":"e"}`} disabled={!canEmail} onClick={()=>{ if(onE()!==false) flash(key+"e"); }}>{sent[key+"e"]?"Sent":(key==="c"&&emailed?"Resend":"Email")}</button>}
+        {!pt&&!pe&&extra}
+        {onT&&(pt
+          ? <button className="pill u" onClick={()=>cancel(kt)}>Undo · {pt}</button>
+          : !pe&&<button className={`pill ${sent[kt]?"done":"t"}`} disabled={!canText} onClick={()=>arm(kt,onT)}>{sent[kt]?"Sent":"Text"}</button>)}
+        {onE&&(pe
+          ? <button className="pill u" onClick={()=>cancel(ke)}>Undo · {pe}</button>
+          : !pt&&<button className={`pill ${sent[ke]?"done":"e"}`} disabled={!canEmail} onClick={()=>arm(ke,onE)}>{sent[ke]?"Sent":(key==="c"&&emailed?"Resend":"Email")}</button>)}
       </div>
-    </div>
-  );
+    </div>;
+  };
   const canForms=!!buyer._attioInspectionId&&!!onSend;
   // Offer / bid form status: Sent → Opened → Submitted, from the buyer's notes (the
   // send + submission are both logged there) and the "offer-opened"/"bid-opened"
