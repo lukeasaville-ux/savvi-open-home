@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v30-owners";
+const BUILD = "v31-owners-fit";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3563,7 +3563,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
               <tbody>{oRows.map(o=>o.props.map((pr,i)=><tr key={o.contactId+pr.ref} className="r" onClick={()=>onOpenContact(o.contactId,o.insps[0]?.propertyRef||null)}>
                 {i===0&&<td rowSpan={o.props.length}><div style={{display:"flex",alignItems:"center",gap:10}}><div className="av" style={{background:crmColor(o.name),width:30,height:30,fontSize:11}}>{crmInitials(o.name)}</div><div><div className="nm">{o.name}</div><div className="mut">{o.email||""}</div></div></div></td>}
                 {i===0&&<td rowSpan={o.props.length} className="num">{o.mobile||<span className="mut">—</span>}</td>}
-                <td><div style={{fontWeight:600,color:ESPRESSO}}>{streetLine(pr.address,pr.suburb)}</div><div className="mut">{pr.suburb}{pr.coOwners?` · with ${pr.coOwners}`:""}{pr.pastOwners?` · bought from ${pr.pastOwners}`:""}</div></td>
+                <td className="wrap" style={{maxWidth:380}}><div style={{fontWeight:600,color:ESPRESSO}}>{streetLine(pr.address,pr.suburb)}</div><div className="mut" style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:360}} title={[pr.coOwners?`with ${pr.coOwners}`:"",pr.pastOwners?`bought from ${pr.pastOwners}`:""].filter(Boolean).join(" · ")}>{pr.suburb}{pr.coOwners?` · with ${pr.coOwners}`:""}{pr.pastOwners?` · bought from ${pr.pastOwners}`:""}</div></td>
                 <td>{(()=>{ const st=pr.statusText||"listed"; const map={sold:["Sold","ok"],withdrawn:["Withdrawn","cool"],"off-market":["Off market","info"],"under offer":["Under offer","warn"]}; const [t,c]=map[st]||["Listed","hot"]; return <span className={`chip ${c}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{t}</span>; })()}</td>
                 <td className="mut num">{pr.campaignStart?new Date(pr.campaignStart+"T00:00:00").toLocaleDateString("en-AU",{month:"short",year:"numeric"}):"—"}</td>
                 {i===0&&<td rowSpan={o.props.length}>{o.insps.length?<span className="chip info" style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{o.insps.length} inspection{o.insps.length===1?"":"s"}</span>:<span className="mut">—</span>}</td>}
