@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v20-10g-card";
+const BUILD = "v21-10h-dedupe";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -557,7 +557,9 @@ const Attio = {
     // Patch the Attio person record so edited name/mobile/email sync back to the CRM.
     const j = await call("updatePerson", { id, name, email, mobile });
     if (j?.ok) invalidateBuyerCache();
-    return !!j?.ok;
+    // Return the full response so callers can see a `conflict` (mobile/email owned by
+    // another person) rather than a bare boolean.
+    return j || { ok: false };
   },
   async createInspection({ contactId, propertyId, openHomeId, interest, agent }) {
     const j = await call("createInspection", { contactId, propertyId, openHomeId, interest, agent });
@@ -3247,10 +3249,20 @@ export default function App(){
     if(!pid)return;
     const b=(buyers[pid]||[]).find(x=>x.id===id);
     const patch=x=>({...x,name:d.name,mobile:d.mobile,email:d.email,initials:mkI(d.name||x.name)});
+    const revert=x=>b?({...x,name:b.name,mobile:b.mobile,email:b.email,initials:b.initials}):x;
     setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===id?patch(x):x);return u;});
     setActive(p=>p?.id===id?patch(p):p);
-    if(!isDemo && b?.contactId && !String(b.contactId).startsWith("local"))
-      await Attio.updatePerson({id:b.contactId, name:d.name, email:d.email, mobile:d.mobile}).catch(()=>{});
+    if(!isDemo && b?.contactId && !String(b.contactId).startsWith("local")){
+      const r=await Attio.updatePerson({id:b.contactId, name:d.name, email:d.email, mobile:d.mobile}).catch(()=>null);
+      // The backend refuses a mobile/email that already belongs to another person —
+      // one contact per number/email, never a double-up. Undo and say who has it.
+      const c=r&&(r.conflict||(r.data&&r.data.conflict));
+      if(c){
+        setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===id?revert(x):x);return u;});
+        setActive(p=>p?.id===id?revert(p):p);
+        alert(`That ${c.attr} already belongs to ${c.name||"another contact"}. Each mobile and email can only be on one contact, so the change wasn't saved.`);
+      }
+    }
   },[isDemo,buyers]);
 
   // Reel link saved on the open screen — reflect it on the open in state + cache so
