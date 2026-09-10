@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v31-owners-fit";
+const BUILD = "v32-inbox";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -471,6 +471,9 @@ const Attio = {
   },
   // Full DetailSheet-ready profile for ONE contact, assembled from all their inspections
   // across every property — powers the "search a buyer → open their page" flow.
+  // CRM inbox (read-only via Microsoft Graph on the backend; replies open in Outlook).
+  async listMail({ mailbox, top = 25 }) { const j = await call("listMail", { mailbox, top }); return j?.ok ? j : { ok: false, items: [] }; },
+  async getMail({ mailbox, id }) { const j = await call("getMail", { mailbox, id }); return j?.ok ? j : null; },
   // Whole-CRM index for the desktop: every person with each of their inspections shaped
   // (property, open, interest, parsed notes, contract + form opens, enquiry flag) plus
   // roll-ups (best interest, last activity). Reuses the shared raw-record cache.
@@ -2975,6 +2978,26 @@ const CRM_CSS = `
 .crm-2col{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(320px,1fr);gap:18px;align-items:start;}
 .crm-empty{padding:40px 20px;text-align:center;color:${BROWN_L};font-size:13.5px;}
 .crm-empty .em{font-size:30px;margin-bottom:8px;}
+/* Inbox */
+.mail-tabs{display:flex;gap:4px;background:${LINEN};border:1px solid ${SAND_D};border-radius:100px;padding:2px;}
+.mail-tabs button{border:none;background:transparent;color:${BROWN_L};font-size:11px;font-weight:700;padding:4px 10px;border-radius:100px;cursor:pointer;letter-spacing:0;text-transform:none;}
+.mail-tabs button.on{background:${WHITE};color:${BROWN};box-shadow:0 1px 2px rgba(49,30,16,.1);}
+.mail-r{border-top:1px solid ${SAND};}
+.mail-row{display:grid;grid-template-columns:10px 190px minmax(0,1fr) auto;gap:12px;align-items:center;padding:9px 16px;cursor:pointer;}
+.mail-row:hover{background:${LINEN};}
+.mail-dot{width:8px;height:8px;border-radius:50%;background:transparent;}
+.mail-r.unread .mail-dot{background:${BLUE_D};}
+.mail-from{font-size:13px;font-weight:600;color:${BROWN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;}
+.mail-r.unread .mail-from{font-weight:800;color:${ESPRESSO};}
+.mail-subj{font-size:13px;color:${BROWN_L};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mail-subj .s{color:${BROWN};font-weight:600;}
+.mail-r.unread .mail-subj .s{color:${ESPRESSO};font-weight:800;}
+.mail-when{font-size:11.5px;color:${BROWN_L};white-space:nowrap;font-variant-numeric:tabular-nums;}
+.mail-body{padding:6px 16px 14px 38px;background:${LINEN};border-top:1px solid ${SAND};}
+.mail-meta{font-size:11.5px;color:${BROWN_L};margin-bottom:8px;}
+.mail-txt{white-space:pre-wrap;font-size:13.5px;line-height:1.55;color:${BROWN};max-height:360px;overflow-y:auto;background:${WHITE};border:1px solid ${SAND_D};border-radius:10px;padding:12px 14px;word-break:break-word;}
+.mail-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+.mail-acts a{text-decoration:none;}
 /* Feed */
 .feed-g{padding:6px 0 2px;}
 .feed-gh{display:flex;align-items:center;gap:8px;padding:10px 16px 4px;font-size:12px;font-weight:800;color:${BROWN};}
@@ -3296,6 +3319,14 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const [cq,setCq]=useState(""); const [cf,setCf]=useState("all"); const [csort,setCsort]=useState({k:"last",d:-1}); const [csel,setCsel]=useState({}); const [chl,setChl]=useState(-1);
   const [cbulk,setCbulk]=useState(false); const [showDupes,setShowDupes]=useState(false); const [showInfo,setShowInfo]=useState(false);
   const [oq,setOq]=useState(""); const [of,setOf]=useState("all");
+  // Inbox: which Savvi mailbox, the recent messages, the one being read.
+  const [mbox,setMbox]=useState(()=>{ const k=String(agentName||"luke").toLowerCase().split(" ")[0]; return ["luke","sam","madeline"].includes(k)?k:"luke"; });
+  const [mail,setMail]=useState(null); const [mailErr,setMailErr]=useState(false); const [mailOpen,setMailOpen]=useState(null); const [mailBody,setMailBody]=useState(null); const [mailAll,setMailAll]=useState(false);
+  const loadMail=useCallback(async(mb)=>{ try{ const r=await Attio.listMail({mailbox:mb||mbox,top:30}); if(r.ok){ setMail(r.items); setMailErr(false); } else setMailErr(true); }catch(e){ setMailErr(true); } },[mbox]);
+  useEffect(()=>{ setMail(null); setMailOpen(null); loadMail(mbox); const t=setInterval(()=>loadMail(mbox),120000); return ()=>clearInterval(t); },[mbox]);
+  const openMail=async(m)=>{ if(mailOpen===m.id){ setMailOpen(null); return; } setMailOpen(m.id); setMailBody(null); const g=await Attio.getMail({mailbox:mbox,id:m.id}); setMailBody(g?g.body:"(couldn't load this message)"); };
+  const mailContact=(email)=>email&&(contacts||[]).find(c=>(c.email||"").toLowerCase()===email);
+  const replyLink=(m)=>`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(m.from.email)}&subject=${encodeURIComponent(/^re:/i.test(m.subject)?m.subject:"Re: "+m.subject)}`;
   const [feedFilter,setFeedFilter]=useState("all");
 
   const loadIndex=useCallback(async(force)=>{ if(indexing) return; if(!force&&index&&Date.now()-indexAt<10*60*1000) return; setIndexing(true); try{ const ix=await Attio.getCrmIndex(); if(ix) { setIndex(ix); setIndexAt(Date.now()); } }catch(e){} setIndexing(false); },[index,indexAt,indexing]);
@@ -3477,6 +3508,35 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
               <div className="crm-stat hot" onClick={()=>{ setTab("contacts"); setCf("hot"); }}><div className="n">{hotCount}</div><div className="l">Hot buyers</div></div>
             </div>
             <div className="crm-2col">
+              <div style={{display:"flex",flexDirection:"column",gap:18,minWidth:0}}>
+              <div className="crm-card mail">
+                <div className="h">Inbox{mail&&<span className="ct">{mail.filter(m=>!m.read).length} unread</span>}
+                  <span className="sp"/>
+                  <div className="mail-tabs">{[["luke","Luke"],["sam","Sam"],["madeline","Maddie"],["hello","hello@"]].map(([k,l])=><button key={k} className={mbox===k?"on":""} onClick={()=>setMbox(k)}>{l}</button>)}</div>
+                </div>
+                {!mail&&!mailErr&&<div style={{textAlign:"center",padding:26}}><div className="sp"/></div>}
+                {mailErr&&<div className="crm-empty" style={{padding:18}}>Couldn't reach the mailbox. Try again in a minute.</div>}
+                {mail&&mail.length===0&&<div className="crm-empty" style={{padding:18}}>Inbox is empty.</div>}
+                {mail&&(mailAll?mail:mail.slice(0,8)).map(m=>{ const c=mailContact(m.from.email); const open=mailOpen===m.id; return <div key={m.id} className={`mail-r${m.read?"":" unread"}${open?" open":""}`}>
+                  <div className="mail-row" onClick={()=>openMail(m)}>
+                    <span className="mail-dot"/>
+                    <div className="mail-from">{m.from.name||m.from.email}{c&&<span className="chip info" style={{fontSize:10,fontWeight:800,padding:"1px 7px",borderRadius:100,marginLeft:6}}>{c.interest?iLbl(c.interest):"In CRM"}</span>}</div>
+                    <div className="mail-subj"><span className="s">{m.subject}</span><span className="p"> · {m.preview}</span></div>
+                    <div className="mail-when">{crmAgo(m.at)}{m.attachments?" 📎":""}</div>
+                  </div>
+                  {open&&<div className="mail-body">
+                    <div className="mail-meta">From {m.from.name?`${m.from.name} <${m.from.email}>`:m.from.email} · {fmtDateTime(m.at)}{m.to.length?` · to ${m.to.join(", ")}`:""}</div>
+                    <div className="mail-txt">{mailBody===null?"Loading…":mailBody}</div>
+                    <div className="mail-acts">
+                      <a className="crm-btn p" href={replyLink(m)} target="_blank" rel="noreferrer">Reply in Outlook</a>
+                      {m.link&&<a className="crm-btn" href={m.link} target="_blank" rel="noreferrer">Open in Outlook</a>}
+                      {c&&<button className="crm-btn" onClick={()=>onOpenContact(c.contactId,c.insps[0]?.propertyRef||null)}>Open {c.name.split(" ")[0]}'s record</button>}
+                      {!c&&m.from.email&&<span style={{fontSize:12,color:BROWN_L,alignSelf:"center"}}>Not in the CRM yet</span>}
+                    </div>
+                  </div>}
+                </div>; })}
+                {mail&&mail.length>8&&<div style={{padding:"8px 16px 12px"}}><button className="crm-linkbtn dark" onClick={()=>setMailAll(v=>!v)}>{mailAll?"Show fewer":`Show all ${mail.length}`}</button></div>}
+              </div>
               <div className="crm-card">
                 <div className="h">Action feed <span className="ct">{feedRows.length}</span><span className="sp"/>{!index&&<span style={{letterSpacing:0,textTransform:"none",fontWeight:500}}>{indexing?"Reading every buyer…":""}</span>}</div>
                 <div className="crm-filters" style={{borderBottom:`1px solid ${SAND}`}}>
@@ -3493,6 +3553,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
                     <div className="when">{crmAgo(r.when)}</div>
                   </div>)}
                 </div>)}
+              </div>
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:18}}>
                 <div className="crm-card">
