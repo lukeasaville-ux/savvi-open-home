@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v32-inbox";
+const BUILD = "v33-mail-scope";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -472,7 +472,7 @@ const Attio = {
   // Full DetailSheet-ready profile for ONE contact, assembled from all their inspections
   // across every property — powers the "search a buyer → open their page" flow.
   // CRM inbox (read-only via Microsoft Graph on the backend; replies open in Outlook).
-  async listMail({ mailbox, top = 25 }) { const j = await call("listMail", { mailbox, top }); return j?.ok ? j : { ok: false, items: [] }; },
+  async listMail({ mailbox, top = 25 }) { const j = await call("listMail", { mailbox, top }); return j?.ok ? j : { ok: false, error: j?.error || "failed", items: [] }; },
   async getMail({ mailbox, id }) { const j = await call("getMail", { mailbox, id }); return j?.ok ? j : null; },
   // Whole-CRM index for the desktop: every person with each of their inspections shaped
   // (property, open, interest, parsed notes, contract + form opens, enquiry flag) plus
@@ -3321,8 +3321,11 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const [oq,setOq]=useState(""); const [of,setOf]=useState("all");
   // Inbox: which Savvi mailbox, the recent messages, the one being read.
   const [mbox,setMbox]=useState(()=>{ const k=String(agentName||"luke").toLowerCase().split(" ")[0]; return ["luke","sam","madeline"].includes(k)?k:"luke"; });
+  // Which mailboxes this person may read: their own + hello@; Luke sees everyone's. The backend enforces the same rule.
+  const myKey=String(agentName||"").toLowerCase().split(" ")[0];
+  const mailTabs=[["luke","Luke"],["sam","Sam"],["madeline","Maddie"],["hello","hello@"]].filter(([k])=>myKey==="luke"||k===myKey||k==="hello");
   const [mail,setMail]=useState(null); const [mailErr,setMailErr]=useState(false); const [mailOpen,setMailOpen]=useState(null); const [mailBody,setMailBody]=useState(null); const [mailAll,setMailAll]=useState(false);
-  const loadMail=useCallback(async(mb)=>{ try{ const r=await Attio.listMail({mailbox:mb||mbox,top:30}); if(r.ok){ setMail(r.items); setMailErr(false); } else setMailErr(true); }catch(e){ setMailErr(true); } },[mbox]);
+  const loadMail=useCallback(async(mb)=>{ try{ const r=await Attio.listMail({mailbox:mb||mbox,top:30}); if(r.ok){ setMail(r.items); setMailErr(false); } else setMailErr(r.error==="forbidden"?"forbidden":true); }catch(e){ setMailErr(true); } },[mbox]);
   useEffect(()=>{ setMail(null); setMailOpen(null); loadMail(mbox); const t=setInterval(()=>loadMail(mbox),120000); return ()=>clearInterval(t); },[mbox]);
   const openMail=async(m)=>{ if(mailOpen===m.id){ setMailOpen(null); return; } setMailOpen(m.id); setMailBody(null); const g=await Attio.getMail({mailbox:mbox,id:m.id}); setMailBody(g?g.body:"(couldn't load this message)"); };
   const mailContact=(email)=>email&&(contacts||[]).find(c=>(c.email||"").toLowerCase()===email);
@@ -3512,10 +3515,10 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
               <div className="crm-card mail">
                 <div className="h">Inbox{mail&&<span className="ct">{mail.filter(m=>!m.read).length} unread</span>}
                   <span className="sp"/>
-                  <div className="mail-tabs">{[["luke","Luke"],["sam","Sam"],["madeline","Maddie"],["hello","hello@"]].map(([k,l])=><button key={k} className={mbox===k?"on":""} onClick={()=>setMbox(k)}>{l}</button>)}</div>
+                  <div className="mail-tabs">{mailTabs.map(([k,l])=><button key={k} className={mbox===k?"on":""} onClick={()=>setMbox(k)}>{l}</button>)}</div>
                 </div>
                 {!mail&&!mailErr&&<div style={{textAlign:"center",padding:26}}><div className="sp"/></div>}
-                {mailErr&&<div className="crm-empty" style={{padding:18}}>Couldn't reach the mailbox. Try again in a minute.</div>}
+                {mailErr&&<div className="crm-empty" style={{padding:18}}>{mailErr==="forbidden"?"That mailbox isn't yours to read.":"Couldn't reach the mailbox. Try again in a minute."}</div>}
                 {mail&&mail.length===0&&<div className="crm-empty" style={{padding:18}}>Inbox is empty.</div>}
                 {mail&&(mailAll?mail:mail.slice(0,8)).map(m=>{ const c=mailContact(m.from.email); const open=mailOpen===m.id; return <div key={m.id} className={`mail-r${m.read?"":" unread"}${open?" open":""}`}>
                   <div className="mail-row" onClick={()=>openMail(m)}>
