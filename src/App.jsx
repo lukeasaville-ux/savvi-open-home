@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v23-card3";
+const BUILD = "v24-bulkbid";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2405,7 +2405,18 @@ const personalize = (tmpl, b) => String(tmpl||"")
   .replace(/\{\s*first[\s_]*name\s*\}/gi, ((b?.name||"").trim().split(/\s+/)[0]) || "there")
   .replace(/\{\s*name\s*\}/gi, (b?.name||"").trim() || "there");
 
-const BM_DEFAULT = "Hi {first_name}, Luke here from Savvi. A new listing just came up that looks right up your alley — want me to send you the details or line up a private look? — Luke, Savvi";
+// Per-buyer form links (offer form / bid registration) and the text that carries them.
+// Shared by the single-buyer send, the search sheet and the bulk sheet so the wording is
+// identical everywhere (the buyer card's "Sent" status greps notes for the /bid/ or
+// /offer/ URL, so every sender must log the same string).
+const formLinkUrl=(kind,inspId,agentName)=>`https://go.getsavvi.com.au/${kind==="bid"?"bid":"offer"}/${String(inspId||"").slice(0,13)}?a=${(agentName||"").toLowerCase().split(" ")[0]}`;
+const formLinkMsg=(kind,first,addr,url,sig)=>kind==="bid"
+  ? `Hi ${first}, register to bid on ${addr} here so you're ready for auction day:\n${url}\n\nThanks,\n${sig}`
+  : `Hi ${first}, ready to put an offer in on ${addr}? Submit it here and it comes straight to us:\n${url}\n\nThanks,\n${sig}`;
+const FORM_DONE_RE={ bid:/^\s*\[Bid registration\]/i, offer:/^\s*\[Offer\]/i };
+const FORM_SENT_RE={ bid:/(Text sent:[^]*\/bid\/|Emailed bid registration)/i, offer:/(Text sent:[^]*\/offer\/|Emailed offer form)/i };
+
+const BM_DEFAULT = "Hi {first_name}, Luke here from Savvi. A new listing just came up that looks right up your alley. Want me to send you the details or line up a private look?\n\nThanks,\nLuke Saville";
 const BM_EXAMPLES = [
   "buyers wanting an art deco 2-bed in Hawthorn around $700k",
   "anyone after an apartment with parking and a balcony",
@@ -2414,7 +2425,13 @@ const BM_EXAMPLES = [
 
 // Bulk personalised text to a set of buyers (e.g. everyone in the current open-screen
 // filter — all contract-holders, all hot, etc). Reuses the same send path as Buyer Match.
-function BulkTextSheet({ open, onClose, buyers, agentName, label, address, onLogNote }){
+// Bulk text to the buyers on a property. Three modes: a custom message, or the
+// "Register to bid" / "Offer form" links, where every buyer gets THEIR OWN per-
+// inspection link ({link} token). Link modes preselect the interested buyers
+// (hot + watching), skip anyone who has already submitted the form, and log the
+// exact text on each buyer (so the card shows "Sent" under the row).
+function BulkTextSheet({ open, onClose, buyers, agentName, label, address, suburb, isAuction, onLogNote }){
+  const [mode,setMode]=useState("custom");
   const [msg,setMsg]=useState("");
   const [sel,setSel]=useState({});
   const [sending,setSending]=useState(false);
@@ -2423,52 +2440,88 @@ function BulkTextSheet({ open, onClose, buyers, agentName, label, address, onLog
   const [confirm,setConfirm]=useState(false);
   const drag=useSheetDrag(onClose);
   const msgRef=useRef(null);
-  useEffect(()=>{ if(open){
-    const aFirst=smsSig(agentName).split(" ")[0];
-    const shortAddr=String(address||"the property").split(",")[0];
-    setMsg(`Hi {first_name}, ${aFirst} here from Savvi — we've just received an offer on ${shortAddr}. If you're still keen, please contact us urgently.`);
-    setDone(null); setProgress(null); setSending(false); setConfirm(false); const s={}; (buyers||[]).forEach(b=>{ s[b.id]=!!b.mobile; }); setSel(s);
-  } },[open]);
-  const withMobile=(buyers||[]).filter(b=>b.mobile);
-  const selected=(buyers||[]).filter(b=>sel[b.id]&&b.mobile);
-  const noMobile=(buyers||[]).length-withMobile.length;
+  const sig=smsSig(agentName);
+  const shortAddr=streetLine(address,suburb)||String(address||"the property").split(",")[0];
+  const isLink=mode!=="custom";
+  const hasNote=(b,re)=>(b.notes||[]).some(n=>re.test(n.text||""));
+  const formDone=(b,m)=>m!=="custom"&&hasNote(b,FORM_DONE_RE[m]);
+  const linkSent=(b,m)=>m!=="custom"&&hasNote(b,FORM_SENT_RE[m]);
+  const canText=(b,m)=>!!b.mobile&&(m==="custom"||!!b._attioInspectionId);
+  const applyMode=(m)=>{
+    setMode(m); setConfirm(false);
+    if(m==="custom") setMsg(`Hi {first_name}, ${sig.split(" ")[0]} here from Savvi. We've just received an offer on ${shortAddr}. If you're still keen, please contact us urgently.`);
+    else setMsg(formLinkMsg(m,"{first_name}",shortAddr,"{link}",sig));
+    const list=buyers||[]; const s={};
+    if(m==="custom"){ list.forEach(b=>{ s[b.id]=!!b.mobile; }); }
+    else {
+      const ok=list.filter(b=>canText(b,m)&&!formDone(b,m));
+      const keen=ok.filter(b=>b.interest==="hot"||b.interest==="watching");
+      (keen.length?keen:ok).forEach(b=>{ s[b.id]=true; });
+    }
+    setSel(s);
+  };
+  useEffect(()=>{ if(open){ setDone(null); setProgress(null); setSending(false); applyMode(isAuction?"bid":"custom"); } },[open]);
+  const sendable=(buyers||[]).filter(b=>canText(b,mode));
+  const selected=sendable.filter(b=>sel[b.id]);
+  const noMobile=(buyers||[]).filter(b=>!b.mobile).length;
   const toggle=id=>setSel(s=>({...s,[id]:!s[id]}));
+  const allOn=sendable.length>0&&sendable.every(b=>sel[b.id]);
+  const toggleAll=()=>{ const s={}; sendable.forEach(b=>{ s[b.id]=!allOn; }); setSel(s); };
   useEffect(()=>{ setConfirm(false); },[msg,selected.length]);
-  const insertToken=()=>{ const el=msgRef.current; if(!el){setMsg(m=>m+"{first_name}");return;} const a=el.selectionStart??msg.length,b=el.selectionEnd??msg.length; setMsg(msg.slice(0,a)+"{first_name}"+msg.slice(b)); setTimeout(()=>{el.focus();el.selectionStart=el.selectionEnd=a+12;},0); };
-  const send=async()=>{ if(sending||!selected.length||!msg.trim())return; setSending(true); setDone(null); let ok=0,fail=0; setProgress({done:0,total:selected.length});
-    for(let i=0;i<selected.length;i++){ const b=selected[i]; const sent=personalize(msg,b); try{ const r=await MM.sendMessage({toPhone:b.mobile,message:sent,agent:agentName}); if(r&&r.ok){ok++; onLogNote&&onLogNote(b,sent);} else fail++; }catch{fail++;} setProgress({done:i+1,total:selected.length}); }
+  const insertToken=(tok)=>{ const el=msgRef.current; if(!el){setMsg(m=>m+tok);return;} const a=el.selectionStart??msg.length,b=el.selectionEnd??msg.length; setMsg(msg.slice(0,a)+tok+msg.slice(b)); setTimeout(()=>{el.focus();el.selectionStart=el.selectionEnd=a+tok.length;},0); };
+  const render=(tmpl,b)=>personalize(tmpl,b).replace(/\{\s*link\s*\}/gi, isLink?formLinkUrl(mode,b._attioInspectionId,agentName):"");
+  const missingLink=isLink&&!/\{\s*link\s*\}/i.test(msg);
+  const blocked=sending||!selected.length||!msg.trim()||missingLink;
+  const send=async()=>{ if(blocked)return; setSending(true); setDone(null); let ok=0,fail=0; setProgress({done:0,total:selected.length});
+    for(let i=0;i<selected.length;i++){ const b=selected[i]; const sent=render(msg,b); try{ const r=await MM.sendMessage({toPhone:b.mobile,message:sent,agent:agentName}); if(r&&r.ok){ok++; onLogNote&&onLogNote(b,sent);} else fail++; }catch{fail++;} setProgress({done:i+1,total:selected.length}); }
     setSending(false); setDone({ok,fail}); setProgress(null); };
   if(!open) return null;
-  const preview=personalize(msg||"Hi {first_name}, …", selected[0]||withMobile[0]||{name:"there"});
+  const pb=selected[0]||sendable[0]||{name:"there",_attioInspectionId:"xxxxxxxxxxxxx"};
+  const preview=render(msg||"Hi {first_name}, …", pb);
   const segs=Math.max(1,Math.ceil(preview.length/153));
+  const MODES=[["custom","Custom text"],["bid","Register to bid"],["offer","Offer form"]];
+  const what=mode==="bid"?"bid link":mode==="offer"?"offer link":"";
+  const skipped=isLink?(buyers||[]).filter(b=>formDone(b,mode)).length:0;
   return <div className="ov s" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
     <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",maxHeight:"92vh",display:"flex",flexDirection:"column",...drag.style}} {...drag.handlers}>
       <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
       <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
       <div style={{padding:"4px 18px 8px"}}>
         <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>Text these buyers</div>
-        <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>{label?label+" · ":""}{selected.length} of {withMobile.length} selected{noMobile?` · ${noMobile} have no mobile`:""}</div>
+        <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>{label?label+" · ":""}{selected.length} of {sendable.length} selected{noMobile?` · ${noMobile} no mobile`:""}{skipped?` · ${skipped} already ${mode==="bid"?"registered":"offered"}`:""}</div>
       </div>
       {done
       ? <div style={{padding:"10px 18px 20px",textAlign:"center"}}><div style={{fontSize:40,marginBottom:8}}>✅</div><div style={{fontSize:16,fontWeight:800,color:ESPRESSO}}>Sent to {done.ok}{done.fail?` · ${done.fail} failed`:""}</div><button className="btn-cream" style={{marginTop:16,padding:"13px"}} onClick={onClose}>Done</button></div>
       : <>
+        <div className="seg3" style={{margin:"0 16px 10px"}}>
+          {MODES.map(([k,l])=><button key={k} className={mode===k?"on":""} onClick={()=>applyMode(k)}>{l}</button>)}
+        </div>
         <div style={{flex:1,overflowY:"auto",padding:"0 16px"}}>
-          <textarea ref={msgRef} className="note-area" style={{minHeight:96}} value={msg} onChange={e=>setMsg(e.target.value)} placeholder="Hi {first_name}, we've just received an offer on the property…" autoFocus/>
-          <div style={{display:"flex",alignItems:"center",gap:10,margin:"6px 0 12px"}}>
-            <button onClick={insertToken} style={{fontSize:12,fontWeight:700,color:BLUE_D,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:8,padding:"6px 10px",cursor:"pointer"}}>+ {"{first_name}"}</button>
-            <span style={{fontSize:11.5,color:BROWN_L}}>{preview.length} chars · {segs} SMS{segs>1?"s":""} each</span>
+          {isLink&&<div style={{fontSize:12,color:BROWN_L,lineHeight:1.45,margin:"0 2px 8px"}}>Each buyer gets their own {mode==="bid"?"bid registration":"offer form"} link. Their name and details are prefilled, and the card shows when they open or submit it.</div>}
+          <textarea ref={msgRef} className="note-area" style={{minHeight:isLink?128:96}} value={msg} onChange={e=>setMsg(e.target.value)} placeholder="Hi {first_name}, we've just received an offer on the property…"/>
+          <div style={{display:"flex",alignItems:"center",gap:8,margin:"6px 0 12px",flexWrap:"wrap"}}>
+            <button onClick={()=>insertToken("{first_name}")} style={{fontSize:12,fontWeight:700,color:BLUE_D,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:8,padding:"6px 10px",cursor:"pointer"}}>+ {"{first_name}"}</button>
+            {isLink&&<button onClick={()=>insertToken("{link}")} style={{fontSize:12,fontWeight:700,color:missingLink?"#C0392B":BLUE_D,background:missingLink?"#FDECEA":"#eef2fb",border:`1px solid ${missingLink?"#C0392B55":BLUE+"33"}`,borderRadius:8,padding:"6px 10px",cursor:"pointer"}}>+ {"{link}"}</button>}
+            <span style={{fontSize:11.5,color:BROWN_L}}>{missingLink?"Add {link} so each buyer gets their form":`${preview.length} chars · ${segs} SMS${segs>1?"s":""} each`}</span>
           </div>
-          <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"10px 12px",fontSize:13,color:ESPRESSO,whiteSpace:"pre-wrap",marginBottom:14}}><b style={{color:BROWN_L,fontSize:11}}>PREVIEW</b><br/>{preview}</div>
-          <div style={{fontSize:11.5,fontWeight:800,letterSpacing:.5,color:BROWN_L,marginBottom:6}}>RECIPIENTS</div>
-          {(buyers||[]).map(b=><div key={b.id} onClick={()=>b.mobile&&toggle(b.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 4px",opacity:b.mobile?1:.45,cursor:b.mobile?"pointer":"default",borderBottom:`1px solid ${SAND}`}}>
-            <div style={{width:20,height:20,borderRadius:6,border:`2px solid ${sel[b.id]&&b.mobile?BLUE_D:SAND_D}`,background:sel[b.id]&&b.mobile?BLUE_D:"#fff",color:"#fff",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{sel[b.id]&&b.mobile?"✓":""}</div>
-            <div style={{flex:1,fontSize:13.5,color:ESPRESSO,fontWeight:600}}>{b.name}<span style={{color:BROWN_L,fontWeight:400,fontSize:12}}> · {b.mobile||"no mobile"}</span></div>
-          </div>)}
+          <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"10px 12px",fontSize:13,color:ESPRESSO,whiteSpace:"pre-wrap",marginBottom:14,wordBreak:"break-word"}}><b style={{color:BROWN_L,fontSize:11}}>PREVIEW{pb.name&&pb.name!=="there"?` · TO ${(pb.name||"").split(" ")[0].toUpperCase()}`:""}</b><br/>{preview}</div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+            <div style={{fontSize:11.5,fontWeight:800,letterSpacing:.5,color:BROWN_L}}>RECIPIENTS</div>
+            {sendable.length>0&&<button onClick={toggleAll} style={{background:"none",border:"none",color:BLUE_D,fontWeight:700,cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>{allOn?"Clear all":"Select all"}</button>}
+          </div>
+          {(buyers||[]).map(b=>{ const ok=canText(b,mode), on=ok&&!!sel[b.id], dn=formDone(b,mode), st=!dn&&linkSent(b,mode);
+            return <div key={b.id} onClick={()=>ok&&toggle(b.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 4px",opacity:ok?1:.45,cursor:ok?"pointer":"default",borderBottom:`1px solid ${SAND}`}}>
+              <div style={{width:20,height:20,borderRadius:6,border:`2px solid ${on?BLUE_D:SAND_D}`,background:on?BLUE_D:"#fff",color:"#fff",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{on?"✓":""}</div>
+              <div style={{flex:1,minWidth:0,fontSize:13.5,color:ESPRESSO,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}<span style={{color:BROWN_L,fontWeight:400,fontSize:12}}> · {b.mobile||"no mobile"}{!b._attioInspectionId&&isLink&&b.mobile?" · no link":""}</span></div>
+              {dn?<span style={{fontSize:11,fontWeight:700,color:GRN,background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:100,padding:"3px 8px",flexShrink:0}}>{mode==="bid"?"Registered":"Offer in"}</span>
+                :st?<span style={{fontSize:11,fontWeight:700,color:BROWN_L,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:100,padding:"3px 8px",flexShrink:0}}>Link sent</span>
+                :b.interest?<span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>:null}
+            </div>; })}
           <div style={{height:8}}/>
         </div>
         <div style={{padding:"8px 16px calc(12px + env(safe-area-inset-bottom,0px))",borderTop:`1px solid ${SAND_D}`}}>
           {progress&&<div style={{fontSize:12.5,color:BROWN_L,marginBottom:8,textAlign:"center"}}>Sending… {progress.done}/{progress.total}</div>}
-          <button onClick={()=>{ if(sending||!selected.length||!msg.trim())return; if(confirm){setConfirm(false);send();} else setConfirm(true); }} disabled={sending||!selected.length||!msg.trim()} style={{width:"100%",padding:"15px",borderRadius:12,border:"none",background:(sending||!selected.length||!msg.trim())?SAND_D:(confirm?"#C0392B":BLUE_D),color:"#fff",fontSize:15,fontWeight:800,cursor:(sending||!selected.length||!msg.trim())?"default":"pointer"}}>{sending?"Sending…":confirm?`⚠️ Tap again to send to ${selected.length} buyer${selected.length===1?"":"s"}`:`Send to ${selected.length} buyer${selected.length===1?"":"s"}`}</button>
+          <button onClick={()=>{ if(blocked)return; if(confirm){setConfirm(false);send();} else setConfirm(true); }} disabled={blocked} style={{width:"100%",padding:"15px",borderRadius:12,border:"none",background:blocked?SAND_D:(confirm?"#C0392B":BLUE_D),color:"#fff",fontSize:15,fontWeight:800,cursor:blocked?"default":"pointer"}}>{sending?"Sending…":confirm?`⚠️ Tap again to send to ${selected.length} buyer${selected.length===1?"":"s"}`:`Send ${what?what+" to ":"to "}${selected.length} buyer${selected.length===1?"":"s"}`}</button>
           {confirm&&!sending&&<button onClick={()=>setConfirm(false)} style={{width:"100%",marginTop:8,padding:"10px",borderRadius:10,border:"none",background:"transparent",color:BROWN_L,fontSize:13,fontWeight:700,cursor:"pointer"}}>Cancel</button>}
         </div>
       </>}
@@ -3414,17 +3467,12 @@ export default function App(){
   const sendBuyerLink=useCallback((kind,channel,b,pid)=>{
     pid=pid||openHome?.id;
     if(!pid||!b||!b._attioInspectionId) return false;
-    const ak=(agentName||"").toLowerCase().split(" ")[0];
-    const path=kind==="bid"?"bid":"offer";
-    const url=`https://go.getsavvi.com.au/${path}/${b._attioInspectionId.slice(0,13)}?a=${ak}`;
+    const url=formLinkUrl(kind,b._attioInspectionId,agentName);
     const first=(b.name||"").split(" ")[0]||"there";
     const addr=streetLine(openHome?.address,openHome?.suburb)||"the property";
     if(channel==="text"){
       if(!b.mobile) return false;
-      const sig=smsSig(agentName);
-      const msg=kind==="bid"
-        ? `Hi ${first}, register to bid on ${addr} here so you're ready for auction day:\n${url}\n\nThanks,\n${sig}`
-        : `Hi ${first}, ready to put an offer in on ${addr}? Submit it here and it comes straight to us:\n${url}\n\nThanks,\n${sig}`;
+      const msg=formLinkMsg(kind,first,addr,url,smsSig(agentName));
       MM.sendMessage({ toPhone:b.mobile, agent:agentName, message:msg }).catch(()=>{});
       if(!isDemo) addNote(pid,b.id,`Text sent: "${msg}"`);
       return true;
@@ -3869,7 +3917,7 @@ export default function App(){
     </button>}
     <AddSheet open={showAdd} onClose={()=>{setShowAdd(false);setAiPrefill(null);}} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)} prefill={aiPrefill}/>
     <AiAssistantSheet open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={handleEnquiry}/>
-    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} onLogNote={(b,sent)=>{ if(!isDemo&&openHome?.id&&b?.id) addNote(openHome.id,b.id,`Text sent: "${sent}"`); }} label={filterActive?(({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"):"All buyers"}/>
+    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} suburb={openHome?.suburb} isAuction={!!openHome?.auctionDate} onLogNote={(b,sent)=>{ if(!isDemo&&openHome?.id&&b?.id) addNote(openHome.id,b.id,`Text sent: "${sent}"`); }} label={filterActive?(({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"):"All buyers"}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id} propIndex={propIndex} opens={visibleOpens}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
@@ -3885,7 +3933,7 @@ export default function App(){
       onSetProfile={(pid,id,pr)=>{ setSearchProfile(a=>a&&{...a,aiProfile:pr}); }}
       onUpdateDetails={(pid,id,d)=>{ setSearchProfile(a=>a&&{...a,name:d.name,mobile:d.mobile,email:d.email}); if(!isDemo&&searchProfile?.contactId) Attio.updatePerson({id:searchProfile.contactId,name:d.name,email:d.email,mobile:d.mobile}).catch(()=>{}); }}
       onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}} onOpenContact={openContact}
-      onSendLink={(kind,channel,b)=>{ if(!b?._attioInspectionId) return false; const ak=(agentName||"").toLowerCase().split(" ")[0]; const url=`https://go.getsavvi.com.au/${kind==="bid"?"bid":"offer"}/${b._attioInspectionId.slice(0,13)}?a=${ak}`; const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const logSearch=(text)=>{ const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:AGENT_FULL[agentName]||agentName||""}; setSearchProfile(a=>{ if(!a) return a; const notes=[...(a.notes||[]),note]; if(!isDemo&&a._attioInspectionId){ const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; Attio.updateInspection(a._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); } return {...a,notes}; }); }; if(channel==="text"){ if(!b.mobile) return false; const sig=smsSig(agentName); const msg=kind==="bid"?`Hi ${first}, register to bid on ${addr} here so you're ready for auction day:\n${url}\n\nThanks,\n${sig}`:`Hi ${first}, ready to put an offer in on ${addr}? Submit it here and it comes straight to us:\n${url}\n\nThanks,\n${sig}`; MM.sendMessage({toPhone:b.mobile,agent:agentName,message:msg}).catch(()=>{}); logSearch(`Text sent: "${msg}"`); return true; } if(channel==="email"){ if(!b.email) return false; Resend.sendFormLink({toEmail:b.email,toName:b.name,agentName,address:searchOpenHome?.address||addr,url,kind}).catch(()=>{}); logSearch(`Emailed ${kind==="bid"?"bid registration":"offer"} form to ${b.email}: ${url}`); return true; } return false; }}/>
+      onSendLink={(kind,channel,b)=>{ if(!b?._attioInspectionId) return false; const url=formLinkUrl(kind,b._attioInspectionId,agentName); const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const logSearch=(text)=>{ const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:AGENT_FULL[agentName]||agentName||""}; setSearchProfile(a=>{ if(!a) return a; const notes=[...(a.notes||[]),note]; if(!isDemo&&a._attioInspectionId){ const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; Attio.updateInspection(a._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); } return {...a,notes}; }); }; if(channel==="text"){ if(!b.mobile) return false; const msg=formLinkMsg(kind,first,addr,url,smsSig(agentName)); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:msg}).catch(()=>{}); logSearch(`Text sent: "${msg}"`); return true; } if(channel==="email"){ if(!b.email) return false; Resend.sendFormLink({toEmail:b.email,toName:b.name,agentName,address:searchOpenHome?.address||addr,url,kind}).catch(()=>{}); logSearch(`Emailed ${kind==="bid"?"bid registration":"offer"} form to ${b.email}: ${url}`); return true; } return false; }}/>
     <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll}/>
     <MatchSheet open={showMatch} onClose={()=>setShowMatch(false)} openHome={openHome} excludeIds={propAll.map(b=>b.contactId).filter(Boolean)} agentName={agentName} propIndex={propIndex}/>
     <QuickContractSheet
