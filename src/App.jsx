@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v24-bulkbid";
+const BUILD = "v25-card4";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1149,9 +1149,31 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 .dv2 .ai-hdr{margin-bottom:6px;}
 .dv2 .ai-bio{font-size:12.5px;line-height:1.5;}
 .dv2 .stage-pill{margin-bottom:6px;padding:3px 9px;font-size:10.5px;}
-.note-dock{position:sticky;bottom:0;background:${WHITE};border-top:1px solid ${SAND_D};padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));z-index:4;box-shadow:0 -6px 16px rgba(49,30,16,.06);}
-.note-dock .note-area{margin-bottom:8px;}
-.dock-btn{width:100%;padding:14px;border:none;border-radius:12px;background:${BLUE_D};color:#fff;font-family:'Neue Haas Unica Pro',sans-serif;font-size:14px;font-weight:800;cursor:pointer;}
+/* v4 (10 Sep): everything above the notes must fit one phone screen — tighter header,
+   2-line bio, slimmer contact rows, one-line interest tiles, compact send card. */
+.dv2 .det-top{padding:12px 18px 8px;}
+.dv2 .det-nm{font-size:21px;margin-bottom:4px;}
+.dv2 .ai-box{margin:0 16px 8px;padding:8px 12px;}
+.dv2 .ai-hdr{margin-bottom:3px;gap:8px;}
+.dv2 .ai-hdr .stage-pill{margin:0 auto 0 0;padding:2px 8px;font-size:10px;}
+.dv2 .ai-bio{font-size:12px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.dv2 .ai-bio.open{display:block;-webkit-line-clamp:unset;}
+.dv2 .ai-more{font-size:11px;font-weight:700;color:${BLUE_D};cursor:pointer;display:inline-block;margin-top:2px;}
+.dv2 .crow{padding:8px 12px;margin:0 16px 6px;}
+.dv2 .ci{width:28px;height:28px;font-size:14px;}
+.cgr.mini{gap:6px;padding:0 16px 10px;}
+.cgr.mini .cb{padding:9px 4px;display:flex;align-items:center;justify-content:center;gap:5px;font-size:12px;font-weight:700;border-radius:10px;}
+.cgr.mini .cb .e{font-size:15px;line-height:1;}
+.dv2 .send{margin:0 16px 10px;}
+.dv2 .send-r{padding:8px 12px;}
+.dv2 .sec-w{padding:4px 16px 0;}
+.dv2 .sec-i{margin-bottom:6px;}
+.note-compose{margin-bottom:8px;}
+.note-compose .note-area{height:42px;padding:10px 12px;font-size:13.5px;}
+.note-compose .note-area.open{height:76px;}
+.checkin-btn{display:block;width:calc(100% - 32px);margin:0 16px 10px;padding:12px;border:none;border-radius:11px;background:${BLUE_D};color:#fff;font-family:'Neue Haas Unica Pro',sans-serif;font-size:13.5px;font-weight:800;cursor:pointer;}
+.checkin-btn:disabled{opacity:.6;cursor:default;}
+.checkin-btn.done{background:${GRN_BG};color:${GRN};border:1px solid #A9DFBF;}
 `;
 
 /* ════════════════════════════════════════════
@@ -1236,19 +1258,25 @@ function SBar(){
   </div></div>;
 }
 
-function AiProfile({profile,onRegen}){
+// compact: stage pill sits in the header row and the bio is clamped to two lines with a
+// "more" toggle, so the card's first screen stays short (buyer DetailSheet).
+function AiProfile({profile,onRegen,compact=false}){
   const cfg=profile?.stage?(STAGE_CFG[profile.stage]||STAGE_CFG["Early"]):null;
+  const [more,setMore]=useState(false);
+  const pill=cfg&&<div className="stage-pill" style={{background:cfg.bg,color:cfg.col,border:`1px solid ${cfg.dot}40`}}>
+    <div className="stage-dot" style={{background:cfg.dot}}/>{profile.stage} stage{compact?"":" buyer"}
+  </div>;
   return <div className="ai-box">
     <div className="ai-hdr"><span className="ai-lbl">Buyer profile</span>
+      {compact&&profile&&!profile.loading&&pill}
       {profile&&!profile.loading&&<span className="ai-regen" onClick={onRegen}>Refresh ↻</span>}
     </div>
     {!profile&&<span className="ai-empty">No notes on this contact yet — add one at any listing to build their profile.</span>}
     {profile?.loading&&<div className="ai-loading"><div className="sp-sm"/>Building profile…</div>}
     {profile&&!profile.loading&&<>
-      {cfg&&<div className="stage-pill" style={{background:cfg.bg,color:cfg.col,border:`1px solid ${cfg.dot}40`}}>
-        <div className="stage-dot" style={{background:cfg.dot}}/>{profile.stage} stage buyer
-      </div>}
-      {profile.bio&&<div className="ai-bio">{profile.bio}</div>}
+      {!compact&&pill}
+      {profile.bio&&<div className={`ai-bio${compact&&more?" open":""}`}>{profile.bio}</div>}
+      {compact&&profile.bio&&profile.bio.length>140&&<span className="ai-more" onClick={()=>setMore(m=>!m)}>{more?"Less":"More"}</span>}
     </>}
   </div>;
 }
@@ -1817,7 +1845,9 @@ function SendCard({ buyer, propId, hasContract, onSendContract, onTextContract, 
   </div>;
 }
 
-function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink}){
+function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink,onCheckIn}){
+  const [checkin,setCheckin]=useState(""); // "" | busy | done | err — "Add to this open" button state
+  useEffect(()=>{ setCheckin(""); },[buyer?.id,openHome?.id]);
   const[noteText,setNoteText]=useState("");
   const[showNote,setShowNote]=useState(false);
   const[copied,setCopied]=useState(false);
@@ -1923,9 +1953,8 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         </div>
       </div>
 
-      {/* Bio first, compact — the read-before-you-talk summary */}
-      <AiProfile profile={buyer.aiProfile} onRegen={()=>{onSetProfile(propId,buyer.id,null);setTimeout(()=>genProfile(buyer,propId,crossNotes),100);}}/>
-      <div style={{height:10}}/>
+      {/* Bio first, two lines — the read-before-you-talk summary; "More" expands it */}
+      <AiProfile compact profile={buyer.aiProfile} onRegen={()=>{onSetProfile(propId,buyer.id,null);setTimeout(()=>genProfile(buyer,propId,crossNotes),100);}}/>
 
       {editing ? (
       <div style={{padding:"0 16px 14px"}}>
@@ -1954,7 +1983,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         <div style={{flex:1}}><div className="ci-l">EMAIL</div><div className="ci-v">{buyer.email||"—"}</div></div>
         {buyer.email&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:AMBER}}>Email ›</span>}
       </a>
-      <div style={{padding:"0 16px 12px",textAlign:"right"}}><span className="qa-edit" style={{fontSize:12}} onClick={startEdit}>Edit name, mobile or email</span></div>
+      <div style={{padding:"0 16px 8px",textAlign:"right"}}><span className="qa-edit" style={{fontSize:12}} onClick={startEdit}>Edit name, mobile or email</span></div>
       {callOpen&&<div style={{margin:"0 16px 12px",padding:"12px 13px",border:`1px solid ${SAND_D}`,borderRadius:11,background:LINEN}}>
         <div style={{fontSize:12.5,fontWeight:800,color:BROWN,marginBottom:8}}>Log call with {(buyer.name||"").split(" ")[0]}</div>
         <textarea value={callNote} onChange={e=>setCallNote(e.target.value)} placeholder="What did you discuss? (optional)" style={{width:"100%",minHeight:66,padding:10,border:`1px solid ${SAND_D}`,borderRadius:9,fontSize:14,fontFamily:"'Neue Haas Unica Pro',sans-serif",resize:"vertical",outline:"none",boxSizing:"border-box"}}/>
@@ -1965,16 +1994,30 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
       </div>}
       </>)}
 
-      <SendCard buyer={buyer} propId={propId} hasContract={!!openHome?.contractUrl} onSendContract={onSendContract} onTextContract={onTextContract} onRequestContract={onRequestContract} onSend={onSendLink}/>
+      {/* A buyer already on the listing (earlier open / enquiry) who has turned up again:
+          one tap puts them in THIS open instead of re-registering them from scratch. */}
+      {onCheckIn&&openHome&&!openHome._listing&&!openHome._demo&&buyer.contactId&&!(buyer.openHomeIds||[]).includes(openHome.id)&&
+        <button className={`checkin-btn${checkin==="done"?" done":""}`} disabled={checkin==="busy"||checkin==="done"} onClick={async()=>{ setCheckin("busy"); const r=await onCheckIn(propId,buyer); setCheckin(r&&r.ok?"done":"err"); }}>
+          {checkin==="done"?"Added to this open ✓":checkin==="busy"?"Adding…":checkin==="err"?"Couldn't add them, tap to try again":"Add to this open"}
+        </button>}
 
-      {/* Interest: the three tiles (Luke's preferred picker) */}
-      <div className="sec-w"><div className="sec-i">Update interest</div></div>
-      <div className="cgr">{ISET.map(o=><div key={o.v} className={`cb ${buyer.interest===o.v?(o.v==="hot"?"ah":o.v==="watching"?"aw":"ac"):""}`} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}>
-        <div style={{fontSize:18,marginBottom:2}}>{o.e}</div><div style={{fontSize:12,fontWeight:700}}>{o.l}</div>
+      {/* Interest: the three tiles (Luke's preferred picker), one line, above the send card */}
+      <div className="cgr mini">{ISET.map(o=><div key={o.v} className={`cb ${buyer.interest===o.v?(o.v==="hot"?"ah":o.v==="watching"?"aw":"ac"):""}`} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}>
+        <span className="e">{o.e}</span>{o.l}
       </div>)}</div>
 
+      <SendCard buyer={buyer} propId={propId} hasContract={!!openHome?.contractUrl} onSendContract={onSendContract} onTextContract={onTextContract} onRequestContract={onRequestContract} onSend={onSendLink}/>
+
+      {/* Notes: composer sits right under the label so a note is one tap away without scrolling */}
       <div className="sec-w"><div className="sec-i">Notes</div></div>
       <div className="notes-w">
+        <div className="note-compose">
+          <textarea className={`note-area${(showNote||noteText)?" open":""}`} placeholder="Add a note…" value={noteText} onChange={e=>setNoteText(e.target.value)} onFocus={()=>setShowNote(true)}/>
+          {(showNote||noteText)&&<div className="note-row">
+            <button className="ns-save" disabled={!noteText.trim()} onClick={saveNote}>Save note</button>
+            <button className="ns-can" onClick={()=>{setShowNote(false);setNoteText("");}}>Cancel</button>
+          </div>}
+        </div>
         {(buyer.notes||[]).length>0&&<div className="note-feed">{[...(buyer.notes||[])].reverse().filter(n=>!/^\s*\[[a-z0-9_-]+\]\s*$/i.test(n.text||"")).map(n=><div key={n.id} className="note-item">
           {editNoteId===n.id?<>
             <textarea className="note-area" value={editNoteText} onChange={e=>setEditNoteText(e.target.value)} autoFocus/>
@@ -1990,7 +2033,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
             </div>
           </>}
         </div>)}</div>}
-        {(buyer.notes||[]).length===0&&<p className="no-hist" style={{padding:"0 0 6px"}}>No notes yet. Tap "Add a note" below.</p>}
+        {(buyer.notes||[]).length===0&&<p className="no-hist" style={{padding:"0 0 6px"}}>No notes yet.</p>}
       </div>
 
       <div className="sec-w"><div className="sec-i">Other property activity</div></div>
@@ -2047,18 +2090,6 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         <button className="btn-cream" onClick={onClose} style={{padding:"15px"}}>Close</button>
       </div>
       <div style={{height:12}}/>
-
-      {/* Pinned to the bottom of the sheet (sticky) so a note is one thumb-tap away the
-          moment a buyer loads — no scrolling down to the Notes section. */}
-      <div className="note-dock">
-        {showNote?<>
-          <textarea className="note-area" placeholder="Price feedback, buyer profile, who they inspect with…" value={noteText} onChange={e=>setNoteText(e.target.value)} autoFocus/>
-          <div className="note-row">
-            <button className="ns-save" disabled={!noteText.trim()} onClick={saveNote}>Save note</button>
-            <button className="ns-can" onClick={()=>{setShowNote(false);setNoteText("");}}>Cancel</button>
-          </div>
-        </>:<button className="dock-btn" onClick={()=>setShowNote(true)}>Add a note</button>}
-      </div>
     </div>
   </div>;
 }
@@ -3363,6 +3394,20 @@ export default function App(){
     setBuyersLoading(false);
   },[openHome,buyers]);
 
+  // "Add to this open" (buyer card): someone already on the listing from an earlier open or
+  // an enquiry has turned up again — create their inspection for THIS open (a repeat visit,
+  // interest carried over, no welcome SMS), log it, then reload so they show under "At this open".
+  const checkInBuyer=useCallback(async(pid,b)=>{
+    if(!openHome||openHome._listing||openHome._demo||!b?.contactId) return {ok:false};
+    const r=await Attio.createInspection({contactId:b.contactId,propertyId:openHome.propertyId,openHomeId:openHome.id,interest:b.interest||"",agent:agentName}).catch(()=>({ok:false}));
+    if(!r||!r.ok||!r.id) return {ok:false};
+    const agentFull=AGENT_FULL[agentName]||agentName||"";
+    const when=[openHome.date?new Date(openHome.date+"T00:00:00").toLocaleDateString("en-AU",{weekday:"short",day:"numeric",month:"short"}):"",String(openHome.time||"").split(/[–-]/)[0].trim()].filter(Boolean).join(" ");
+    Attio.updateInspection(r.id,{notes:`${new Date().toISOString()}\t${agentFull}\tChecked in at the ${when?when+" ":""}open by ${agentFull}`}).catch(()=>{});
+    await refreshBuyers();
+    return {ok:true};
+  },[openHome,agentName,refreshBuyers]);
+
   // All mutations take explicit propId — no stale closure risk
   const updateInterest=useCallback((pid,id,val)=>{
     if(!pid)return;
@@ -3822,11 +3867,13 @@ export default function App(){
         <div className="prop-sub">{[openHome.suburb,openHome.time,openHome.price].filter(Boolean).join(" · ")}</div>
         {openHome.auctionDate&&<div className="prop-sub" style={{color:"#FE5310",fontWeight:700,marginTop:2}}>Auction {fmtAuction(openHome.auctionDate)}</div>}
       </div>
-      {(()=>{const sb=openHome._listing?propReal:pb;return <div className="stats">
-        <div className="st"><div className="sn">{sb.length}</div><div className="sl">{openHome._listing?"Buyers":"Registered"}</div></div>
-        <div className="st"><div className="sn h">{sb.filter(b=>b.interest==="hot").length}</div><div className="sl">Hot</div></div>
-        <div className="st"><div className="sn w">{sb.filter(b=>b.interest==="watching").length}</div><div className="sl">Watching</div></div>
-      </div>;})()}
+      {/* Campaign-wide tally (Luke's call): everyone who has inspected at ANY open of this
+          listing, and hot/watching across all of them incl. enquiries — not just this session. */}
+      <div className="stats">
+        <div className="st"><div className="sn">{propReal.length}</div><div className="sl">{openHome._listing?"Buyers":"Registered"}</div></div>
+        <div className="st"><div className="sn h">{propAll.filter(b=>b.interest==="hot").length}</div><div className="sl">Hot</div></div>
+        <div className="st"><div className="sn w">{propAll.filter(b=>b.interest==="watching").length}</div><div className="sl">Watching</div></div>
+      </div>
       <div className="acts">
         <button className="btn-blue" onClick={()=>setShowAdd(true)}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
@@ -3922,7 +3969,8 @@ export default function App(){
       openHome={openHome} propId={openHome?.id} propIndex={propIndex} opens={visibleOpens}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
       onAddNote={addNote} onEditNote={editNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}
-      onRemoveBuyer={removeBuyer} onTransferBuyer={transferBuyer} onRequestContract={requestContract} onOpenContact={openContact} onSendLink={sendBuyerLink}/>
+      onRemoveBuyer={removeBuyer} onTransferBuyer={transferBuyer} onRequestContract={requestContract} onOpenContact={openContact} onSendLink={sendBuyerLink}
+      onCheckIn={(active&&openHome&&!openHome._listing&&!openHome._demo&&active.contactId&&!pb.some(x=>x.contactId===active.contactId))?checkInBuyer:undefined}/>
     {/* Contact-search detail: the searched person's full page, with their own inspection as
         the edit context. View + call/text/email + notes + interest across every property. */}
     <DetailSheet open={searchDetailOpen} onClose={()=>setSearchDetailOpen(false)} buyer={searchProfile}
