@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v18-10e-emoji";
+const BUILD = "v19-10f-forms2";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -636,6 +636,11 @@ const Resend = {
     if (!j?.ok) return null;
     const d = j.data || j;
     return { status: d.status || "sent", sentAt: d.sentAt || d.created_at, updatedAt: d.updatedAt || d.last_event_at || d.sentAt };
+  },
+  // Email a buyer their offer / bid-registration link (auto-sent via Resend, like the contract).
+  async sendFormLink({ toEmail, toName, agentName, address, url, kind }) {
+    const j = await call("sendFormLink", { toEmail, toName, agentName, address, url, kind });
+    return { ok: !!j?.ok, id: j?.id, error: j?.error };
   },
 };
 
@@ -1619,46 +1624,36 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract, hasContrac
 /* ════════════════════════════════════════════
    BUYER DETAIL SHEET
 ════════════════════════════════════════════ */
-// Text the buyer their offer / bid-registration links (#3). Two compact buttons —
-// only shown when we can text them AND have their inspection id.
-function OfferBidButtons({ buyer, propId, onOfferLink, onBidLink }){
-  const [oSent,setOSent]=useState(false);
-  const [bSent,setBSent]=useState(false);
-  const [confirm,setConfirm]=useState(null); // 'offer' | 'bid'
-  if(!buyer?.mobile || !buyer?._attioInspectionId || (!onOfferLink && !onBidLink)) return null;
-  const doSend=(kind)=>{
-    const fn = kind==="offer" ? onOfferLink : onBidLink;
-    const ok = fn && fn(propId,buyer);
-    setConfirm(null);
-    if(ok!==false){ if(kind==="offer"){ setOSent(true); setTimeout(()=>setOSent(false),3000); } else { setBSent(true); setTimeout(()=>setBSent(false),3000); } }
+// Send the buyer their offer / bid-registration forms — styled like the contract
+// box, each sendable by Text or Email. onSend(kind, channel, buyer, propId).
+function OfferBidRows({ buyer, propId, onSend }){
+  const [sent,setSent]=useState({}); // `${kind}:${channel}` -> true briefly
+  if(!buyer?._attioInspectionId || (!buyer?.mobile && !buyer?.email) || !onSend) return null;
+  const fire=(kind,channel)=>{
+    const ok=onSend(kind,channel,buyer,propId);
+    if(ok!==false){ const k=kind+":"+channel; setSent(s=>({...s,[k]:true})); setTimeout(()=>setSent(s=>({...s,[k]:false})),2500); }
   };
-  if(confirm){
-    const label = confirm==="offer" ? "offer form" : "bid registration";
-    return (
-      <div style={{margin:"10px 0 2px",padding:"12px 13px",border:`1px solid ${SAND_D}`,borderRadius:11,background:LINEN}}>
-        <div style={{fontSize:13,color:BROWN,marginBottom:9,lineHeight:1.4}}>Text the {label} to <b>{buyer.name}</b>?</div>
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={()=>setConfirm(null)} style={{flex:1,padding:"10px",borderRadius:9,border:`1px solid ${SAND_D}`,background:WHITE,color:BROWN_L,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Cancel</button>
-          <button onClick={()=>doSend(confirm)} style={{flex:1,padding:"10px",borderRadius:9,border:"none",background:BLUE_D,color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Send</button>
-        </div>
+  const row=(kind,title,sub)=>(
+    <div className="ctr-box unsent" style={{margin:"0 0 8px"}}>
+      <div style={{flex:1}}>
+        <div className="ctr-lbl unsent">{title}</div>
+        <div className="ctr-sub">{sub}</div>
       </div>
-    );
-  }
-  const btn=(label,sent,onClick)=>(
-    <button onClick={onClick}
-      style={{flex:1,padding:"11px 8px",borderRadius:10,border:`1px solid ${sent?GRN:SAND_D}`,background:sent?GRN_BG:WHITE,color:sent?GRN:ESPRESSO,fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",whiteSpace:"nowrap"}}>
-      {sent?"✓ Sent":label}
-    </button>
+      <div className="ctr-btns">
+        {buyer.mobile&&<button className="ctr-txt" onClick={()=>fire(kind,"text")}>{sent[kind+":text"]?"✓ Sent":"Text"}</button>}
+        {buyer.email&&<button className="ctr-send" onClick={()=>fire(kind,"email")}>{sent[kind+":email"]?"✓ Sent":"Email"}</button>}
+      </div>
+    </div>
   );
   return (
-    <div style={{display:"flex",gap:8,margin:"10px 0 2px"}}>
-      {onBidLink && btn("Register to bid",bSent,()=>setConfirm("bid"))}
-      {onOfferLink && btn("Submit offer",oSent,()=>setConfirm("offer"))}
+    <div style={{margin:"2px 0"}}>
+      {row("offer","Submit offer","Price, deposit, settlement & terms")}
+      {row("bid","Register to bid","Auction bidder registration")}
     </div>
   );
 }
 
-function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onOfferLink,onBidLink}){
+function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink}){
   const[noteText,setNoteText]=useState("");
   const[showNote,setShowNote]=useState(false);
   const[copied,setCopied]=useState(false);
@@ -1808,7 +1803,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
       </>)}
 
       <ContractBox buyer={buyer} propId={propId} onSendContract={onSendContract} onTextContract={onTextContract} hasContract={!!openHome?.contractUrl} onRequestContract={onRequestContract}/>
-      <OfferBidButtons buyer={buyer} propId={propId} onOfferLink={onOfferLink} onBidLink={onBidLink}/>
+      <OfferBidRows buyer={buyer} propId={propId} onSend={onSendLink}/>
 
       <div className="sec-w"><div className="sec-i">Update interest</div></div>
       <div className="cgr">{ISET.map(o=><div key={o.v} className={`cb ${buyer.interest===o.v?(o.v==="hot"?"ah":o.v==="watching"?"aw":"ac"):""}`} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}>
@@ -3238,35 +3233,33 @@ export default function App(){
     }
   },[isDemo, openHome, agentName]);
 
-  // Text a buyer their personal offer-submission link (price/deposit/settlement/
-  // conditions → emails us + logs against them + flags hot). Offers page = #3.
-  const sendOfferLink=useCallback((pid,b)=>{
-    if(!pid||!b||!b.mobile)return false;
-    if(!b._attioInspectionId){ return false; }
+  // Send a buyer their offer / bid-registration link, by TEXT or EMAIL (#3).
+  // kind = "offer" | "bid"; channel = "text" | "email". Logs the send on their notes.
+  const sendBuyerLink=useCallback((kind,channel,b,pid)=>{
+    pid=pid||openHome?.id;
+    if(!pid||!b||!b._attioInspectionId) return false;
     const ak=(agentName||"").toLowerCase().split(" ")[0];
-    const url=`https://go.getsavvi.com.au/offer/${b._attioInspectionId.slice(0,13)}?a=${ak}`;
+    const path=kind==="bid"?"bid":"offer";
+    const url=`https://go.getsavvi.com.au/${path}/${b._attioInspectionId.slice(0,13)}?a=${ak}`;
     const first=(b.name||"").split(" ")[0]||"there";
     const addr=streetLine(openHome?.address,openHome?.suburb)||"the property";
-    const sig=smsSig(agentName);
-    const msg=`Hi ${first}, ready to put an offer in on ${addr}? Submit it here and it comes straight to us:\n${url}\n\nThanks,\n${sig}`;
-    MM.sendMessage({ toPhone:b.mobile, agent:agentName, message:msg }).catch(()=>{});
-    if(!isDemo&&openHome?.id) addNote(pid,b.id,`Text sent: "${msg}"`);
-    return true;
-  },[agentName,openHome,isDemo]);
-
-  // Text a buyer their auction bid-registration link (#3b).
-  const sendBidLink=useCallback((pid,b)=>{
-    if(!pid||!b||!b.mobile)return false;
-    if(!b._attioInspectionId){ return false; }
-    const ak=(agentName||"").toLowerCase().split(" ")[0];
-    const url=`https://go.getsavvi.com.au/bid/${b._attioInspectionId.slice(0,13)}?a=${ak}`;
-    const first=(b.name||"").split(" ")[0]||"there";
-    const addr=streetLine(openHome?.address,openHome?.suburb)||"the property";
-    const sig=smsSig(agentName);
-    const msg=`Hi ${first}, register to bid on ${addr} here so you're ready for auction day:\n${url}\n\nThanks,\n${sig}`;
-    MM.sendMessage({ toPhone:b.mobile, agent:agentName, message:msg }).catch(()=>{});
-    if(!isDemo&&openHome?.id) addNote(pid,b.id,`Text sent: "${msg}"`);
-    return true;
+    if(channel==="text"){
+      if(!b.mobile) return false;
+      const sig=smsSig(agentName);
+      const msg=kind==="bid"
+        ? `Hi ${first}, register to bid on ${addr} here so you're ready for auction day:\n${url}\n\nThanks,\n${sig}`
+        : `Hi ${first}, ready to put an offer in on ${addr}? Submit it here and it comes straight to us:\n${url}\n\nThanks,\n${sig}`;
+      MM.sendMessage({ toPhone:b.mobile, agent:agentName, message:msg }).catch(()=>{});
+      if(!isDemo) addNote(pid,b.id,`Text sent: "${msg}"`);
+      return true;
+    }
+    if(channel==="email"){
+      if(!b.email) return false;
+      Resend.sendFormLink({ toEmail:b.email, toName:b.name, agentName, address:openHome?.address||addr, url, kind }).catch(()=>{});
+      if(!isDemo) addNote(pid,b.id,`Emailed ${kind==="bid"?"bid registration":"offer"} form to ${b.email}: ${url}`);
+      return true;
+    }
+    return false;
   },[agentName,openHome,isDemo]);
 
   const addNote=useCallback((pid,id,text)=>{
@@ -3701,7 +3694,7 @@ export default function App(){
       openHome={openHome} propId={openHome?.id} propIndex={propIndex} opens={visibleOpens}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
       onAddNote={addNote} onEditNote={editNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}
-      onRemoveBuyer={removeBuyer} onTransferBuyer={transferBuyer} onRequestContract={requestContract} onOpenContact={openContact} onOfferLink={sendOfferLink} onBidLink={sendBidLink}/>
+      onRemoveBuyer={removeBuyer} onTransferBuyer={transferBuyer} onRequestContract={requestContract} onOpenContact={openContact} onSendLink={sendBuyerLink}/>
     {/* Contact-search detail: the searched person's full page, with their own inspection as
         the edit context. View + call/text/email + notes + interest across every property. */}
     <DetailSheet open={searchDetailOpen} onClose={()=>setSearchDetailOpen(false)} buyer={searchProfile}
@@ -3712,8 +3705,7 @@ export default function App(){
       onSetProfile={(pid,id,pr)=>{ setSearchProfile(a=>a&&{...a,aiProfile:pr}); }}
       onUpdateDetails={(pid,id,d)=>{ setSearchProfile(a=>a&&{...a,name:d.name,mobile:d.mobile,email:d.email}); if(!isDemo&&searchProfile?.contactId) Attio.updatePerson({id:searchProfile.contactId,name:d.name,email:d.email,mobile:d.mobile}).catch(()=>{}); }}
       onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}} onOpenContact={openContact}
-      onOfferLink={(pid,b)=>{ if(!b?.mobile||!b?._attioInspectionId) return false; const ak=(agentName||"").toLowerCase().split(" ")[0]; const url=`https://go.getsavvi.com.au/offer/${b._attioInspectionId.slice(0,13)}?a=${ak}`; const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const sig=smsSig(agentName); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:`Hi ${first}, ready to put an offer in on ${addr}? Submit it here and it comes straight to us:\n${url}\n\nThanks,\n${sig}`}).catch(()=>{}); return true; }}
-      onBidLink={(pid,b)=>{ if(!b?.mobile||!b?._attioInspectionId) return false; const ak=(agentName||"").toLowerCase().split(" ")[0]; const url=`https://go.getsavvi.com.au/bid/${b._attioInspectionId.slice(0,13)}?a=${ak}`; const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const sig=smsSig(agentName); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:`Hi ${first}, register to bid on ${addr} here so you're ready for auction day:\n${url}\n\nThanks,\n${sig}`}).catch(()=>{}); return true; }}/>
+      onSendLink={(kind,channel,b)=>{ if(!b?._attioInspectionId) return false; const ak=(agentName||"").toLowerCase().split(" ")[0]; const url=`https://go.getsavvi.com.au/${kind==="bid"?"bid":"offer"}/${b._attioInspectionId.slice(0,13)}?a=${ak}`; const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const logSearch=(text)=>{ const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:AGENT_FULL[agentName]||agentName||""}; setSearchProfile(a=>{ if(!a) return a; const notes=[...(a.notes||[]),note]; if(!isDemo&&a._attioInspectionId){ const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; Attio.updateInspection(a._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); } return {...a,notes}; }); }; if(channel==="text"){ if(!b.mobile) return false; const sig=smsSig(agentName); const msg=kind==="bid"?`Hi ${first}, register to bid on ${addr} here so you're ready for auction day:\n${url}\n\nThanks,\n${sig}`:`Hi ${first}, ready to put an offer in on ${addr}? Submit it here and it comes straight to us:\n${url}\n\nThanks,\n${sig}`; MM.sendMessage({toPhone:b.mobile,agent:agentName,message:msg}).catch(()=>{}); logSearch(`Text sent: "${msg}"`); return true; } if(channel==="email"){ if(!b.email) return false; Resend.sendFormLink({toEmail:b.email,toName:b.name,agentName,address:searchOpenHome?.address||addr,url,kind}).catch(()=>{}); logSearch(`Emailed ${kind==="bid"?"bid registration":"offer"} form to ${b.email}: ${url}`); return true; } return false; }}/>
     <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll}/>
     <MatchSheet open={showMatch} onClose={()=>setShowMatch(false)} openHome={openHome} excludeIds={propAll.map(b=>b.contactId).filter(Boolean)} agentName={agentName} propIndex={propIndex}/>
     <QuickContractSheet
