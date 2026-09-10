@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v28-workspace";
+const BUILD = "v29-inspected";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -784,6 +784,11 @@ const AGENT_FULL={ "Luke":"Luke Saville", "Sam":"Sam Robinson" };
 const FOLLOWUP_URL = "https://n8n.getsavvi.com.au/webhook/savvi-followup";
 // Sign SMS with the sending agent's full name (their number is chosen backend-side to match).
 const smsSig = a => AGENT_FULL[String(a||"").trim().split(" ")[0]] || "Luke Saville";
+// "Sat 12 Sep 11:00am" for an open home — used in the "Inspected at the … open" notes.
+const openWhen = oh => [oh?.date ? new Date(oh.date + "T00:00:00").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" }) : "", String(oh?.time || "").split(/[–-]/)[0].trim()].filter(Boolean).join(" ");
+// Every inspection a buyer has had, from their "Inspected … at the <when> open" notes plus
+// (for older records without one) the opens they're registered at that we can date.
+const inspectionsOf = (buyer, opens) => { const seen = new Set(), out = []; (buyer?.notes || []).forEach(n => { const m = /^Inspected .*? at the (.+?) open/i.exec(n.text || ""); if (m && !seen.has(m[1])) { seen.add(m[1]); out.push(m[1]); } }); (buyer?.openHomeIds || []).forEach(id => { const o = (opens || []).find(x => x.id === id); const w = o ? openWhen(o) : ""; if (w && !seen.has(w)) { seen.add(w); out.push(w); } }); return out; };
 function buildWelcomeSms({ firstName, address, igUrl, agent, inspectionId }){
   const sig = smsSig(agent);
   const parts = [
@@ -1219,6 +1224,8 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 .checkin-btn{display:block;width:calc(100% - 32px);margin:0 16px 10px;padding:12px;border:none;border-radius:11px;background:${BLUE_D};color:#fff;font-family:'Neue Haas Unica Pro',sans-serif;font-size:13.5px;font-weight:800;cursor:pointer;}
 .checkin-btn:disabled{opacity:.6;cursor:default;}
 .checkin-btn.done{background:${GRN_BG};color:${GRN};border:1px solid #A9DFBF;}
+.insp-line{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:7px;font-size:11px;color:${BROWN_L};font-weight:600;}
+.insp-line span{background:${LINEN};border:1px solid ${SAND_D};border-radius:6px;padding:2px 7px;color:${BROWN};font-weight:600;}
 `;
 
 /* ════════════════════════════════════════════
@@ -1442,17 +1449,23 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
       // An enquiry is property-level: no open_home on the record.
       if(contactId){ const r=await Attio.createInspection({contactId,propertyId:openHome?.propertyId,openHomeId:isEnq?null:openHome?.id,interest:interestVal,agent:agentName}).catch(()=>({ok:false})); if(r.ok) inspectionId=r.id; }
       if(contactId&&inspectionId){
-        onReconcile&&onReconcile(pid,tempId,{id:inspectionId,contactId,_attioInspectionId:inspectionId,_pending:false});
+        // Every open-home registration writes an "Inspected … at the <when> open" note, so the
+        // buyer's record shows exactly when they walked through (Luke: "nothing actually records
+        // the fact that they had an inspection and the date and time").
+        const inspText=`Inspected ${streetLine(openHome?.address,openHome?.suburb)||"the property"} at the ${openWhen(openHome)||"open home"} open`;
+        const inspNote=`${enqTs}\t${agentFull}\t${inspText}`;
+        onReconcile&&onReconcile(pid,tempId,{id:inspectionId,contactId,_attioInspectionId:inspectionId,_pending:false,...(isEnq?{}:{notes:[{id:"n0",ts:enqTs,agent:agentFull,text:inspText}]})});
         if(isEnq){
           Attio.updateInspection(inspectionId,{notes:`${enqTs}\t${agentFull}\t${enqNote}`}).catch(()=>{});
           return; // no welcome SMS for an enquiry — they haven't been through the property
         }
+        Attio.updateInspection(inspectionId,{notes:inspNote}).catch(()=>{});
         // Welcome SMS — first inspection of this property only.
         const alreadyInspected=(propContactIds||[]).includes(contactId);
         if(mob && !alreadyInspected){
           const welcomeMsg = buildWelcomeSms({ firstName:nm.split(" ")[0], address:openHome.address, igUrl:openHome.igUrl||"", agent:agentName||openHome.agent, inspectionId });
           MM.sendMessage({ toPhone:mob, agent:agentName||openHome.agent, message: welcomeMsg })
-            .then(sres=>{ if(sres&&sres.ok){ const _ag=AGENT_FULL[agentName]||agentName||""; Attio.updateInspection(inspectionId,{smsSent:true, notes:`${new Date().toISOString()}\t${_ag}\tText sent: "${welcomeMsg}"`}).catch(()=>{}); } }).catch(()=>{});
+            .then(sres=>{ if(sres&&sres.ok){ const _ag=AGENT_FULL[agentName]||agentName||""; Attio.updateInspection(inspectionId,{smsSent:true, notes:`${inspNote}\n---\n${new Date().toISOString()}\t${_ag}\tText sent: "${welcomeMsg}"`}).catch(()=>{}); } }).catch(()=>{});
         }
       } else {
         onReconcile&&onReconcile(pid,tempId,{_pending:false,_error:true});
@@ -2015,6 +2028,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
               {buyer.smsSent&&<span className="sms-badge">SMS sent</span>}
               {days!==null&&<span style={{fontSize:10,color:BROWN_L,fontWeight:500}}>{days}d in system</span>}
             </div>
+            {(()=>{ const ins=inspectionsOf(buyer,opens); return ins.length?<div className="insp-line">Inspected{ins.map((w,i)=><span key={i}>{w}</span>)}</div>:null; })()}
           </div>
         </div>
       </div>
@@ -3160,7 +3174,7 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
   const days=buyer._createdAt?Math.max(0,Math.round((Date.now()-new Date(buyer._createdAt))/864e5)):null;
   // Timeline = notes (minus internal markers) + contract/form events, newest first.
   const items=[];
-  (buyer.notes||[]).forEach(n=>{ if(/^\s*\[[a-z0-9_-]+\]\s*$/i.test(n.text||"")) return; const ev=/^(Text sent:|Emailed |Checked in at)/i.test(n.text||""); items.push({id:n.id,ts:n.ts,text:n.text,agent:n.agent,ev,note:n}); });
+  (buyer.notes||[]).forEach(n=>{ if(/^\s*\[[a-z0-9_-]+\]\s*$/i.test(n.text||"")) return; const ev=/^(Text sent:|Emailed |Checked in at|Inspected )/i.test(n.text||""); items.push({id:n.id,ts:n.ts,text:n.text,agent:n.agent,ev,note:n}); });
   (buyer.contractOpens||[]).forEach((o,i)=>{ const lbl=o.kind==="opened"?"Opened the contract email":o.kind==="clicked"?"Opened the contract":o.kind==="offer-opened"?"Opened the offer form":o.kind==="bid-opened"?"Opened the bid registration form":o.kind; items.push({id:"ev"+i,ts:o.at,text:lbl,ev:true,ok:true}); });
   items.sort((a,b)=>new Date(b.ts||0)-new Date(a.ts||0));
   const atThisOpen=!openHome||openHome._listing||!onCheckIn;
@@ -3178,6 +3192,7 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
             {openHome&&<span style={{fontSize:12,color:BROWN_L}}>on {streetLine(openHome.address,openHome.suburb)||buyer._primAddr||"this listing"}</span>}
             {days!==null&&<span style={{fontSize:11,color:BROWN_L}}>· {days}d in system</span>}
           </div>
+          {(()=>{ const ins=inspectionsOf(buyer,opens); return ins.length?<div className="insp-line">Inspected{ins.map((w,i)=><span key={i}>{w}</span>)}</div>:null; })()}
           <div className="cgr mini" style={{padding:"10px 0 0",maxWidth:360}}>{ISET.map(o=><div key={o.v} className={`cb ${buyer.interest===o.v?(o.v==="hot"?"ah":o.v==="watching"?"aw":"ac"):""}`} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}><span className="e">{o.e}</span>{o.l}</div>)}</div>
         </div>
         <button className="x" aria-label="Close" onClick={onClose}>✕</button>
@@ -3777,8 +3792,7 @@ export default function App(){
     const r=await Attio.createInspection({contactId:b.contactId,propertyId:openHome.propertyId,openHomeId:openHome.id,interest:b.interest||"",agent:agentName}).catch(()=>({ok:false}));
     if(!r||!r.ok||!r.id) return {ok:false};
     const agentFull=AGENT_FULL[agentName]||agentName||"";
-    const when=[openHome.date?new Date(openHome.date+"T00:00:00").toLocaleDateString("en-AU",{weekday:"short",day:"numeric",month:"short"}):"",String(openHome.time||"").split(/[–-]/)[0].trim()].filter(Boolean).join(" ");
-    Attio.updateInspection(r.id,{notes:`${new Date().toISOString()}\t${agentFull}\tChecked in at the ${when?when+" ":""}open by ${agentFull}`}).catch(()=>{});
+    Attio.updateInspection(r.id,{notes:`${new Date().toISOString()}\t${agentFull}\tInspected ${streetLine(openHome.address,openHome.suburb)||"the property"} at the ${openWhen(openHome)||"open home"} open (added by ${agentFull})`}).catch(()=>{});
     await refreshBuyers();
     return {ok:true};
   },[openHome,agentName,refreshBuyers]);
