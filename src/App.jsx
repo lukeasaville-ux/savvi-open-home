@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v16-10c-bid";
+const BUILD = "v17-10d-forms";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1289,8 +1289,9 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
         // Welcome SMS — first inspection of this property only.
         const alreadyInspected=(propContactIds||[]).includes(contactId);
         if(mob && !alreadyInspected){
-          MM.sendMessage({ toPhone:mob, agent:agentName||openHome.agent, message: buildWelcomeSms({ firstName:nm.split(" ")[0], address:openHome.address, igUrl:openHome.igUrl||"", agent:agentName||openHome.agent, inspectionId }) })
-            .then(sres=>{ if(sres&&sres.ok) Attio.updateInspection(inspectionId,{smsSent:true}).catch(()=>{}); }).catch(()=>{});
+          const welcomeMsg = buildWelcomeSms({ firstName:nm.split(" ")[0], address:openHome.address, igUrl:openHome.igUrl||"", agent:agentName||openHome.agent, inspectionId });
+          MM.sendMessage({ toPhone:mob, agent:agentName||openHome.agent, message: welcomeMsg })
+            .then(sres=>{ if(sres&&sres.ok){ const _ag=AGENT_FULL[agentName]||agentName||""; Attio.updateInspection(inspectionId,{smsSent:true, notes:`${new Date().toISOString()}\t${_ag}\tText sent: "${welcomeMsg}"`}).catch(()=>{}); } }).catch(()=>{});
         }
       } else {
         onReconcile&&onReconcile(pid,tempId,{_pending:false,_error:true});
@@ -1623,18 +1624,36 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract, hasContrac
 function OfferBidButtons({ buyer, propId, onOfferLink, onBidLink }){
   const [oSent,setOSent]=useState(false);
   const [bSent,setBSent]=useState(false);
-  if(!buyer?.mobile || !buyer?._attioInspectionId) return null;
-  const btn=(label,sentLabel,sent,setSent,fn)=>(
-    <button onClick={()=>{ if(sent)return; const ok=fn(propId,buyer); if(ok!==false){ setSent(true); setTimeout(()=>setSent(false),3000); } }}
+  const [confirm,setConfirm]=useState(null); // 'offer' | 'bid'
+  if(!buyer?.mobile || !buyer?._attioInspectionId || (!onOfferLink && !onBidLink)) return null;
+  const doSend=(kind)=>{
+    const fn = kind==="offer" ? onOfferLink : onBidLink;
+    const ok = fn && fn(propId,buyer);
+    setConfirm(null);
+    if(ok!==false){ if(kind==="offer"){ setOSent(true); setTimeout(()=>setOSent(false),3000); } else { setBSent(true); setTimeout(()=>setBSent(false),3000); } }
+  };
+  if(confirm){
+    const label = confirm==="offer" ? "offer form" : "bid registration";
+    return (
+      <div style={{margin:"10px 0 2px",padding:"12px 13px",border:`1px solid ${SAND_D}`,borderRadius:11,background:LINEN}}>
+        <div style={{fontSize:13,color:BROWN,marginBottom:9,lineHeight:1.4}}>Text the {label} to <b>{buyer.name}</b>?</div>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={()=>setConfirm(null)} style={{flex:1,padding:"10px",borderRadius:9,border:`1px solid ${SAND_D}`,background:WHITE,color:BROWN_L,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Cancel</button>
+          <button onClick={()=>doSend(confirm)} style={{flex:1,padding:"10px",borderRadius:9,border:"none",background:BLUE_D,color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Send</button>
+        </div>
+      </div>
+    );
+  }
+  const btn=(label,sent,onClick)=>(
+    <button onClick={onClick}
       style={{flex:1,padding:"11px 8px",borderRadius:10,border:`1px solid ${sent?GRN:SAND_D}`,background:sent?GRN_BG:WHITE,color:sent?GRN:ESPRESSO,fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",whiteSpace:"nowrap"}}>
-      {sent?sentLabel:label}
+      {sent?"✓ Sent":label}
     </button>
   );
-  if(!onOfferLink && !onBidLink) return null;
   return (
     <div style={{display:"flex",gap:8,margin:"10px 0 2px"}}>
-      {onBidLink && btn("🔨 Register to bid","✓ Sent",bSent,setBSent,onBidLink)}
-      {onOfferLink && btn("📝 Submit offer","✓ Sent",oSent,setOSent,onOfferLink)}
+      {onBidLink && btn("Register to bid",bSent,()=>setConfirm("bid"))}
+      {onOfferLink && btn("Submit offer",oSent,()=>setConfirm("offer"))}
     </div>
   );
 }
@@ -1647,6 +1666,8 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
   const[editNoteId,setEditNoteId]=useState(null);
   const[editNoteText,setEditNoteText]=useState("");
   const[manage,setManage]=useState(false); // remove / transfer panel
+  const[callOpen,setCallOpen]=useState(false); // call-logging panel
+  const[callNote,setCallNote]=useState("");
   const[xfer,setXfer]=useState(false);      // transfer target picker open
   // The buyer profile is a CONTACT-level summary: it reads this person's notes across
   // EVERY property they've inspected, not just the listing you're viewing. crossNotes
@@ -1656,7 +1677,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
   const[eName,setEName]=useState("");const[eMobile,setEMobile]=useState("");const[eEmail,setEEmail]=useState("");
   const[savingEdit,setSavingEdit]=useState(false);
 
-  useEffect(()=>{if(open){setNoteText("");setShowNote(false);setEditing(false);setEditNoteId(null);setEditNoteText("");setManage(false);setXfer(false);}}, [open]);
+  useEffect(()=>{if(open){setNoteText("");setShowNote(false);setEditing(false);setEditNoteId(null);setEditNoteText("");setManage(false);setXfer(false);setCallOpen(false);setCallNote("");}}, [open]);
 
   // Load this contact's notes from EVERY property (by contactId) so the profile
   // summarises the whole relationship, not just this listing. For a not-yet-synced
@@ -1765,9 +1786,17 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         <div className="ci" style={{background:"#FFF4D5"}}>📱</div>
         <div style={{flex:1}}><div className="ci-l">MOBILE</div><div className="ci-v">{buyer.mobile||"—"}</div></div>
         {buyer.mobile&&<span className="ci-cp" onClick={e=>{e.preventDefault();e.stopPropagation();navigator.clipboard?.writeText(buyer.mobile).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),1500);}}>{copied?"Copied ✓":"Copy"}</span>}
-        {buyer.mobile&&<a href={`tel:${toE164AU(buyer.mobile)}`} style={{marginLeft:10,fontSize:12,fontWeight:700,color:"#1E8C50",textDecoration:"none"}}>Call</a>}
+        {buyer.mobile&&<a href={`tel:${toE164AU(buyer.mobile)}`} onClick={()=>{setCallNote("");setCallOpen(true);}} style={{marginLeft:10,fontSize:12,fontWeight:700,color:"#1E8C50",textDecoration:"none"}}>Call</a>}
         {buyer.mobile&&<a href={`sms:${toE164AU(buyer.mobile)}`} style={{marginLeft:10,fontSize:12,fontWeight:700,color:AMBER,textDecoration:"none"}}>Text ›</a>}
       </div>
+      {callOpen&&<div style={{margin:"2px 0 10px",padding:"12px 13px",border:`1px solid ${SAND_D}`,borderRadius:11,background:LINEN}}>
+        <div style={{fontSize:12.5,fontWeight:800,color:BROWN,marginBottom:8}}>Log call with {(buyer.name||"").split(" ")[0]}</div>
+        <textarea value={callNote} onChange={e=>setCallNote(e.target.value)} placeholder="What did you discuss? (optional)" style={{width:"100%",minHeight:66,padding:10,border:`1px solid ${SAND_D}`,borderRadius:9,fontSize:14,fontFamily:"'Neue Haas Unica Pro',sans-serif",resize:"vertical",outline:"none",boxSizing:"border-box"}}/>
+        <div style={{display:"flex",gap:8,marginTop:8}}>
+          <button onClick={()=>{setCallOpen(false);setCallNote("");}} style={{flex:1,padding:"10px",borderRadius:9,border:`1px solid ${SAND_D}`,background:WHITE,color:BROWN_L,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Cancel</button>
+          <button onClick={()=>{ const first=(buyer.name||"").split(" ")[0]||""; const txt=callNote.trim()?`Called ${first} — ${callNote.trim()}`:`Called ${first}`; if(onAddNote&&propId) onAddNote(propId,buyer.id,txt); setCallOpen(false); setCallNote(""); }} style={{flex:1,padding:"10px",borderRadius:9,border:"none",background:BLUE_D,color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Log call</button>
+        </div>
+      </div>}
       <a className="crow" href={buyer.email?`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(buyer.email)}`:undefined} onClick={buyer.email?(e=>openEmail(e,buyer.email)):undefined} target="_blank" rel="noreferrer" style={{marginBottom:8,textDecoration:"none",color:"inherit",cursor:buyer.email?"pointer":"default"}}>
         <div className="ci" style={{background:"#FFF4D5"}}>✉️</div>
         <div style={{flex:1}}><div className="ci-l">EMAIL</div><div className="ci-v">{buyer.email||"—"}</div></div>
@@ -3200,8 +3229,9 @@ export default function App(){
       // contracts get the same opened/last-viewed tracking as emailed ones — falls back
       // to the raw URL for a not-yet-synced local buyer with no inspection id.
       const trackUrl = (!isDemo && b._attioInspectionId) ? `https://go.getsavvi.com.au/c/${b._attioInspectionId.slice(0,13)}` : openHome.contractUrl;
-      MM.sendMessage({ toPhone:b.mobile, agent:agentName, message: buildContractSms({ firstName:(b.name||"").split(" ")[0], address:openHome.address, contractUrl:trackUrl, agent:agentName }) })
-        .then(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); })
+      const ctrMsg = buildContractSms({ firstName:(b.name||"").split(" ")[0], address:openHome.address, contractUrl:trackUrl, agent:agentName });
+      MM.sendMessage({ toPhone:b.mobile, agent:agentName, message: ctrMsg })
+        .then(()=>{ if(!isDemo && b._attioInspectionId){ Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); addNote(pid,b.id,`Text sent: "${ctrMsg}"`); } })
         .catch(()=>{ if(!isDemo && b._attioInspectionId) Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); });
     } else if(!isDemo && b._attioInspectionId){
       Attio.updateInspection(b._attioInspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{});
@@ -3213,12 +3243,14 @@ export default function App(){
   const sendOfferLink=useCallback((pid,b)=>{
     if(!pid||!b||!b.mobile)return false;
     if(!b._attioInspectionId){ return false; }
-    const url=`https://go.getsavvi.com.au/offer/${b._attioInspectionId.slice(0,13)}`;
+    const ak=(agentName||"").toLowerCase().split(" ")[0];
+    const url=`https://go.getsavvi.com.au/offer/${b._attioInspectionId.slice(0,13)}?a=${ak}`;
     const first=(b.name||"").split(" ")[0]||"there";
     const addr=streetLine(openHome?.address,openHome?.suburb)||"the property";
     const sig=smsSig(agentName);
-    MM.sendMessage({ toPhone:b.mobile, agent:agentName, message:`Hi ${first}, ready to put an offer in on ${addr}? Submit it here and it comes straight to us:\n${url}\n\nThanks,\n${sig}` }).catch(()=>{});
-    if(!isDemo&&openHome?.id) addNote(pid,b.id,`📝 Offer link sent`);
+    const msg=`Hi ${first}, ready to put an offer in on ${addr}? Submit it here and it comes straight to us:\n${url}\n\nThanks,\n${sig}`;
+    MM.sendMessage({ toPhone:b.mobile, agent:agentName, message:msg }).catch(()=>{});
+    if(!isDemo&&openHome?.id) addNote(pid,b.id,`Text sent: "${msg}"`);
     return true;
   },[agentName,openHome,isDemo]);
 
@@ -3226,12 +3258,14 @@ export default function App(){
   const sendBidLink=useCallback((pid,b)=>{
     if(!pid||!b||!b.mobile)return false;
     if(!b._attioInspectionId){ return false; }
-    const url=`https://go.getsavvi.com.au/bid/${b._attioInspectionId.slice(0,13)}`;
+    const ak=(agentName||"").toLowerCase().split(" ")[0];
+    const url=`https://go.getsavvi.com.au/bid/${b._attioInspectionId.slice(0,13)}?a=${ak}`;
     const first=(b.name||"").split(" ")[0]||"there";
     const addr=streetLine(openHome?.address,openHome?.suburb)||"the property";
     const sig=smsSig(agentName);
-    MM.sendMessage({ toPhone:b.mobile, agent:agentName, message:`Hi ${first}, register to bid on ${addr} here so you're ready for auction day:\n${url}\n\nThanks,\n${sig}` }).catch(()=>{});
-    if(!isDemo&&openHome?.id) addNote(pid,b.id,`🔨 Bid registration link sent`);
+    const msg=`Hi ${first}, register to bid on ${addr} here so you're ready for auction day:\n${url}\n\nThanks,\n${sig}`;
+    MM.sendMessage({ toPhone:b.mobile, agent:agentName, message:msg }).catch(()=>{});
+    if(!isDemo&&openHome?.id) addNote(pid,b.id,`Text sent: "${msg}"`);
     return true;
   },[agentName,openHome,isDemo]);
 
@@ -3662,7 +3696,7 @@ export default function App(){
     </button>}
     <AddSheet open={showAdd} onClose={()=>{setShowAdd(false);setAiPrefill(null);}} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)} prefill={aiPrefill}/>
     <AiAssistantSheet open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={handleEnquiry}/>
-    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} onLogNote={(b,sent)=>{ if(!isDemo&&openHome?.id&&b?.id) addNote(openHome.id,b.id,`📣 Bulk text sent: "${String(sent).slice(0,80)}${String(sent).length>80?"…":""}"`); }} label={filterActive?(({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"):"All buyers"}/>
+    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} onLogNote={(b,sent)=>{ if(!isDemo&&openHome?.id&&b?.id) addNote(openHome.id,b.id,`Text sent: "${sent}"`); }} label={filterActive?(({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"):"All buyers"}/>
     <DetailSheet open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id} propIndex={propIndex} opens={visibleOpens}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
@@ -3678,8 +3712,8 @@ export default function App(){
       onSetProfile={(pid,id,pr)=>{ setSearchProfile(a=>a&&{...a,aiProfile:pr}); }}
       onUpdateDetails={(pid,id,d)=>{ setSearchProfile(a=>a&&{...a,name:d.name,mobile:d.mobile,email:d.email}); if(!isDemo&&searchProfile?.contactId) Attio.updatePerson({id:searchProfile.contactId,name:d.name,email:d.email,mobile:d.mobile}).catch(()=>{}); }}
       onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}} onOpenContact={openContact}
-      onOfferLink={(pid,b)=>{ if(!b?.mobile||!b?._attioInspectionId) return false; const url=`https://go.getsavvi.com.au/offer/${b._attioInspectionId.slice(0,13)}`; const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const sig=smsSig(agentName); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:`Hi ${first}, ready to put an offer in on ${addr}? Submit it here and it comes straight to us:\n${url}\n\nThanks,\n${sig}`}).catch(()=>{}); return true; }}
-      onBidLink={(pid,b)=>{ if(!b?.mobile||!b?._attioInspectionId) return false; const url=`https://go.getsavvi.com.au/bid/${b._attioInspectionId.slice(0,13)}`; const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const sig=smsSig(agentName); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:`Hi ${first}, register to bid on ${addr} here so you're ready for auction day:\n${url}\n\nThanks,\n${sig}`}).catch(()=>{}); return true; }}/>
+      onOfferLink={(pid,b)=>{ if(!b?.mobile||!b?._attioInspectionId) return false; const ak=(agentName||"").toLowerCase().split(" ")[0]; const url=`https://go.getsavvi.com.au/offer/${b._attioInspectionId.slice(0,13)}?a=${ak}`; const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const sig=smsSig(agentName); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:`Hi ${first}, ready to put an offer in on ${addr}? Submit it here and it comes straight to us:\n${url}\n\nThanks,\n${sig}`}).catch(()=>{}); return true; }}
+      onBidLink={(pid,b)=>{ if(!b?.mobile||!b?._attioInspectionId) return false; const ak=(agentName||"").toLowerCase().split(" ")[0]; const url=`https://go.getsavvi.com.au/bid/${b._attioInspectionId.slice(0,13)}?a=${ak}`; const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const sig=smsSig(agentName); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:`Hi ${first}, register to bid on ${addr} here so you're ready for auction day:\n${url}\n\nThanks,\n${sig}`}).catch(()=>{}); return true; }}/>
     <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll}/>
     <MatchSheet open={showMatch} onClose={()=>setShowMatch(false)} openHome={openHome} excludeIds={propAll.map(b=>b.contactId).filter(Boolean)} agentName={agentName} propIndex={propIndex}/>
     <QuickContractSheet
