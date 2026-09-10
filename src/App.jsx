@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v17-10d-forms";
+const BUILD = "v18-10e-emoji";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -758,7 +758,7 @@ const CONTACTS_CACHE=[
 ];
 const ISET=[{v:"hot",e:"🔥",l:"Hot",s:"Ready to offer"},{v:"watching",e:"👀",l:"Watching",s:"2nd+ inspection"},{v:"cool",e:"❄️",l:"Cool",s:"Just looking"}];
 const iCl =v=>({hot:"i-hot",watching:"i-wat",cool:"i-cool"}[v]||"");
-const iLbl=v=>({hot:"Hot 🔥",watching:"Watching 👀",cool:"Cool ❄️"}[v]||v);
+const iLbl=v=>({hot:"Hot",watching:"Watching",cool:"Cool"}[v]||v);
 const iCol=v=>({hot:"#C0392B",watching:"#B7770D",cool:"#7F8C8D"}[v]||"#5A7FBF");
 const mkI =n=>n.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
 const norm=s=>s.replace(/\s+/g,"");
@@ -1345,7 +1345,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
         <div className="fg"><label className="fl">Email</label><input className="fi" type="email" placeholder="name@email.com" value={email} onChange={e=>setEmail(e.target.value)}/></div>
         {err&&<div style={{color:AMBER_D,fontSize:13,padding:"0 0 8px",lineHeight:1.4}}>{err}</div>}
         <div className="fg" style={{paddingBottom:0}}><button className="btn-dark" style={{margin:0,width:"100%"}} disabled={!name||saving} onClick={()=>{if(name)save();}}>{saving?<><span className="sp-sm"/>Registering…</>:"Register buyer"}</button></div>
-        {openHome?.igUrl&&<p style={{fontSize:12,color:GRN,textAlign:"center",padding:"10px 16px 0"}}>📱 SMS with the walkthrough video link will be sent automatically</p>}
+        {openHome?.igUrl&&<p style={{fontSize:12,color:GRN,textAlign:"center",padding:"10px 16px 0"}}>SMS with the walkthrough video link will be sent automatically</p>}
       </>}
 
       {step==="confirm"&&<>
@@ -1361,7 +1361,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
           </button>
         </div>
         <p style={{fontSize:12,color:BROWN_L,textAlign:"center",padding:"10px 16px 0"}}>You can set how interested they are later, from their profile.</p>
-        {openHome?.igUrl&&<p style={{fontSize:12,color:GRN,textAlign:"center",padding:"6px 16px 0"}}>📱 SMS with the walkthrough video link will be sent automatically</p>}
+        {openHome?.igUrl&&<p style={{fontSize:12,color:GRN,textAlign:"center",padding:"6px 16px 0"}}>SMS with the walkthrough video link will be sent automatically</p>}
       </>}
       <div style={{height:20}}/>
     </div>
@@ -1459,7 +1459,7 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
       <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
       <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
       <div style={{padding:"4px 18px 8px"}}>
-        <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>🤖 AI assistant</div>
+        <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>AI assistant</div>
         <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>{addr}</div>
       </div>
       <input ref={fileRef} type="file" accept="image/*" onChange={onFile} style={{display:"none"}}/>
@@ -1480,7 +1480,7 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
             </div>
           : <div key={i} style={{marginBottom:14,background:"#fbfaf7",border:`1px solid ${SAND_D}`,borderRadius:12,padding:"12px 13px"}}>
               {x.status==="reading"
-                ? <div style={{fontSize:13,color:BROWN_L,fontStyle:"italic"}}>📸 Reading the screenshot…</div>
+                ? <div style={{fontSize:13,color:BROWN_L,fontStyle:"italic"}}>Reading the screenshot…</div>
                 : x.status==="error"
                 ? <div style={{fontSize:13,color:AMBER,fontWeight:600}}>Couldn't read that screenshot — try a clearer one.</div>
                 : <>
@@ -1517,7 +1517,7 @@ function OpenListingInfo({ openHome }){
   if(!notes && !contractUrl) return null;
   return (
     <div style={{padding:"8px 14px 0"}}>
-      {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none",marginBottom:notes?8:0}}>📄 Open / read the full contract</a>}
+      {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none",marginBottom:notes?8:0}}>Open / read the full contract</a>}
       {notes&&<div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"12px 13px",fontSize:13,lineHeight:1.5,color:ESPRESSO,whiteSpace:"pre-wrap"}}>{notes}</div>}
     </div>
   );
@@ -1553,7 +1553,7 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract, hasContrac
           <div className="ctr-sub">{requested?"We'll text it automatically once it's uploaded":"Log a request — it sends automatically once uploaded"}</div>
         </div>
         <div className="ctr-btns">
-          {!requested&&<button className="ctr-txt" onClick={()=>onRequestContract&&onRequestContract(propId,buyer)}>📩 Request contract</button>}
+          {!requested&&<button className="ctr-txt" onClick={()=>onRequestContract&&onRequestContract(propId,buyer)}>Request contract</button>}
         </div>
       </div>
     );
@@ -1568,8 +1568,8 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract, hasContrac
           <div className="ctr-sub">Send it by text or email</div>
         </div>
         <div className="ctr-btns">
-          {buyer?.mobile&&<button className="ctr-txt" onClick={()=>onTextContract(propId,buyer)}>📱 Text</button>}
-          {buyer?.email&&<button className="ctr-send" onClick={()=>onSendContract(propId,buyer)}>✉ Email</button>}
+          {buyer?.mobile&&<button className="ctr-txt" onClick={()=>onTextContract(propId,buyer)}>Text</button>}
+          {buyer?.email&&<button className="ctr-send" onClick={()=>onSendContract(propId,buyer)}>Email</button>}
         </div>
       </div>
     );
@@ -1608,8 +1608,8 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract, hasContrac
           </>}
         </div>
         <div className="ctr-btns">
-          {buyer?.mobile&&<button className="ctr-txt" onClick={()=>onTextContract(propId,buyer)}>📱 Text</button>}
-          {buyer?.email&&<button className="ctr-send" onClick={()=>onSendContract(propId,buyer)}>{emailed ? "Resend" : "✉ Email"}</button>}
+          {buyer?.mobile&&<button className="ctr-txt" onClick={()=>onTextContract(propId,buyer)}>Text</button>}
+          {buyer?.email&&<button className="ctr-send" onClick={()=>onSendContract(propId,buyer)}>{emailed ? "Resend" : "Email"}</button>}
         </div>
       </div>
     </div>
@@ -1755,10 +1755,10 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
           <div style={{flex:1}}>
             <div className="det-nm">{buyer.name}</div>
             <div className="det-meta">
-              {(()=>{const h=buyerHeat(buyer);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:6,background:c.bg,color:c.fg}}>🔥 {h.score10}/10{h.why.length?` · ${h.why[0]}`:""}</span>;})()}
+              {(()=>{const h=buyerHeat(buyer);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:6,background:c.bg,color:c.fg}}>{h.score10}/10{h.why.length?` · ${h.why[0]}`:""}</span>;})()}
               {buyer.interest ? <span className={`ibadge ${iCl(buyer.interest)}`}>{iLbl(buyer.interest)}</span> : <span style={{fontSize:11,fontWeight:700,color:BLUE,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:6,padding:"3px 8px"}}>Set interest ↓</span>}
-              {buyer.contractSent&&<span className="ctr-badge">📄 Contract sent</span>}
-              {buyer.smsSent&&<span className="sms-badge">📱 SMS sent</span>}
+              {buyer.contractSent&&<span className="ctr-badge">Contract sent</span>}
+              {buyer.smsSent&&<span className="sms-badge">SMS sent</span>}
               {days!==null&&<span style={{fontSize:10,color:BROWN_L,fontWeight:500}}>{days}d in system</span>}
             </div>
           </div>
@@ -1989,7 +1989,7 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers}){
         </div>
         <div className="cpy-row">
           <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 16px",fontSize:13,whiteSpace:"nowrap"}} onClick={()=>{navigator.clipboard?.writeText(sumText).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),2000);}}>{copied?"✓ Copied":"Copy"}</button>
-          <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} onClick={waSend} disabled={!sumText.trim()}>📱 Send via WhatsApp</button>
+          <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} onClick={waSend} disabled={!sumText.trim()}>Send via WhatsApp</button>
         </div>
         <div style={{height:8}}/>
       </div>
@@ -2098,7 +2098,7 @@ function AddListingSheet({ open, onClose, onSaved }) {
           </div>
           <div style={{padding:"0 16px 14px"}}>
             <button className="btn-dark" style={{margin:0,width:"100%"}} onClick={lookup} disabled={searching||!address.trim()}>
-              {searching ? <><span className="sp-sm"/>Searching Domain + REA…</> : "🔍 Look up address"}
+              {searching ? <><span className="sp-sm"/>Searching Domain + REA…</> : "Look up address"}
             </button>
           </div>
 
@@ -2285,7 +2285,7 @@ function BulkTextSheet({ open, onClose, buyers, agentName, label, address, onLog
       <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
       <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
       <div style={{padding:"4px 18px 8px"}}>
-        <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>📣 Text these buyers</div>
+        <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>Text these buyers</div>
         <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>{label?label+" · ":""}{selected.length} of {withMobile.length} selected{noMobile?` · ${noMobile} have no mobile`:""}</div>
       </div>
       {done
@@ -2332,7 +2332,7 @@ function MatchSheet({ open, onClose, openHome, excludeIds = [], agentName, propI
       <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
       <div style={{overflowY:"auto"}}>
         <div style={{padding:"2px 14px 4px"}}>
-          <div style={{fontFamily:"'Newsreader',serif",fontSize:21,fontWeight:700,color:ESPRESSO}}>🎯 Buyers who match</div>
+          <div style={{fontFamily:"'Newsreader',serif",fontSize:21,fontWeight:700,color:ESPRESSO}}>Buyers who match</div>
           <div style={{fontSize:13,color:BROWN_L,margin:"2px 0 4px",lineHeight:1.45}}>{streetLine(openHome.address,openHome.suburb)} — ranked on price, area &amp; beds from what they've actually inspected. Not already registered here. Text the right ones in one go.</div>
         </div>
         <BuyerMatch propIndex={propIndex} agentName={agentName} initialQuery={q} autoRun excludeIds={excludeIds} embedded/>
@@ -2505,7 +2505,7 @@ function ContactSearch({ onOpen, q, setQ }){
     <div style={{padding:"12px 14px 2px"}}>
       <div style={{position:"relative"}}>
         <input value={q} onFocus={load} onChange={e=>setQ(e.target.value)}
-          placeholder="🔍 Find a listing or contact"
+          placeholder="Find a listing or contact"
           style={{width:"100%",background:WHITE,border:`1.5px solid ${SAND_D}`,borderRadius:100,padding:"11px 40px 11px 16px",fontSize:14,color:BROWN,outline:"none",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}/>
         {q&&<button onClick={()=>setQ("")} aria-label="Clear" style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",width:26,height:26,borderRadius:"50%",background:SAND,border:"none",color:BROWN_M,fontSize:13,cursor:"pointer"}}>✕</button>}
       </div>
@@ -2525,8 +2525,8 @@ function ContactSearch({ onOpen, q, setQ }){
               </div>
               {b.notes&&<div style={{marginTop:7,background:LINEN,borderRadius:8,padding:"7px 10px",fontSize:12,color:BROWN_M,lineHeight:1.45,borderLeft:`2.5px solid ${BLUE}35`}}>{b.notes.length>220?b.notes.slice(0,220)+"…":b.notes}</div>}
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
-                {b.mobile&&<a href={`sms:${toE164AU(b.mobile)}`} style={ASK_ACT}>💬 Text</a>}
-                {b.mobile&&<a href={`tel:${toE164AU(b.mobile)}`} style={ASK_ACT}>📞 Call</a>}
+                {b.mobile&&<a href={`sms:${toE164AU(b.mobile)}`} style={ASK_ACT}>Text</a>}
+                {b.mobile&&<a href={`tel:${toE164AU(b.mobile)}`} style={ASK_ACT}>Call</a>}
                 {b.email&&<a href={`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(b.email)}`} onClick={e=>openEmail(e,b.email)} target="_blank" rel="noreferrer" style={ASK_ACT}>✉️ Email</a>}
               </div>
             </div>
@@ -2655,14 +2655,14 @@ function CrmBuyerRow({b,onOpen}){
       <div className="crm-av" style={{background:crmColor(b.name),width:38,height:38,fontSize:14}}>{crmInitials(b.name)}</div>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontWeight:700,fontSize:14}}>{b.name}</div>
-        <div className="crm-muted">{b.mobile||b.email||"—"}{(b.visits||1)>1?` · 🔁 ${b.visits}× inspected`:""}</div>
+        <div className="crm-muted">{b.mobile||b.email||"—"}{(b.visits||1)>1?` · ${b.visits}× inspected`:""}</div>
         <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:4}}>
-          {b.isEnquiry&&<span className="crm-ib" style={{background:"#E8EEFB",color:"#5A7FBF"}}>📨 Enquiry</span>}
-          {b.contractSent&&<span className="crm-ib" style={{background:GRN_BG,color:GRN}}>📄 Contract sent</span>}
+          {b.isEnquiry&&<span className="crm-ib" style={{background:"#E8EEFB",color:"#5A7FBF"}}>Enquiry</span>}
+          {b.contractSent&&<span className="crm-ib" style={{background:GRN_BG,color:GRN}}>Contract sent</span>}
         </div>
       </div>
       <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5}}>
-        {h.score>0&&<span style={{fontSize:11,fontWeight:800,color:h.score>=70?"#C0392B":h.score>=40?"#B7770D":BROWN_L}}>🔥 {h.score10}/10</span>}
+        {h.score>0&&<span style={{fontSize:11,fontWeight:800,color:h.score>=70?"#C0392B":h.score>=40?"#B7770D":BROWN_L}}>{h.score10}/10</span>}
         {b.interest&&<span className={`crm-ib ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>}
       </div>
     </div>
@@ -2732,14 +2732,14 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
           </div>
           <div style={{fontFamily:"'Newsreader',serif",fontSize:22,fontWeight:700,color:BROWN}}>{streetLine(oh.address,oh.suburb)}</div>
           <div className="crm-muted" style={{marginTop:2}}>{[oh.suburb,specOf(oh),oh.price].filter(Boolean).join(" · ")}</div>
-          {oh.auctionDate&&<div style={{color:AMBER,fontWeight:700,fontSize:12.5,marginTop:4}}>🔨 Auction {fmtAuction(oh.auctionDate)}</div>}
+          {oh.auctionDate&&<div style={{color:AMBER,fontWeight:700,fontSize:12.5,marginTop:4}}>Auction {fmtAuction(oh.auctionDate)}</div>}
           {!c.loading&&<div style={{display:"flex",gap:22,marginTop:14}}>
             <div><div style={{fontFamily:"'Newsreader',serif",fontSize:24,fontWeight:700}}>{real.length}</div><div className="crm-muted">Buyers</div></div>
             <div><div style={{fontFamily:"'Newsreader',serif",fontSize:24,fontWeight:700,color:"#C0392B"}}>{real.filter(b=>b.interest==="hot").length}</div><div className="crm-muted">Hot</div></div>
             <div><div style={{fontFamily:"'Newsreader',serif",fontSize:24,fontWeight:700,color:"#B7770D"}}>{real.filter(b=>b.interest==="watching").length}</div><div className="crm-muted">Watching</div></div>
             {enq.length>0&&<div><div style={{fontFamily:"'Newsreader',serif",fontSize:24,fontWeight:700,color:BLUE_D}}>{enq.length}</div><div className="crm-muted">Enquiries</div></div>}
           </div>}
-          {!c.loading&&<button onClick={()=>setMatchOh(oh)} style={{marginTop:16,display:"inline-flex",alignItems:"center",gap:6,background:CREAM,border:`1px solid ${SAND_D}`,color:BLUE_D,fontWeight:800,fontSize:13,borderRadius:100,padding:"8px 15px",cursor:"pointer",fontFamily:"inherit"}}>🎯 Find matching buyers to text</button>}
+          {!c.loading&&<button onClick={()=>setMatchOh(oh)} style={{marginTop:16,display:"inline-flex",alignItems:"center",gap:6,background:CREAM,border:`1px solid ${SAND_D}`,color:BLUE_D,fontWeight:800,fontSize:13,borderRadius:100,padding:"8px 15px",cursor:"pointer",fontFamily:"inherit"}}>Find matching buyers to text</button>}
         </div>
         <div className="crm-panel">
           <div className="crm-ph">Buyers · this property</div>
@@ -2748,7 +2748,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
             {!c.loading&&real.length===0&&enq.length===0&&<div className="crm-empty"><div className="em">👥</div><div>No buyers registered on this property yet.</div></div>}
             {!c.loading&&real.map(b=><CrmBuyerRow key={b.id} b={b} onOpen={()=>onOpenContact(b.contactId,propRef)}/>)}
             {!c.loading&&enq.length>0&&<>
-              <div className="crm-daylbl" style={{paddingTop:14}}>📨 Online enquiries</div>
+              <div className="crm-daylbl" style={{paddingTop:14}}>Online enquiries</div>
               {enq.map(b=><CrmBuyerRow key={b.id} b={b} onOpen={()=>onOpenContact(b.contactId,propRef)}/>)}
             </>}
           </div>
@@ -2788,7 +2788,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
               ))}
           </div>
           <div className="crm-panel">
-            <div className="crm-ph">🔥 Hot buyers<span className="lnk" onClick={()=>setTab("contacts")}>All contacts →</span></div>
+            <div className="crm-ph">Hot buyers<span className="lnk" onClick={()=>setTab("contacts")}>All contacts →</span></div>
             {contacts===null
               ? <div style={{textAlign:"center",padding:"40px"}}><div className="sp"/></div>
               : hotContacts.length===0
@@ -2797,7 +2797,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
                   {hotContacts.slice(0,10).map(c=>(
                     <tr key={c.contactId} onClick={()=>onOpenContact(c.contactId)}>
                       <td><div style={{display:"flex",alignItems:"center",gap:10}}><div className="crm-av" style={{background:crmColor(c.name)}}>{crmInitials(c.name)}</div><div><div style={{fontWeight:700}}>{c.name}</div><div className="crm-muted">{c.mobile||c.email||"—"}</div></div></div></td>
-                      <td style={{textAlign:"right"}}><span className="crm-ib hot">Hot 🔥</span></td>
+                      <td style={{textAlign:"right"}}><span className="crm-ib hot">Hot</span></td>
                     </tr>
                   ))}
                 </tbody></table>}
@@ -3040,16 +3040,16 @@ export default function App(){
           <div className="bn">{b.name}</div>
           <div className="bs">{b.mobile}{b.time?` · ${b.time}`:""}</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-            {b.isEnquiry&&<span className="sms-badge" style={{background:"#E8EEFB",color:"#5A7FBF"}}>📨 Online enquiry</span>}
+            {b.isEnquiry&&<span className="sms-badge" style={{background:"#E8EEFB",color:"#5A7FBF"}}>Online enquiry</span>}
             {b._error&&<span className="sms-badge" style={{background:"#FDECEA",color:"#C0392B"}}>⚠ Not saved — re-add</span>}
             {b._pending&&!b._error&&<span className="sms-badge" style={{background:LINEN,color:BROWN_L}}>Saving…</span>}
-            {b.contractSent&&<span className="ctr-badge">📄 Contract sent{b.contractSentTime?` ${b.contractSentTime}`:""}</span>}
-            {b.smsSent&&<span className="sms-badge">📱 SMS sent</span>}
-            {(b.visits||1)>1&&<span className="sms-badge">🔁 {b.visits}× inspected</span>}
+            {b.contractSent&&<span className="ctr-badge">Contract sent{b.contractSentTime?` ${b.contractSentTime}`:""}</span>}
+            {b.smsSent&&<span className="sms-badge">SMS sent</span>}
+            {(b.visits||1)>1&&<span className="sms-badge">{b.visits}× inspected</span>}
           </div>
         </div>
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
-          {(()=>{const h=buyerHeat(b);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"2px 7px",borderRadius:8,background:c.bg,color:c.fg,whiteSpace:"nowrap"}}>🔥 {h.score10}/10</span>;})()}
+          {(()=>{const h=buyerHeat(b);if(!h.score)return null;const c=h.score>=70?{bg:"#FDE7DF",fg:"#C0392B"}:h.score>=40?{bg:"#FBF0D8",fg:"#B7770D"}:{bg:LINEN,fg:BROWN_L};return <span title={h.why.join(" · ")} style={{fontSize:11,fontWeight:800,padding:"2px 7px",borderRadius:8,background:c.bg,color:c.fg,whiteSpace:"nowrap"}}>{h.score10}/10</span>;})()}
           <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>
         </div>
       </div>
@@ -3497,8 +3497,8 @@ export default function App(){
       <ContactSearch onOpen={openContact} q={listingQ} setQ={setListingQ}/>
 
       {!loading&&<div className="seg" style={{marginTop:8,marginBottom:6}}>
-        <button className={`seg-b ${homeTab==="opens"?"on":""}`} onClick={()=>setHomeTab("opens")}>🏠 Opens</button>
-        <button className={`seg-b ${homeTab==="match"?"on":""}`} onClick={()=>setHomeTab("match")}>🎯 Buyer Match</button>
+        <button className={`seg-b ${homeTab==="opens"?"on":""}`} onClick={()=>setHomeTab("opens")}>Opens</button>
+        <button className={`seg-b ${homeTab==="match"?"on":""}`} onClick={()=>setHomeTab("match")}>Buyer Match</button>
       </div>}
 
       {!loading&&loadErr==="server"&&<div className="demo-banner" onClick={()=>{setLoadErr("");setReloadNonce(n=>n+1);}} style={{cursor:"pointer",background:"#FDECEA",borderColor:"#F1B0A8",color:"#B23B2E"}}>
@@ -3526,7 +3526,7 @@ export default function App(){
               <div className="pc-bar"/>
               <div className="pc-body">
                 <div className="pc-top">
-                  <div><div className="pc-addr">{streetLine(oh.address,oh.suburb)}</div><div className="pc-suburb">{oh.suburb}</div>{oh.auctionDate&&<div className="pc-suburb" style={{color:"#FE5310",fontWeight:700,marginTop:1}}>🔨 Auction {fmtAuction(oh.auctionDate)}</div>}</div>
+                  <div><div className="pc-addr">{streetLine(oh.address,oh.suburb)}</div><div className="pc-suburb">{oh.suburb}</div>{oh.auctionDate&&<div className="pc-suburb" style={{color:"#FE5310",fontWeight:700,marginTop:1}}>Auction {fmtAuction(oh.auctionDate)}</div>}</div>
                   <div className="pc-chip">{oh.time}</div>
                 </div>
                 <div className="pc-bot">
@@ -3562,7 +3562,7 @@ export default function App(){
                   {/* Tap the info area to open the listing's full buyer list (everyone who's
                       inspected/enquired on this property to date). */}
                   <div className="pc-top" onClick={()=>enterOpenHome(synthOh)} style={{cursor:"pointer"}}>
-                    <div><div className="pc-addr">{streetLine(addr,suburb)}</div><div className="pc-suburb">{suburb}</div>{auctionDate&&<div className="pc-suburb" style={{color:"#FE5310",fontWeight:700,marginTop:1}}>🔨 Auction {fmtAuction(auctionDate)}</div>}</div>
+                    <div><div className="pc-addr">{streetLine(addr,suburb)}</div><div className="pc-suburb">{suburb}</div>{auctionDate&&<div className="pc-suburb" style={{color:"#FE5310",fontWeight:700,marginTop:1}}>Auction {fmtAuction(auctionDate)}</div>}</div>
                     <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:11,color:BROWN_L,fontWeight:500,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:6,padding:"4px 9px",whiteSpace:"nowrap"}}>{auctionDate?"Auction":"Listing"}</span><span style={{color:BLUE_D,fontWeight:800,fontSize:18}}>›</span></div>
                   </div>
                   <div className="pc-bot" onClick={()=>enterOpenHome(synthOh)} style={{cursor:"pointer"}}>
@@ -3576,7 +3576,7 @@ export default function App(){
                     </button>
                     <button className="btn-outline" style={{flex:1,padding:"10px 12px",fontSize:13}}
                       onClick={()=>{ setQuickContractProp(synthOh); setShowQuickContract(true); }}>
-                      📄 Send contract
+                      Send contract
                     </button>
                   </div>
                   <ReelLink propertyId={pid} value={p.igUrl||""} onSaved={u=>updateListingReel(pid,u)}/>
@@ -3599,7 +3599,7 @@ export default function App(){
         <div className="prop-live"><div className="ldot" style={openHome._listing?{background:SAND_D}:undefined}/><span className="live-lbl">{openHome._listing?"Listing":"Live open"}</span></div>
         <div className="prop-addr">{streetLine(openHome.address,openHome.suburb)}</div>
         <div className="prop-sub">{[openHome.suburb,openHome.time,openHome.price].filter(Boolean).join(" · ")}</div>
-        {openHome.auctionDate&&<div className="prop-sub" style={{color:"#FE5310",fontWeight:700,marginTop:2}}>🔨 Auction {fmtAuction(openHome.auctionDate)}</div>}
+        {openHome.auctionDate&&<div className="prop-sub" style={{color:"#FE5310",fontWeight:700,marginTop:2}}>Auction {fmtAuction(openHome.auctionDate)}</div>}
       </div>
       {(()=>{const sb=openHome._listing?propReal:pb;return <div className="stats">
         <div className="st"><div className="sn">{sb.length}</div><div className="sl">{openHome._listing?"Buyers":"Registered"}</div></div>
@@ -3611,14 +3611,14 @@ export default function App(){
           <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
           Add buyer
         </button>
-        <button className="btn-blue" onClick={()=>setShowAssistant(true)}>🤖 AI assistant</button>
+        <button className="btn-blue" onClick={()=>setShowAssistant(true)}>AI assistant</button>
       </div>
       <div className="acts" style={{paddingTop:8}}>
-        <button className="btn-outline" style={{flex:1}} onClick={()=>setShowSum(true)}>📩 Vendor update</button>
-        {listingHasInfo(openHome)&&<button className="btn-outline" style={{flex:1}} onClick={()=>setShowInfo(s=>!s)}>🔑 Listing info {showInfo?"▲":"▼"}</button>}
+        <button className="btn-outline" style={{flex:1}} onClick={()=>setShowSum(true)}>Vendor update</button>
+        {listingHasInfo(openHome)&&<button className="btn-outline" style={{flex:1}} onClick={()=>setShowInfo(s=>!s)}>Listing info {showInfo?"▲":"▼"}</button>}
       </div>
       <div className="acts" style={{paddingTop:8}}>
-        <button className="btn-outline" style={{flex:1}} onClick={()=>setShowMatch(true)}>🎯 Matching buyers</button>
+        <button className="btn-outline" style={{flex:1}} onClick={()=>setShowMatch(true)}>Matching buyers</button>
       </div>
 
       {showInfo&&<OpenListingInfo openHome={openHome}/>}
@@ -3640,7 +3640,7 @@ export default function App(){
             setBFilters(prev=>{const base=prev.filter(x=>x!=="enquiry");return base.includes(k)?base.filter(x=>x!==k):[...base,k];});
           }}
           options={[{k:"all",l:"All buyers",n:propReal.length}].concat(
-            [{k:"hot",l:"🔥 Hot"},{k:"watching",l:"👀 Warm"},{k:"cool",l:"❄️ Cold"},{k:"contract",l:"📄 Contract sent"},{k:"repeat",l:"🔁 Repeat visit"},{k:"enquiry",l:"📨 Enquiries"}]
+            [{k:"hot",l:"Hot"},{k:"watching",l:"Warm"},{k:"cool",l:"Cold"},{k:"contract",l:"Contract sent"},{k:"repeat",l:"Repeat visit"},{k:"enquiry",l:"Enquiries"}]
               .map(f=>({...f,n:countFor(f.k)})).filter(o=>o.n>0)
           ).concat((()=>{
             // Filter by which open session they came through — only shown when this
@@ -3656,14 +3656,14 @@ export default function App(){
 
         {!buyersLoading&&filterActive&&<>
           <div className="sec-lbl" style={{padding:"2px 0 10px"}}>{filteredBuyers.length} {enqActive?(filteredBuyers.length===1?"enquiry":"enquiries"):(filteredBuyers.length===1?"buyer":"buyers")}</div>
-          {filteredBuyers.some(b=>b.mobile)&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:12,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>📣 Text these {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
+          {filteredBuyers.some(b=>b.mobile)&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:12,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Text these {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
           {filteredBuyers.length===0
             ? <div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>{enqActive?"No enquiries yet.":"No buyers match this filter."}</div>
             : filteredBuyers.map(b=>rowOf(b,"f"))}
         </>}
 
         {!buyersLoading&&!filterActive&&<>
-          {filteredBuyers.filter(b=>b.mobile).length>0&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:14,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>📣 Text all {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
+          {filteredBuyers.filter(b=>b.mobile).length>0&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:14,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Text all {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
           {!openHome._listing&&<>
             <div className="sec-lbl" style={{padding:"2px 0 10px"}}>At this open</div>
             {pbReal.length===0&&<div style={{textAlign:"center",padding:"36px 16px",color:"#C0B8A8"}}>
@@ -3679,7 +3679,7 @@ export default function App(){
             {propExtraReal.slice().sort(byInterest).map(b=>rowOf(b,"p"))}
           </>}
           {enquiries.length>0&&<>
-            <div className="sec-lbl" style={{padding:"24px 0 4px"}}>📨 Enquiries · {enquiries.length}</div>
+            <div className="sec-lbl" style={{padding:"24px 0 4px"}}>Enquiries · {enquiries.length}</div>
             <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Online enquiries from realestate.com.au &amp; Domain — lower priority than buyers who've inspected.</div>
             {enquiries.map(b=>rowOf(b,"e"))}
           </>}
@@ -3738,7 +3738,7 @@ export default function App(){
       <div className="sttl">{lastAdded?.name?.split(" ")[0]} registered</div>
       <div className="ssub">
         Saved to {openHome?.address}.
-        {lastAdded?.smsSent&&<><br/><span style={{color:GRN,fontWeight:600}}>📱 SMS sent automatically.</span></>}
+        {lastAdded?.smsSent&&<><br/><span style={{color:GRN,fontWeight:600}}>SMS sent automatically.</span></>}
         {!lastAdded?.smsSent&&openHome?._demo&&<><br/><span style={{color:BROWN_L,fontSize:12}}>Add Instagram + contract URL to the property in Attio to enable auto SMS.</span></>}
       </div>
       <div className="sflex">
