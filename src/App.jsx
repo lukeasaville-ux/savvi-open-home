@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v34-short-notes";
+const BUILD = "v35-done-opens";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1458,7 +1458,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
         // Every open-home registration writes an "Inspected … at the <when> open" note, so the
         // buyer's record shows exactly when they walked through (Luke: "nothing actually records
         // the fact that they had an inspection and the date and time").
-        const inspText=`Inspected ${streetLine(openHome?.address,openHome?.suburb)||"the property"} at the ${openWhen(openHome)||"open home"} open`;
+        const inspText=`Attended inspection ${openWhen(openHome)||""}${openWhen(openHome)?", ":""}${streetLine(openHome?.address,openHome?.suburb)||"the property"}`;
         const inspNote=`${enqTs}\t${agentFull}\t${inspText}`;
         onReconcile&&onReconcile(pid,tempId,{id:inspectionId,contactId,_attioInspectionId:inspectionId,_pending:false,...(isEnq?{}:{notes:[{id:"n0",ts:enqTs,agent:agentFull,text:inspText}]})});
         if(isEnq){
@@ -2034,7 +2034,6 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
               {buyer.smsSent&&<span className="sms-badge">SMS sent</span>}
               {days!==null&&<span style={{fontSize:10,color:BROWN_L,fontWeight:500}}>{days}d in system</span>}
             </div>
-            {(()=>{ const ins=inspectionsOf(buyer,opens); return ins.length?<div className="insp-line">Inspected{ins.map((w,i)=><span key={i}>{w}</span>)}</div>:null; })()}
           </div>
         </div>
       </div>
@@ -2536,7 +2535,7 @@ const FORM_SENT_RE={ bid:/(Register to bid (SMS|email|text) sent|Text sent:[^]*\
 const formSentNote=(kind,channel)=>`${kind==="bid"?"Register to bid":"Offer form"} ${channel==="email"?"email":"SMS"} sent`;
 // Automated / system notes: never shown as "the last note from us" in previews, and drawn
 // as events (not notes) on timelines. Agent-written notes and call logs are not automated.
-const isAutoNote=(t)=>/^\s*(\[[a-z0-9_ -]+\]|Text sent:|Emailed |Checked in at|Inspected |Enquiry via|Register to bid (SMS|email|text) sent|Offer form (SMS|email|text) sent|Contract sent|Contract requested)/i.test(t||"");
+const isAutoNote=(t)=>/^\s*(\[[a-z0-9_ -]+\]|Text sent:|Emailed |Checked in at|Inspected |Attended inspection|Enquiry via|Register to bid (SMS|email|text) sent|Offer form (SMS|email|text) sent|Contract sent|Contract requested)/i.test(t||"");
 
 const BM_DEFAULT = "Hi {first_name}, Luke here from Savvi. A new listing just came up that looks right up your alley. Want me to send you the details or line up a private look?\n\nThanks,\nLuke Saville";
 const BM_EXAMPLES = [
@@ -3223,7 +3222,6 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
             {openHome&&<span style={{fontSize:12,color:BROWN_L}}>on {streetLine(openHome.address,openHome.suburb)||buyer._primAddr||"this listing"}</span>}
             {days!==null&&<span style={{fontSize:11,color:BROWN_L}}>· {days}d in system</span>}
           </div>
-          {(()=>{ const ins=inspectionsOf(buyer,opens); return ins.length?<div className="insp-line">Inspected{ins.map((w,i)=><span key={i}>{w}</span>)}</div>:null; })()}
           <div className="cgr mini" style={{padding:"10px 0 0",maxWidth:360}}>{ISET.map(o=><div key={o.v} className={`cb ${buyer.interest===o.v?(o.v==="hot"?"ah":o.v==="watching"?"aw":"ac"):""}`} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}><span className="e">{o.e}</span>{o.l}</div>)}</div>
         </div>
         <button className="x" aria-label="Close" onClick={onClose}>✕</button>
@@ -3731,7 +3729,18 @@ export default function App(){
   const[quickContractProp,setQuickContractProp]=useState(null);
 
   const today=new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long",timeZone:"Australia/Melbourne"});
-  const visibleOpens = openHomes; // Both agents see all opens
+  // Both agents see all opens, but FINISHED days drop off: anything before today, and
+  // yesterday's from midday Melbourne time (Luke: "remove Thursday opens off the dashboard
+  // on a Friday lunchtime" — the morning after is still follow-up time). If nothing current
+  // is loaded yet (Mon/Tue before Box+Dice has the new times) keep last week's, flagged stale.
+  const visibleOpens = (() => {
+    const today = melbToday();
+    if (!openHomes.some(o => o.date && o.date >= today)) return openHomes;
+    const [y, m, d] = today.split("-").map(Number);
+    const yd = new Date(y, m - 1, d - 1); const yesterday = `${yd.getFullYear()}-${String(yd.getMonth() + 1).padStart(2, "0")}-${String(yd.getDate()).padStart(2, "0")}`;
+    const hour = parseInt(new Date().toLocaleString("en-AU", { hour: "2-digit", hour12: false, timeZone: "Australia/Melbourne" }), 10) || 0;
+    return openHomes.filter(o => !o.date || o.date >= today || (o.date === yesterday && hour < 12));
+  })();
   const pb=openHome?(buyers[openHome.id]||[]):[];
   const propAll=openHome?(propBuyers[openHome.id]||[]):[];
   const propExtra=propAll.filter(b=>!pb.some(x=>(x.contactId&&x.contactId===b.contactId)||x.id===b.id));
@@ -3888,7 +3897,7 @@ export default function App(){
     const r=await Attio.createInspection({contactId:b.contactId,propertyId:openHome.propertyId,openHomeId:openHome.id,interest:b.interest||"",agent:agentName}).catch(()=>({ok:false}));
     if(!r||!r.ok||!r.id) return {ok:false};
     const agentFull=AGENT_FULL[agentName]||agentName||"";
-    Attio.updateInspection(r.id,{notes:`${new Date().toISOString()}\t${agentFull}\tInspected ${streetLine(openHome.address,openHome.suburb)||"the property"} at the ${openWhen(openHome)||"open home"} open (added by ${agentFull})`}).catch(()=>{});
+    Attio.updateInspection(r.id,{notes:`${new Date().toISOString()}\t${agentFull}\tAttended inspection ${openWhen(openHome)||""}${openWhen(openHome)?", ":""}${streetLine(openHome.address,openHome.suburb)||"the property"} (added by ${agentFull})`}).catch(()=>{});
     await refreshBuyers();
     return {ok:true};
   },[openHome,agentName,refreshBuyers]);
