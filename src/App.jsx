@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v33-mail-scope";
+const BUILD = "v34-short-notes";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2531,7 +2531,12 @@ const formLinkMsg=(kind,first,addr,url,sig)=>kind==="bid"
   ? `Hi ${first}, register to bid on ${addr} here so you're ready for auction day:\n${url}\n\nThanks,\n${sig}`
   : `Hi ${first}, ready to put an offer in on ${addr}? Submit it here and it comes straight to us:\n${url}\n\nThanks,\n${sig}`;
 const FORM_DONE_RE={ bid:/^\s*\[Bid registration\]/i, offer:/^\s*\[Offer\]/i };
-const FORM_SENT_RE={ bid:/(Text sent:[^]*\/bid\/|Emailed bid registration)/i, offer:/(Text sent:[^]*\/offer\/|Emailed offer form)/i };
+const FORM_SENT_RE={ bid:/(Register to bid (SMS|email|text) sent|Text sent:[^]*\/bid\/|Emailed bid registration)/i, offer:/(Offer form (SMS|email|text) sent|Text sent:[^]*\/offer\/|Emailed offer form)/i };
+// Short, human-readable note for a form-link send (Luke: don't log the whole text).
+const formSentNote=(kind,channel)=>`${kind==="bid"?"Register to bid":"Offer form"} ${channel==="email"?"email":"SMS"} sent`;
+// Automated / system notes: never shown as "the last note from us" in previews, and drawn
+// as events (not notes) on timelines. Agent-written notes and call logs are not automated.
+const isAutoNote=(t)=>/^\s*(\[[a-z0-9_ -]+\]|Text sent:|Emailed |Checked in at|Inspected |Enquiry via|Register to bid (SMS|email|text) sent|Offer form (SMS|email|text) sent|Contract sent|Contract requested)/i.test(t||"");
 
 const BM_DEFAULT = "Hi {first_name}, Luke here from Savvi. A new listing just came up that looks right up your alley. Want me to send you the details or line up a private look?\n\nThanks,\nLuke Saville";
 const BM_EXAMPLES = [
@@ -2590,7 +2595,7 @@ function BulkTextSheet({ open, onClose, buyers, agentName, label, address, subur
   const missingLink=isLink&&!/\{\s*link\s*\}/i.test(msg);
   const blocked=sending||!selected.length||!msg.trim()||missingLink;
   const send=async()=>{ if(blocked)return; setSending(true); setDone(null); let ok=0,fail=0; setProgress({done:0,total:selected.length});
-    for(let i=0;i<selected.length;i++){ const b=selected[i]; const sent=render(msg,b); try{ const r=await MM.sendMessage({toPhone:b.mobile,message:sent,agent:agentName}); if(r&&r.ok){ok++; onLogNote&&onLogNote(b,sent);} else fail++; }catch{fail++;} setProgress({done:i+1,total:selected.length}); }
+    for(let i=0;i<selected.length;i++){ const b=selected[i]; const sent=render(msg,b); try{ const r=await MM.sendMessage({toPhone:b.mobile,message:sent,agent:agentName}); if(r&&r.ok){ok++; onLogNote&&onLogNote(b,sent,mode);} else fail++; }catch{fail++;} setProgress({done:i+1,total:selected.length}); }
     setSending(false); setDone({ok,fail}); setProgress(null); };
   if(!open) return null;
   const pb=selected[0]||sendable[0]||{name:"there",_attioInspectionId:"xxxxxxxxxxxxx"};
@@ -3147,7 +3152,7 @@ function crmInitials(n){ return (String(n||"").split(" ").map(w=>w[0]).join("").
 function crmColor(n){ const p=["#5A7FBF","#C0392B","#B7770D","#2D8A5E","#7A5C48","#8A5FBF"]; let h=0; for(const c of String(n||"")) h=(h*31+c.charCodeAt(0))>>>0; return p[h%p.length]; }
 const crmAgo=(ts)=>{ if(!ts) return ""; const d=(Date.now()-new Date(ts).getTime())/864e5; if(d<0.04) return "just now"; if(d<1) return `${Math.max(1,Math.round(d*24))}h ago`; if(d<14) return `${Math.round(d)}d ago`; return fmtDateTime(ts).split(",")[0]; };
 const crmLastNoteTs=(b)=>{ const ns=(b.notes||[]).filter(n=>n.ts&&/^\d{4}-/.test(n.ts)); return ns.length?ns.reduce((a,n)=>(n.ts>a?n.ts:a),ns[0].ts):null; };
-const crmHumanNote=(b)=>{ const ns=(b.notes||[]).filter(n=>!/^\s*\[[a-z0-9_-]+\]\s*$/i.test(n.text||"")&&!/^(Text sent:|Emailed |Checked in at|Enquiry via)/i.test(n.text||"")); return ns.length?ns[ns.length-1]:null; };
+const crmHumanNote=(b)=>{ const ns=(b.notes||[]).filter(n=>!isAutoNote(n.text)); return ns.length?ns[ns.length-1]:null; };
 const HeatBadge=({b})=>{ const h=buyerHeat(b); if(!h.score) return null; const c=h.score>=70?"h":h.score>=40?"m":"l"; return <span className={`heat ${c}`} title={h.why.join(" · ")}>🔥 {h.score10}/10</span>; };
 const IBadge=({v,dash})=>v?<span className={`ibadge sm ${iCl(v)}`}>{iLbl(v)}</span>:(dash?<span className="mut">—</span>:null);
 
@@ -3159,7 +3164,7 @@ function crmBuildFeed(index, auctionByProp){
   index.contacts.forEach(c=>{
     c.insps.forEach(i=>{
       const notes=i.notes||[];
-      const human=notes.filter(n=>!/^(Text sent:|Emailed |\[)/i.test(n.text||""));
+      const human=notes.filter(n=>!isAutoNote(n.text));
       const lastHuman=human.length?human[human.length-1].ts:null;
       // 1) Contract opened / clicked, and nobody has spoken to them since.
       const opens=(i.contractOpens||[]).filter(o=>o.kind==="opened"||o.kind==="clicked").map(o=>o.at).sort();
@@ -3200,7 +3205,7 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
   const days=buyer._createdAt?Math.max(0,Math.round((Date.now()-new Date(buyer._createdAt))/864e5)):null;
   // Timeline = notes (minus internal markers) + contract/form events, newest first.
   const items=[];
-  (buyer.notes||[]).forEach(n=>{ if(/^\s*\[[a-z0-9_-]+\]\s*$/i.test(n.text||"")) return; const ev=/^(Text sent:|Emailed |Checked in at|Inspected )/i.test(n.text||""); items.push({id:n.id,ts:n.ts,text:n.text,agent:n.agent,ev,note:n}); });
+  (buyer.notes||[]).forEach(n=>{ if(/^\s*\[[a-z0-9_-]+\]\s*$/i.test(n.text||"")) return; const ev=isAutoNote(n.text); items.push({id:n.id,ts:n.ts,text:n.text,agent:n.agent,ev,note:n}); });
   (buyer.contractOpens||[]).forEach((o,i)=>{ const lbl=o.kind==="opened"?"Opened the contract email":o.kind==="clicked"?"Opened the contract":o.kind==="offer-opened"?"Opened the offer form":o.kind==="bid-opened"?"Opened the bid registration form":o.kind; items.push({id:"ev"+i,ts:o.at,text:lbl,ev:true,ok:true}); });
   items.sort((a,b)=>new Date(b.ts||0)-new Date(a.ts||0));
   const atThisOpen=!openHome||openHome._listing||!onCheckIn;
@@ -3641,7 +3646,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
     </main>
     {/* Selected rows on the listing workspace → same bulk sheet the phone uses, templates included */}
     {sel&&<BulkTextSheet open={wbulk} onClose={()=>setWbulk(false)} buyers={wselected} agentName={agentName} label={`${wselected.length} selected`} address={sel.address} suburb={sel.suburb} isAuction={!!sel.auctionDate}
-      onLogNote={(b,sent)=>{ if(crm.addNote&&crm.openHome?.id&&b?.id) crm.addNote(crm.openHome.id,b.id,`Text sent: "${sent}"`); }}/>}
+      onLogNote={(b,sent,mode)=>{ if(crm.addNote&&crm.openHome?.id&&b?.id) crm.addNote(crm.openHome.id,b.id,mode&&mode!=="custom"?formSentNote(mode,"text"):`Text sent: "${sent}"`); }}/>}
     {/* Contact-level bulk text (custom message only — link templates need a listing context) */}
     <BulkTextSheet open={cbulk} onClose={()=>setCbulk(false)} buyers={bulkContacts} agentName={agentName} label="Contacts" address="" templates={false}
       onLogNote={(b,sent)=>{ if(!b._attioInspectionId) return; const agentFull=AGENT_FULL[agentName]||agentName||""; const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; const notes=[...(b._inspNotes||[]),{ts:new Date().toISOString(),agent:agentFull,text:`Text sent: "${sent}"`}]; Attio.updateInspection(b._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); }}/>
@@ -3999,13 +4004,13 @@ export default function App(){
       if(!b.mobile) return false;
       const msg=formLinkMsg(kind,first,addr,url,smsSig(agentName));
       MM.sendMessage({ toPhone:b.mobile, agent:agentName, message:msg }).catch(()=>{});
-      if(!isDemo) addNote(pid,b.id,`Text sent: "${msg}"`);
+      if(!isDemo) addNote(pid,b.id,formSentNote(kind,"text"));
       return true;
     }
     if(channel==="email"){
       if(!b.email) return false;
       Resend.sendFormLink({ toEmail:b.email, toName:b.name, agentName, address:openHome?.address||addr, url, kind }).catch(()=>{});
-      if(!isDemo) addNote(pid,b.id,`Emailed ${kind==="bid"?"bid registration":"offer"} form to ${b.email}: ${url}`);
+      if(!isDemo) addNote(pid,b.id,formSentNote(kind,"email"));
       return true;
     }
     return false;
@@ -4448,7 +4453,7 @@ export default function App(){
     </button>}
     <AddSheet open={showAdd} onClose={()=>{setShowAdd(false);setAiPrefill(null);}} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)} prefill={aiPrefill}/>
     <AiAssistantSheet open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={handleEnquiry}/>
-    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} suburb={openHome?.suburb} isAuction={!!openHome?.auctionDate} onLogNote={(b,sent)=>{ if(!isDemo&&openHome?.id&&b?.id) addNote(openHome.id,b.id,`Text sent: "${sent}"`); }} label={filterActive?(({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"):"All buyers"}/>
+    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} suburb={openHome?.suburb} isAuction={!!openHome?.auctionDate} onLogNote={(b,sent,mode)=>{ if(!isDemo&&openHome?.id&&b?.id) addNote(openHome.id,b.id,mode&&mode!=="custom"?formSentNote(mode,"text"):`Text sent: "${sent}"`); }} label={filterActive?(({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"):"All buyers"}/>
     <DetailHost desktop={isDesktop} open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id} propIndex={propIndex} opens={visibleOpens}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
@@ -4465,7 +4470,7 @@ export default function App(){
       onSetProfile={(pid,id,pr)=>{ setSearchProfile(a=>a&&{...a,aiProfile:pr}); }}
       onUpdateDetails={(pid,id,d)=>{ setSearchProfile(a=>a&&{...a,name:d.name,mobile:d.mobile,email:d.email}); if(!isDemo&&searchProfile?.contactId) Attio.updatePerson({id:searchProfile.contactId,name:d.name,email:d.email,mobile:d.mobile}).catch(()=>{}); }}
       onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}} onOpenContact={openContact}
-      onSendLink={(kind,channel,b)=>{ if(!b?._attioInspectionId) return false; const url=formLinkUrl(kind,b._attioInspectionId,agentName); const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const logSearch=(text)=>{ const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:AGENT_FULL[agentName]||agentName||""}; setSearchProfile(a=>{ if(!a) return a; const notes=[...(a.notes||[]),note]; if(!isDemo&&a._attioInspectionId){ const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; Attio.updateInspection(a._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); } return {...a,notes}; }); }; if(channel==="text"){ if(!b.mobile) return false; const msg=formLinkMsg(kind,first,addr,url,smsSig(agentName)); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:msg}).catch(()=>{}); logSearch(`Text sent: "${msg}"`); return true; } if(channel==="email"){ if(!b.email) return false; Resend.sendFormLink({toEmail:b.email,toName:b.name,agentName,address:searchOpenHome?.address||addr,url,kind}).catch(()=>{}); logSearch(`Emailed ${kind==="bid"?"bid registration":"offer"} form to ${b.email}: ${url}`); return true; } return false; }}/>
+      onSendLink={(kind,channel,b)=>{ if(!b?._attioInspectionId) return false; const url=formLinkUrl(kind,b._attioInspectionId,agentName); const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const logSearch=(text)=>{ const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:AGENT_FULL[agentName]||agentName||""}; setSearchProfile(a=>{ if(!a) return a; const notes=[...(a.notes||[]),note]; if(!isDemo&&a._attioInspectionId){ const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; Attio.updateInspection(a._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); } return {...a,notes}; }); }; if(channel==="text"){ if(!b.mobile) return false; const msg=formLinkMsg(kind,first,addr,url,smsSig(agentName)); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:msg}).catch(()=>{}); logSearch(formSentNote(kind,"text")); return true; } if(channel==="email"){ if(!b.email) return false; Resend.sendFormLink({toEmail:b.email,toName:b.name,agentName,address:searchOpenHome?.address||addr,url,kind}).catch(()=>{}); logSearch(formSentNote(kind,"email")); return true; } return false; }}/>
     <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll}/>
     <MatchSheet open={showMatch} onClose={()=>setShowMatch(false)} openHome={openHome} excludeIds={propAll.map(b=>b.contactId).filter(Boolean)} agentName={agentName} propIndex={propIndex}/>
     <QuickContractSheet
