@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v35-done-opens";
+const BUILD = "v36-notes-merge";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4056,7 +4056,7 @@ export default function App(){
       if(row&&row._attioInspectionId){
         const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text;
         const notes=(row.notes||[]).map(n=>n.id===noteId?{...n,text:t}:n);
-        Attio.updateInspection(row._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{});
+        Attio.updateInspection(row._attioInspectionId,{notes:notes.map(enc).join("\n---\n"),notesMode:"replace"}).catch(()=>{}); // an edit genuinely replaces; adds merge server-side
       }
     }
   },[isDemo,buyers,propBuyers]);
