@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v37-fg-refresh";
+const BUILD = "v38-upload-contract";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -621,6 +621,15 @@ const Attio = {
   async createProperty(p) {
     const j = await call("createProperty", p);
     return j?.ok ? { ok: true, id: j.id } : { ok: false, err: j?.error };
+  },
+  // Contract PDF from the app → backend stores it on the Savvi server and sets the
+  // property's contract_url in one step, so it is sendable the same second.
+  async uploadContract({ propertyId, file }) {
+    const dataBase64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result || "")); r.onerror = () => rej(new Error("Couldn't read the file")); r.readAsDataURL(file); });
+    const j = await call("uploadContract", { propertyId, filename: file.name, dataBase64 });
+    if (!j?.ok) throw new Error(j?.error || "Upload failed");
+    invalidateBuyerCache();
+    return j.url;
   },
   async updateProperty({ id, igUrl }) {
     // Save the Instagram walkthrough reel link onto the property (instagram_video_url).
@@ -1706,12 +1715,24 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
 // Panel-only quick reference: the contract link + access notes (keysafe/door codes).
 // The App owns the toggle button so it can sit in a row next to the AI assistant.
 const listingHasInfo = oh => !!((oh?.contractUrl) || (oh?.listingNotes||"").trim());
-function OpenListingInfo({ openHome }){
+// "Add contract PDF" — picks a PDF, uploads it through the backend, and hands the new URL
+// back so every screen can flip from "Request" to Text/Email immediately.
+function ContractUpload({ propertyId, onUploaded, compact=false, label="Add contract PDF" }){
+  const ref=useRef(null); const [busy,setBusy]=useState(false); const [err,setErr]=useState("");
+  const pick=async(e)=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; if(!f) return; if(!/pdf$/i.test(f.name)&&f.type!=="application/pdf"){ setErr("Please choose a PDF."); return; } if(f.size>10*1024*1024){ setErr("That PDF is over 10 MB. Compress it and try again."); return; } setBusy(true); setErr(""); try{ const url=await Attio.uploadContract({propertyId,file:f}); onUploaded&&onUploaded(propertyId,url); }catch(x){ setErr(x.message||"Upload failed"); } finally{ setBusy(false); } };
+  return <span style={{display:compact?"inline-flex":"block"}}>
+    <input ref={ref} type="file" accept="application/pdf,.pdf" style={{display:"none"}} onChange={pick}/>
+    <button type="button" disabled={busy} onClick={()=>ref.current&&ref.current.click()} className={compact?"crm-btn":undefined} style={compact?undefined:{width:"100%",padding:"12px",borderRadius:11,border:`1.5px dashed ${BLUE}`,background:"#EEF2FB",color:BLUE_D,fontWeight:800,fontSize:13.5,cursor:busy?"default":"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",opacity:busy?.6:1}}>{busy?"Uploading…":label}</button>
+    {err&&<div style={{fontSize:12,color:"#C0392B",marginTop:6}}>{err}</div>}
+  </span>;
+}
+function OpenListingInfo({ openHome, onContractUploaded }){
   const notes=(openHome?.listingNotes||"").trim();
   const contractUrl=openHome?.contractUrl||"";
-  if(!notes && !contractUrl) return null;
+  const pid=openHome?.propertyId||openHome?.id;
   return (
     <div style={{padding:"8px 14px 0"}}>
+      {!contractUrl&&onContractUploaded&&pid&&<div style={{marginBottom:10}}><div style={{fontSize:12,color:BROWN_L,marginBottom:6}}>No contract on this listing yet. Add the PDF and it's ready to send straight away.</div><ContractUpload propertyId={pid} onUploaded={onContractUploaded}/></div>}
       {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none",marginBottom:notes?8:0}}>Open / read the full contract</a>}
       {notes&&<div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"12px 13px",fontSize:13,lineHeight:1.5,color:ESPRESSO,whiteSpace:"pre-wrap"}}>{notes}</div>}
     </div>
@@ -2429,7 +2450,7 @@ function AddListingSheet({ open, onClose, onSaved }) {
 /* ════════════════════════════════════════════
    QUICK CONTRACT SHEET (from listings section)
 ════════════════════════════════════════════ */
-function QuickContractSheet({ open, prop, agentName, onClose, onSent }) {
+function QuickContractSheet({ open, prop, agentName, onClose, onSent, onContractUploaded }) {
   const [name,    setName]    = useState("");
   const [email,   setEmail]   = useState("");
   const [mobile,  setMobile]  = useState("");
@@ -2495,6 +2516,11 @@ function QuickContractSheet({ open, prop, agentName, onClose, onSent }) {
             <div style={{fontSize:13,color:BROWN_L}}>Emailed to {name}. Logged in CRM.</div>
           </div>
         ) : <>
+          {!prop?.contractUrl && onContractUploaded && <div style={{margin:"0 16px 12px",padding:"12px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:11}}>
+            <div style={{fontSize:12.5,color:BROWN,fontWeight:700,marginBottom:4}}>No contract on this listing yet</div>
+            <div style={{fontSize:12,color:BROWN_L,marginBottom:8}}>Add the PDF here and it's ready to send straight away, to this buyer and everyone who has asked for it.</div>
+            <ContractUpload propertyId={prop?.propertyId||prop?.id} onUploaded={onContractUploaded}/>
+          </div>}
           {err && <div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:13}}>{err}</div>}
           <div className="fg"><label className="fl">Full name *</label><input className="fi" type="text" placeholder="e.g. Jane Smith" value={name} onChange={e=>setName(e.target.value)} autoFocus/></div>
           <div className="fg"><label className="fl">Email address *</label><input className="fi" type="email" placeholder="jane@email.com" value={email} onChange={e=>setEmail(e.target.value)}/></div>
@@ -3400,14 +3426,14 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
           <button className="crm-btn p" onClick={()=>crm.setShowAdd(true)}>+ Add buyer / enquiry</button>
           <button className="crm-btn" disabled={!propAll.some(b=>b.mobile)} onClick={()=>{ crm.setBFilters([]); crm.setShowBulk(true); }}>Text buyers</button>
           <button className="crm-btn" disabled={!propAll.some(b=>b.email)} onClick={()=>emailBuyers(propReal)}>Email buyers</button>
-          <button className="crm-btn" onClick={()=>crm.openQuickContract(oh)}>Send contract</button>
+          {oh.contractUrl?<button className="crm-btn" onClick={()=>crm.openQuickContract(oh)}>Send contract</button>:<ContractUpload compact label="Add contract PDF" propertyId={oh.propertyId} onUploaded={crm.applyContractUrl}/>}
           <button className="crm-btn" onClick={()=>crm.setShowSum(true)}>Vendor update</button>
           <button className="crm-btn" onClick={()=>crm.setShowMatch(true)}>Matching buyers</button>
           <button className="crm-btn" onClick={()=>crm.setShowAssistant(true)}>AI assistant</button>
           <button className="crm-btn" onClick={()=>setShowInfo(v=>!v)}>Listing info {showInfo?"▴":"▾"}</button>
           <button className="crm-btn" style={{marginLeft:"auto"}} onClick={()=>crm.refreshBuyers()} disabled={loading}>↻ Refresh</button>
         </div>
-        {showInfo&&<div className="crm-info"><OpenListingInfo openHome={oh}/></div>}
+        {showInfo&&<div className="crm-info"><OpenListingInfo openHome={oh} onContractUploaded={crm.applyContractUrl}/></div>}
       </div>
       <div className="crm-card tbl">
         <div className="crm-filters">
@@ -4254,7 +4280,15 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  const crm={ openHome, enterOpenHome, pb, propAll, propReal, enquiries, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setShowMatch, setShowAssistant, setShowAddListing, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
+  // A contract just uploaded from any screen: patch every copy of that listing in memory so
+  // Send contract / Text / Email light up at once (the server has already busted its caches).
+  const applyContractUrl=useCallback((pid,url)=>{
+    setAllListings(p=>p.map(x=>((x.propertyId||x.id)===pid?{...x,contractUrl:url}:x)));
+    setOpenHomes(p=>{ const u=p.map(o=>(o.propertyId===pid?{...o,contractUrl:url}:o)); try{ localStorage.setItem("savvi_opens",JSON.stringify(u)); }catch(e){} return u; });
+    setOpenHome(cur=>cur&&cur.propertyId===pid?{...cur,contractUrl:url}:cur);
+    setQuickContractProp(cur=>cur&&(cur.propertyId||cur.id)===pid?{...cur,contractUrl:url}:cur);
+  },[]);
+  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setShowMatch, setShowAssistant, setShowAddListing, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
@@ -4407,7 +4441,7 @@ export default function App(){
         <button className="btn-outline" style={{flex:1}} onClick={()=>setShowMatch(true)}>Matching buyers</button>
       </div>
 
-      {showInfo&&<OpenListingInfo openHome={openHome}/>}
+      {showInfo&&<OpenListingInfo openHome={openHome} onContractUploaded={applyContractUrl}/>}
 
       {!isDemo&&openHome?.propertyId&&<div style={{padding:"10px 14px 0"}}>
         <ReelLink propertyId={openHome.propertyId} value={openHome.igUrl} onSaved={u=>updateOpenReel(openHome.id,u)}/>
@@ -4508,6 +4542,7 @@ export default function App(){
       agentName={agentName}
       onClose={()=>setShowQuickContract(false)}
       onSent={()=>setShowQuickContract(false)}
+      onContractUploaded={applyContractUrl}
     />
     <AddListingSheet
       open={showAddListing}
