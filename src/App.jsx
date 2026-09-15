@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v36-notes-merge";
+const BUILD = "v37-fg-refresh";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3843,6 +3843,26 @@ export default function App(){
       loadPropMeta();
     })();
   },[agentName,reloadNonce]);
+
+  // Foreground refresh: the phone keeps the app open for days, so opens/listings loaded
+  // at startup go stale (a contract uploaded mid-afternoon still showed "Request" that
+  // evening). Whenever the app comes back to the front, quietly refetch both and patch
+  // the open you're currently in, at most once a minute.
+  const _fgAt=useRef(0);
+  useEffect(()=>{
+    if(!agentName||isDemo) return;
+    const refresh=async()=>{
+      if(document.visibilityState!=="visible") return;
+      if(Date.now()-_fgAt.current<60000) return; _fgAt.current=Date.now();
+      try{
+        const [r,lr]=await Promise.all([Attio.getOpenHomesThisWeek(),Attio.getAllActiveListings()]);
+        if(r.ok&&r.data.length){ setOpenHomes(r.data); try{ localStorage.setItem("savvi_opens",JSON.stringify(r.data)); }catch(e){} setOpenHome(cur=>{ if(!cur) return cur; const f=r.data.find(o=>o.id===cur.id); return f?{...cur,...f}:cur; }); }
+        if(lr.ok){ setAllListings(lr.data); setOpenHome(cur=>{ if(!cur||!cur._listing) return cur; const p=lr.data.find(x=>(x.propertyId||x.id)===cur.propertyId); return p?{...cur,contractUrl:p.contractUrl||cur.contractUrl,igUrl:p.igUrl||cur.igUrl,price:p.price||cur.price,auctionDate:p.auctionDate||cur.auctionDate}:cur; }); }
+      }catch(e){}
+    };
+    document.addEventListener("visibilitychange",refresh); window.addEventListener("focus",refresh);
+    return ()=>{ document.removeEventListener("visibilitychange",refresh); window.removeEventListener("focus",refresh); };
+  },[agentName,isDemo]);
 
   // Load buyers when entering an open home
   // Merge fresh Attio buyers into state WITHOUT dropping optimistic rows (a buyer just
