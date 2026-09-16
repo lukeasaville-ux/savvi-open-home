@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v38-upload-contract";
+const BUILD = "v39-hooks-fix";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4235,6 +4235,15 @@ export default function App(){
     setLastAdded(la=>la&&la.id===tempId?{...la,...patch}:la);
   },[]);
 
+  // (Declared before the PinScreen early return: hooks must run on every render.)
+  // A contract just uploaded from any screen: patch every copy of that listing in memory so
+  // Send contract / Text / Email light up at once (the server has already busted its caches).
+  const applyContractUrl=useCallback((pid,url)=>{
+    setAllListings(p=>p.map(x=>((x.propertyId||x.id)===pid?{...x,contractUrl:url}:x)));
+    setOpenHomes(p=>{ const u=p.map(o=>(o.propertyId===pid?{...o,contractUrl:url}:o)); try{ localStorage.setItem("savvi_opens",JSON.stringify(u)); }catch(e){} return u; });
+    setOpenHome(cur=>cur&&cur.propertyId===pid?{...cur,contractUrl:url}:cur);
+    setQuickContractProp(cur=>cur&&(cur.propertyId||cur.id)===pid?{...cur,contractUrl:url}:cur);
+  },[]);
   if (!agentName) return <PinScreen onUnlock={name => { setAgentName(name); }} />;
 
   // Group opens by date
@@ -4280,14 +4289,6 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  // A contract just uploaded from any screen: patch every copy of that listing in memory so
-  // Send contract / Text / Email light up at once (the server has already busted its caches).
-  const applyContractUrl=useCallback((pid,url)=>{
-    setAllListings(p=>p.map(x=>((x.propertyId||x.id)===pid?{...x,contractUrl:url}:x)));
-    setOpenHomes(p=>{ const u=p.map(o=>(o.propertyId===pid?{...o,contractUrl:url}:o)); try{ localStorage.setItem("savvi_opens",JSON.stringify(u)); }catch(e){} return u; });
-    setOpenHome(cur=>cur&&cur.propertyId===pid?{...cur,contractUrl:url}:cur);
-    setQuickContractProp(cur=>cur&&(cur.propertyId||cur.id)===pid?{...cur,contractUrl:url}:cur);
-  },[]);
   const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setShowMatch, setShowAssistant, setShowAddListing, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
