@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v39-hooks-fix";
+const BUILD = "v40-enquiry-name";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1650,7 +1650,7 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
         // Hands-free: register + reply + contract, then confirm what happened.
         let res={done:[]};
         try{ res=(await onRegister({...buyer,reply}))||{done:[]}; }catch(err){ res={done:["⚠️ Something went wrong — check the buyer list"]}; }
-        setThread(t=>t.map((x,i)=>i===idx?{...x,status:"done",done:res.done||[]}:x));
+        setThread(t=>t.map((x,i)=>i===idx?{...x,status:"done",done:res.done||[],buyer:{...x.buyer,name:res.name||x.buyer.name,email:res.email||x.buyer.email,mobile:res.mobile||x.buyer.mobile}}:x));
       } else setThread(t=>t.filter((_,i)=>i!==idx));
     }catch(err){ setThread(t=>t.map((x,i)=>i===idx?{...x,buyer:{name:"",mobile:"",email:"",question:"",wantsContract:false},status:"error"}:x)); }
     setBusy(false);
@@ -4176,9 +4176,15 @@ export default function App(){
       (enq.mobile&&digits(b.mobile)&&digits(b.mobile)===digits(enq.mobile)) ||
       (enq.email&&b.email&&String(b.email).toLowerCase()===String(enq.email).toLowerCase()));
     let contactId=existing?existing.contactId:null, inspectionId=existing?existing._attioInspectionId:null, rowId;
+    // Resolved identity for the row + reply — starts from whatever the AI parsed off the
+    // screenshot, then gets filled in from the matched CRM buyer. A screenshot of a bare
+    // "send me the Section 32" text has no name in it, so without this the row showed a
+    // nameless "Enquiry" sitting next to that same person = looked like a duplicate mobile.
+    let rName=(enq.name||"").trim(), rEmail=(enq.email||"").trim(), matchedExisting=false;
 
     if(existing){
       rowId=existing.id;
+      rName=rName||existing.name||""; rEmail=rEmail||existing.email||""; matchedExisting=true;
       const addNote=x=>x.id===rowId?{...x,notes:[...(x.notes||[]),noteObj]}:x;
       setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(addNote);return u;});
       setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(addNote);return u;});
@@ -4187,7 +4193,7 @@ export default function App(){
     } else {
       if(!isDemo){
         let found=enq.mobile?await Attio.findPersonByPhone(enq.mobile).catch(()=>null):null;
-        if(found) contactId=Attio.id(found);
+        if(found){ contactId=Attio.id(found); rName=rName||found.name||""; rEmail=rEmail||found.email||""; matchedExisting=true; }
         else { const r=await Attio.createPerson({name:enq.name,email:enq.email,mobile:enq.mobile}).catch(()=>({ok:false})); if(r.ok) contactId=r.id; }
         // An enquiry is NOT an open attendee → openHomeId stays null (property-level).
         if(contactId){ const r=await Attio.createInspection({contactId,propertyId:openHome?.propertyId,openHomeId:null,interest:"",agent:agentName}).catch(()=>({ok:false})); if(r.ok) inspectionId=r.id; }
@@ -4195,11 +4201,11 @@ export default function App(){
       }
       rowId=inspectionId||("local"+Date.now());
       // Build with the note included so it flags as an enquiry (isEnquiry) right away.
-      const row=normBuyer({ id:rowId, contactId, _attioInspectionId:inspectionId, name:enq.name||"Enquiry", mobile:enq.mobile||"", email:enq.email||"", interest:"", notes:noteLine });
+      const row=normBuyer({ id:rowId, contactId, _attioInspectionId:inspectionId, name:rName||"Enquiry", mobile:enq.mobile||"", email:rEmail||"", interest:"", notes:noteLine });
       // Enquiries live at property level (Enquiries filter) — NOT counted "at this open".
       setPropBuyers(p=>({...p,[pid]:[row,...(p[pid]||[])]}));
       invalidateBuyerCache();
-      done.push("Registered as an enquiry on this listing");
+      done.push(rName?(matchedExisting?`Matched to ${rName.split(" ")[0]} in the CRM — logged their enquiry`:`Logged ${rName.split(" ")[0]}'s enquiry on this listing`):"Registered as an enquiry on this listing");
     }
 
     // Auto-reply text
@@ -4223,7 +4229,7 @@ export default function App(){
         done.push("⚠️ No email captured — add one to send the contract");
       }
     }
-    return { done, name:enq.name };
+    return { done, name:rName||enq.name||"", email:rEmail||enq.email||"", mobile:enq.mobile||"" };
   },[openHome,propBuyers,isDemo,agentName]);
   // Patch an optimistically-added buyer once its Attio write finishes (real ids), or
   // flag it if the write failed — keyed by the temp id used at registration.
