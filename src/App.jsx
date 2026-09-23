@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v40-enquiry-name";
+const BUILD = "v41-ai-confirm";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1622,6 +1622,16 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
   useEffect(()=>{ if(open){ setQ(""); setThread([]); setBusy(false); } },[open, openHome?.id]);
   const addr=`${openHome?.address||""}`+((openHome?.suburb&&!String(openHome?.address||"").includes(openHome.suburb))?`, ${openHome.suburb}`:"");
   const updBuyer=(idx,k,v)=>setThread(t=>t.map((x,i)=>i===idx?{...x,buyer:{...x.buyer,[k]:v}}:x));
+  const updReply=(idx,v)=>setThread(t=>t.map((x,i)=>i===idx?{...x,reply:v}:x));
+  const discardItem=(idx)=>setThread(t=>t.filter((_,i)=>i!==idx));
+  // Fired only when the agent taps "Confirm & send" — nothing goes out before this.
+  const confirmSend=async(idx)=>{
+    const item=thread[idx]; if(!item||item.status==="working"||item.status==="done") return;
+    setThread(t=>t.map((x,i)=>i===idx?{...x,status:"working"}:x));
+    let res={done:[]};
+    try{ res=(await onRegister({...item.buyer, reply:item.reply}))||{done:[]}; }catch(err){ res={done:["⚠️ Something went wrong — check the buyer list"]}; }
+    setThread(t=>t.map((x,i)=>i===idx?{...x,status:"done",done:res.done||[],buyer:{...x.buyer,name:res.name||x.buyer.name,email:res.email||x.buyer.email,mobile:res.mobile||x.buyer.mobile}}:x));
+  };
 
   const ask=async(question)=>{
     const query=(question||q).trim(); if(!query||busy) return;
@@ -1646,11 +1656,8 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
         const j=await call("aiParseEnquiry",{ image:m[2], mediaType:m[1]||"image/png" }); const d=(j&&j.data)||{};
         const buyer={name:d.name||"",mobile:d.mobile||"",email:d.email||"",question:d.question||"",wantsContract:!!d.wantsContract};
         const reply=d.suggestedReply||"";
-        setThread(t=>t.map((x,i)=>i===idx?{...x,buyer,reply,status:"working"}:x));
-        // Hands-free: register + reply + contract, then confirm what happened.
-        let res={done:[]};
-        try{ res=(await onRegister({...buyer,reply}))||{done:[]}; }catch(err){ res={done:["⚠️ Something went wrong — check the buyer list"]}; }
-        setThread(t=>t.map((x,i)=>i===idx?{...x,status:"done",done:res.done||[],buyer:{...x.buyer,name:res.name||x.buyer.name,email:res.email||x.buyer.email,mobile:res.mobile||x.buyer.mobile}}:x));
+        // Stop for review — nothing is sent until the agent taps Confirm (they can edit first).
+        setThread(t=>t.map((x,i)=>i===idx?{...x,buyer,reply,status:"review"}:x));
       } else setThread(t=>t.filter((_,i)=>i!==idx));
     }catch(err){ setThread(t=>t.map((x,i)=>i===idx?{...x,buyer:{name:"",mobile:"",email:"",question:"",wantsContract:false},status:"error"}:x)); }
     setBusy(false);
@@ -1673,7 +1680,7 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
           <div style={{display:"flex",flexWrap:"wrap",gap:7,padding:"2px 0 10px"}}>
             {AI_SUGGESTIONS.map(s=><button key={s} onClick={()=>ask(s)} disabled={busy} style={{fontSize:12,fontWeight:600,color:BLUE_D,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:16,padding:"7px 12px",cursor:"pointer"}}>{s}</button>)}
           </div>
-          <div style={{fontSize:12.5,color:BROWN_L,lineHeight:1.5}}>Ask anything about the contract & Section 32, or tap <b style={{color:BLUE_D}}>📷</b> to drop in a screenshot of a buyer's text and I'll register them.</div>
+          <div style={{fontSize:12.5,color:BROWN_L,lineHeight:1.5}}>Ask anything about the contract & Section 32, or tap <b style={{color:BLUE_D}}>📷</b> to drop in a screenshot of a buyer's text — I'll draft the reply for you to review and confirm before anything sends.</div>
         </>}
         {thread.map((x,i)=>x.type==="ask"
           ? <div key={i} style={{marginBottom:14}}>
@@ -1687,6 +1694,33 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
                 ? <div style={{fontSize:13,color:BROWN_L,fontStyle:"italic"}}>Reading the screenshot…</div>
                 : x.status==="error"
                 ? <div style={{fontSize:13,color:AMBER,fontWeight:600}}>Couldn't read that screenshot — try a clearer one.</div>
+                : x.status==="review"
+                ? <>
+                  <div style={{fontSize:12,fontWeight:800,letterSpacing:.5,textTransform:"uppercase",color:BLUE_D,marginBottom:8}}>Review before sending</div>
+                  <label style={{display:"block",fontSize:11,fontWeight:700,color:BROWN_L}}>Name
+                    <input style={inp} value={x.buyer.name} onChange={e=>updBuyer(i,"name",e.target.value)} placeholder="Full name"/></label>
+                  <div style={{display:"flex",gap:8,marginTop:8}}>
+                    <label style={{flex:1,fontSize:11,fontWeight:700,color:BROWN_L}}>Mobile
+                      <input style={inp} value={x.buyer.mobile} onChange={e=>updBuyer(i,"mobile",e.target.value)} placeholder="Mobile"/></label>
+                    <label style={{flex:1,fontSize:11,fontWeight:700,color:BROWN_L}}>Email
+                      <input style={inp} value={x.buyer.email} onChange={e=>updBuyer(i,"email",e.target.value)} placeholder="Email"/></label>
+                  </div>
+                  {x.buyer.question&&<div style={{marginTop:10,fontSize:12.5,color:ESPRESSO}}><b>They asked:</b> {x.buyer.question}</div>}
+                  <label style={{display:"block",marginTop:10,fontSize:11,fontWeight:700,color:BROWN_L}}>Reply to send (edit, or clear to skip)
+                    <textarea style={{...inp,minHeight:78,resize:"vertical",lineHeight:1.5}} value={x.reply} onChange={e=>updReply(i,e.target.value)} placeholder="No reply will be sent"/></label>
+                  <label style={{display:"flex",alignItems:"center",gap:8,marginTop:10,fontSize:13,color:ESPRESSO,cursor:"pointer"}}>
+                    <input type="checkbox" checked={!!x.buyer.wantsContract} onChange={e=>updBuyer(i,"wantsContract",e.target.checked)} style={{width:17,height:17}}/>
+                    Send the contract{openHome?.contractUrl?"":" (none on this listing yet)"}
+                  </label>
+                  <div style={{fontSize:11.5,color:BROWN_L,marginTop:6,lineHeight:1.45}}>
+                    {x.reply.trim()&&x.buyer.mobile?"Reply will be texted. ":x.reply.trim()&&!x.buyer.mobile?"Reply set but no mobile to text it. ":"No reply will be sent. "}
+                    {x.buyer.wantsContract&&x.buyer.email&&openHome?.contractUrl?"Contract will be emailed.":x.buyer.wantsContract&&!x.buyer.email&&openHome?.contractUrl?"Contract wanted but no email — add one.":x.buyer.wantsContract&&!openHome?.contractUrl?"Contract requested — auto-sends once it's uploaded.":""}
+                  </div>
+                  <div style={{display:"flex",gap:8,marginTop:14}}>
+                    <button onClick={()=>confirmSend(i)} style={{flex:1,padding:"11px 0",borderRadius:10,border:"none",background:BLUE_D,color:"#fff",fontWeight:800,fontSize:14,cursor:"pointer"}}>Confirm &amp; send</button>
+                    <button onClick={()=>discardItem(i)} style={{padding:"11px 16px",borderRadius:10,border:`1px solid ${SAND_D}`,background:"#fff",color:BROWN,fontWeight:700,fontSize:14,cursor:"pointer"}}>Discard</button>
+                  </div>
+                </>
                 : <>
                   <div style={{fontSize:12,fontWeight:800,letterSpacing:.5,textTransform:"uppercase",color:x.status==="done"?"#3E8E5A":BLUE_D,marginBottom:6}}>{x.status==="done"?"✓ Enquiry handled":"Buyer from screenshot"}</div>
                   <div style={{fontSize:14,fontWeight:800,color:ESPRESSO}}>{x.buyer.name||"—"}</div>
