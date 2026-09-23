@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v41-ai-confirm";
+const BUILD = "v42-live-sync";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3461,7 +3461,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
           <button className="crm-btn" disabled={!propAll.some(b=>b.mobile)} onClick={()=>{ crm.setBFilters([]); crm.setShowBulk(true); }}>Text buyers</button>
           <button className="crm-btn" disabled={!propAll.some(b=>b.email)} onClick={()=>emailBuyers(propReal)}>Email buyers</button>
           {oh.contractUrl?<button className="crm-btn" onClick={()=>crm.openQuickContract(oh)}>Send contract</button>:<ContractUpload compact label="Add contract PDF" propertyId={oh.propertyId} onUploaded={crm.applyContractUrl}/>}
-          <button className="crm-btn" onClick={()=>crm.setShowSum(true)}>Vendor update</button>
+          <button className="crm-btn" onClick={async()=>{ if(crm.refreshBuyers) await crm.refreshBuyers(); crm.setShowSum(true); }}>Vendor update</button>
           <button className="crm-btn" onClick={()=>crm.setShowMatch(true)}>Matching buyers</button>
           <button className="crm-btn" onClick={()=>crm.setShowAssistant(true)}>AI assistant</button>
           <button className="crm-btn" onClick={()=>setShowInfo(v=>!v)}>Listing info {showInfo?"▴":"▾"}</button>
@@ -3927,14 +3927,42 @@ export default function App(){
   // Load buyers when entering an open home
   // Merge fresh Attio buyers into state WITHOUT dropping optimistic rows (a buyer just
   // registered here that hasn't finished persisting yet). Keyed by contactId/id.
+  // Guard optimistic edits (interest / notes / contract-sent) against a background refresh
+  // that reads Attio BEFORE the write has propagated — without this, a refresh overwrote the
+  // change you just made with the old server value, so it only "took" after leaving and
+  // re-entering. Edits from the last 60s are re-applied on top of any fresh server row.
+  const recentEdits=useRef({}); // key(contactId|id) -> { interest?, contractSent?, contractSentTime?, addedNotes:[{ts,text}], ts }
+  const EDIT_TTL=60000;
+  const recordEdit=(keys,patch)=>{ const now=Date.now();
+    for(const k of Object.keys(recentEdits.current)){ if(now-recentEdits.current[k].ts>EDIT_TTL) delete recentEdits.current[k]; }
+    for(const k of keys){ if(!k) continue; const cur=recentEdits.current[k]||{addedNotes:[]};
+      const next={...cur,ts:now,addedNotes:cur.addedNotes||[]};
+      if(patch.interest!==undefined) next.interest=patch.interest;
+      if(patch.contractSent){ next.contractSent=true; if(patch.contractSentTime) next.contractSentTime=patch.contractSentTime; }
+      if(patch.addedNote) next.addedNotes=[...next.addedNotes,{ts:patch.addedNote.ts||"",text:patch.addedNote.text||""}];
+      recentEdits.current[k]=next; }
+  };
+  const overlayEdits=(row)=>{ const now=Date.now(); const e=recentEdits.current[row.contactId]||recentEdits.current[row.id]; if(!e||now-e.ts>EDIT_TTL) return row;
+    let out=row;
+    if(e.interest!==undefined&&e.interest!==row.interest) out={...out,interest:e.interest};
+    if(e.contractSent&&!row.contractSent) out={...out,contractSent:true,contractSentTime:e.contractSentTime||row.contractSentTime};
+    if(e.addedNotes&&e.addedNotes.length){ const have=new Set((row.notes||[]).map(n=>(n.ts||"")+""+(n.text||""))); const missing=e.addedNotes.filter(n=>!have.has((n.ts||"")+""+(n.text||""))).map((n,k)=>({id:"opt"+k+"_"+(n.ts||""),ts:n.ts,text:n.text,agent:""})); if(missing.length) out={...out,notes:[...(out.notes||[]),...missing]}; }
+    return out;
+  };
+
   const applyFreshBuyers=(ohId,r)=>{
+    const openRows=(r.open||[]).map(overlayEdits);
+    const propRows=(r.property||[]).map(overlayEdits);
     setBuyers(p=>{
       const prev=p[ohId]||[];
-      const freshK=new Set((r.open||[]).map(b=>b.contactId||b.id));
+      const freshK=new Set(openRows.map(b=>b.contactId||b.id));
       const keep=prev.filter(b=>(b._pending||b._error)&&!freshK.has(b.contactId||b.id));
-      return {...p,[ohId]:[...keep,...(r.open||[])]};
+      return {...p,[ohId]:[...keep,...openRows]};
     });
-    setPropBuyers(p=>({...p,[ohId]:r.property||[]}));
+    setPropBuyers(p=>({...p,[ohId]:propRows}));
+    // Keep the open buyer card itself in sync too (e.g. a note another agent just added),
+    // while preserving anything that only lives locally, like the generated AI profile.
+    setActive(a=>{ if(!a) return a; const m=propRows.find(b=>(a.contactId&&b.contactId===a.contactId)||b.id===a.id)||openRows.find(b=>(a.contactId&&b.contactId===a.contactId)||b.id===a.id); return m?{...m,aiProfile:a.aiProfile||m.aiProfile}:a; });
     try{ localStorage.setItem("savvi_buyers_"+ohId, JSON.stringify({open:r.open,property:r.property})); }catch(e){}
   };
 
@@ -3969,6 +3997,20 @@ export default function App(){
     setBuyersLoading(false);
   },[openHome,buyers]);
 
+  // Keep the open you're in fresh so another agent's notes / interest changes appear
+  // without leaving and coming back — every 60s while the app is foregrounded, plus on
+  // refocus. The recent-edit overlay above stops this reverting your own just-made change.
+  useEffect(()=>{
+    if(!openHome||openHome._demo||isDemo) return;
+    const ohId=openHome.id, prId=openHome.propertyId;
+    const tick=async()=>{ if(document.visibilityState!=="visible") return;
+      try{ const r=await Attio.getBuyersFor(ohId,prId); if(r.ok) applyFreshBuyers(ohId,r); }catch(e){} };
+    const iv=setInterval(tick,60000);
+    window.addEventListener("focus",tick);
+    return ()=>{ clearInterval(iv); window.removeEventListener("focus",tick); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[openHome?.id,isDemo]);
+
   // "Add to this open" (buyer card): someone already on the listing from an earlier open or
   // an enquiry has turned up again — create their inspection for THIS open (a repeat visit,
   // interest carried over, no welcome SMS), log it, then reload so they show under "At this open".
@@ -3989,7 +4031,8 @@ export default function App(){
     // Also update propBuyers — the listing's buyer list reads from this, so without it the
     // interest change didn't show on the property until a full reload (Luke's live-update bug).
     setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(b=>b.id===id?{...b,interest:val}:b);return u;});
-    setActive(p=>p?.id===id?{...p,interest:val}:p);
+    recordEdit([id],{interest:val});
+    setActive(p=>{ if(p?.id===id){ recordEdit([id,p.contactId],{interest:val}); return {...p,interest:val}; } return p; });
     if(!isDemo&&openHome?.id) Attio.updateInspection(id,{interest:val}).catch(()=>{});
   },[isDemo,openHome]);
 
@@ -4030,6 +4073,8 @@ export default function App(){
     const t=fmtDateTime();
     // Update local state immediately
     setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===b.id?{...x,contractSent:true,contractSentTime:t}:x);return u;});
+    setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===b.id?{...x,contractSent:true,contractSentTime:t}:x);return u;});
+    recordEdit([b.id,b.contactId],{contractSent:true,contractSentTime:t});
     setActive(p=>p?.id===b.id?{...p,contractSent:true,contractSentTime:t}:p);
     setCtrBuyer(b);setCtrChannel("email");setShowDetail(false);
     setTimeout(()=>setShowCtr(true),220);
@@ -4064,6 +4109,8 @@ export default function App(){
     if(!pid||!b.mobile)return;
     const t=fmtDateTime();
     setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===b.id?{...x,contractSent:true,contractSentTime:t}:x);return u;});
+    setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(x=>x.id===b.id?{...x,contractSent:true,contractSentTime:t}:x);return u;});
+    recordEdit([b.id,b.contactId],{contractSent:true,contractSentTime:t});
     setActive(p=>p?.id===b.id?{...p,contractSent:true,contractSentTime:t}:p);
     setCtrBuyer(b);setCtrChannel("text");setShowDetail(false);
     setTimeout(()=>setShowCtr(true),220);
@@ -4112,6 +4159,7 @@ export default function App(){
     setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(b=>b.id===id?{...b,notes:[...(b.notes||[]),note]}:b);return u;});
     setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(b=>b.id===id?{...b,notes:[...(b.notes||[]),note]}:b);return u;});
     setActive(p=>p?.id===id?{...p,notes:[...(p.notes||[]),note]}:p);
+    { const _cid=((buyers[pid]||[]).find(b=>b.id===id)||(propBuyers[pid]||[]).find(b=>b.id===id)||{}).contactId; recordEdit([id,_cid],{addedNote:note}); }
     // Write all notes to Attio as "<ISO>\t<agent>\t<text>" joined by \n---\n so the timestamp + agent survive reload.
     if(!isDemo){
       const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text;
@@ -4475,7 +4523,7 @@ export default function App(){
         <button className="btn-blue" onClick={()=>setShowAssistant(true)}>AI assistant</button>
       </div>
       <div className="acts" style={{paddingTop:8}}>
-        <button className="btn-outline" style={{flex:1}} onClick={()=>setShowSum(true)}>Vendor update</button>
+        <button className="btn-outline" style={{flex:1}} onClick={async()=>{ await refreshBuyers(); setShowSum(true); }}>Vendor update</button>
         {listingHasInfo(openHome)&&<button className="btn-outline" style={{flex:1}} onClick={()=>setShowInfo(s=>!s)}>Listing info {showInfo?"▲":"▼"}</button>}
       </div>
       <div className="acts" style={{paddingTop:8}}>
