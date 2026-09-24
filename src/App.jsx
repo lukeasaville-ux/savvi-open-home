@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v43-open-picker";
+const BUILD = "v44-remove-open";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -355,6 +355,9 @@ const Attio = {
         visits: (list.filter(b => !/((REA|Domain|Portal)\s+enquiry|Enquiry via (text|sms|email|phone|dm))/i.test(String(b.notes||""))).length) || 1,
         // Every open-home session this buyer came through (for the "filter by open" picker).
         openHomeIds: [...new Set(list.map(b => b.openHomeId).filter(Boolean))],
+        // open-home id → its inspection record id, so a mis-add can be removed from ONE
+        // specific open without touching the buyer's other registrations.
+        insByOpen: (() => { const m = {}; list.forEach(b => { if (b.openHomeId && !m[b.openHomeId]) m[b.openHomeId] = b.id; }); return m; })(),
       };
     };
     const openGroups = {}, propGroups = {};
@@ -2004,12 +2007,13 @@ function SendCard({ buyer, propId, hasContract, onSendContract, onTextContract, 
   </div>;
 }
 
-function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink,onCheckIn}){
-  const [checkin,setCheckin]=useState("");      // per-add status: "" | done | err
-  const [checkinId,setCheckinId]=useState("");  // id of the open currently being added to
-  const [pickOpen,setPickOpen]=useState(false); // the "Add to an open" picker is showing
-  const [openList,setOpenList]=useState(null);  // this property's opens (null = not fetched yet)
-  useEffect(()=>{ setCheckin(""); setCheckinId(""); setPickOpen(false); setOpenList(null); },[buyer?.id,openHome?.id]);
+function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink,onCheckIn,onRemoveFromOpen}){
+  const [checkin,setCheckin]=useState("");       // per-add status: "" | busy | done | err
+  const [checkinId,setCheckinId]=useState("");   // id of the open currently being added to
+  const [removingId,setRemovingId]=useState(""); // id of the open currently being removed from
+  const [pickOpen,setPickOpen]=useState(false);  // the "Add to an open" picker is showing
+  const [openList,setOpenList]=useState(null);   // this property's opens (null = not fetched yet)
+  useEffect(()=>{ setCheckin(""); setCheckinId(""); setRemovingId(""); setPickOpen(false); setOpenList(null); },[buyer?.id,openHome?.id]);
   const[noteText,setNoteText]=useState("");
   const[showNote,setShowNote]=useState(false);
   const[copied,setCopied]=useState(false);
@@ -2169,18 +2173,26 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
                 const already=(buyer.openHomeIds||[]).includes(o.id);
                 const ok=canAddToOpen(o);
                 const label=openWhen(o)||o.date||"Open";
-                const busy=checkinId===o.id&&checkin!=="err"&&checkin!=="done";
-                const done=checkin==="done"&&checkinId===o.id;
-                return <button key={o.id} disabled={already||!ok||busy||done}
-                  onClick={async()=>{ setCheckinId(o.id); setCheckin("busy"); const r=await onCheckIn(propId,buyer,o); setCheckin(r&&r.ok?"done":"err"); if(r&&r.ok) setTimeout(()=>setPickOpen(false),900); }}
-                  style={{width:"100%",textAlign:"left",padding:"10px 12px",marginBottom:7,borderRadius:10,border:`1px solid ${done?"#A9DFBF":SAND_D}`,background:done?GRN_BG:(already||!ok)?"#FAF7F1":"#fff",cursor:(already||!ok||busy)?"default":"pointer",opacity:((already||!ok)&&!done)?.75:1,fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                    <span style={{fontWeight:700,fontSize:13.5,color:ESPRESSO}}>{label}{o.agent_name?` · ${o.agent_name}`:""}</span>
-                    <span style={{fontSize:12,fontWeight:800,color:done?GRN:already?BROWN_L:!ok?"#B08A4A":busy?BROWN_L:BLUE_D}}>
-                      {done?"Added ✓":busy?"Adding…":already?"Already on":!ok?`from ${openOpensFromLabel(o)}`:"Add"}
-                    </span>
-                  </div>
-                </button>;
+                const adding=checkinId===o.id&&checkin==="busy";
+                const added=checkin==="done"&&checkinId===o.id;
+                const removing=removingId===o.id;
+                const clickable=!already&&ok&&!adding&&!added;
+                const addRow=async()=>{ setCheckinId(o.id); setCheckin("busy"); const r=await onCheckIn(propId,buyer,o); setCheckin(r&&r.ok?"done":"err"); if(r&&r.ok) setTimeout(()=>setPickOpen(false),900); };
+                return <div key={o.id} onClick={clickable?addRow:undefined}
+                  style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"10px 12px",marginBottom:7,borderRadius:10,border:`1px solid ${added?"#A9DFBF":SAND_D}`,background:added?GRN_BG:(already||!ok)?"#FAF7F1":"#fff",cursor:clickable?"pointer":"default",opacity:((!already&&!ok)&&!added)?.75:1}}>
+                  <span style={{fontWeight:700,fontSize:13.5,color:ESPRESSO}}>{label}{o.agent_name?` · ${o.agent_name}`:""}</span>
+                  {added
+                    ? <span style={{fontSize:12,fontWeight:800,color:GRN}}>Added ✓</span>
+                    : adding
+                    ? <span style={{fontSize:12,fontWeight:800,color:BROWN_L}}>Adding…</span>
+                    : already
+                    ? (onRemoveFromOpen
+                        ? <button onClick={async(e)=>{ e.stopPropagation(); if(removing) return; if(!window.confirm(`Remove ${(buyer.name||"them").split(" ")[0]} from the ${label} open?`)) return; setRemovingId(o.id); await onRemoveFromOpen(propId,buyer,o.id); setRemovingId(""); }} disabled={removing} style={{background:"none",border:"none",padding:0,fontSize:12,fontWeight:800,color:removing?BROWN_L:AMBER_D,cursor:removing?"default":"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>{removing?"Removing…":"Remove"}</button>
+                        : <span style={{fontSize:12,fontWeight:800,color:BROWN_L}}>Already on</span>)
+                    : !ok
+                    ? <span style={{fontSize:12,fontWeight:800,color:"#B08A4A"}}>from {openOpensFromLabel(o)}</span>
+                    : <span style={{fontSize:12,fontWeight:800,color:BLUE_D}}>Add</span>}
+                </div>;
               })}
               {checkin==="err"&&<div style={{fontSize:12,color:AMBER_D,fontWeight:600,padding:"2px 0 6px"}}>Couldn't add them — tap Add again.</div>}
               <button className="btn-cream" style={{marginTop:2}} onClick={()=>{ setPickOpen(false); setCheckin(""); setCheckinId(""); }}>Cancel</button>
@@ -4076,6 +4088,16 @@ export default function App(){
     return {ok:true};
   },[openHome,agentName,refreshBuyers]);
 
+  // Take a buyer OFF one specific open (a mis-add) — deletes just that open's inspection
+  // record; their other opens, notes and the contact stay. Uses insByOpen from the card.
+  const removeFromOpen=useCallback(async(pid,buyer,openHomeId)=>{
+    const inspId=buyer?.insByOpen?.[openHomeId];
+    if(!inspId) return {ok:false};
+    const ok=await Attio.deleteInspection(inspId);
+    if(ok) await refreshBuyers();
+    return {ok:!!ok};
+  },[refreshBuyers]);
+
   // All mutations take explicit propId — no stale closure risk
   const updateInterest=useCallback((pid,id,val)=>{
     if(!pid)return;
@@ -4663,7 +4685,7 @@ export default function App(){
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
       onAddNote={addNote} onEditNote={editNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}
       onRemoveBuyer={removeBuyer} onTransferBuyer={transferBuyer} onRequestContract={requestContract} onOpenContact={openContact} onSendLink={sendBuyerLink}
-      onCheckIn={(active&&openHome&&!openHome._demo&&active.contactId)?checkInBuyer:undefined}/>
+      onCheckIn={(active&&openHome&&!openHome._demo&&active.contactId)?checkInBuyer:undefined} onRemoveFromOpen={(!isDemo)?removeFromOpen:undefined}/>
     {/* Contact-search detail: the searched person's full page, with their own inspection as
         the edit context. View + call/text/email + notes + interest across every property. */}
     <DetailHost desktop={isDesktop} open={searchDetailOpen} onClose={()=>setSearchDetailOpen(false)} buyer={searchProfile}
