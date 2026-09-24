@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v44-remove-open";
+const BUILD = "v45-buyer-views";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -358,6 +358,9 @@ const Attio = {
         // open-home id → its inspection record id, so a mis-add can be removed from ONE
         // specific open without touching the buyer's other registrations.
         insByOpen: (() => { const m = {}; list.forEach(b => { if (b.openHomeId && !m[b.openHomeId]) m[b.openHomeId] = b.id; }); return m; })(),
+        // Most recent inspection time (drives the "Inspections" view, newest first). Prefer
+        // real open attendances; fall back to any record's created time.
+        lastInspectedAt: (() => { const real = list.filter(b => b.openHomeId).map(b => new Date(b._createdAt || 0).getTime()); const arr = real.length ? real : list.map(b => new Date(b._createdAt || 0).getTime()); return arr.length ? Math.max.apply(null, arr) : 0; })(),
       };
     };
     const openGroups = {}, propGroups = {};
@@ -3021,6 +3024,30 @@ function BuyerFilter({ options, active, onSelect }){
     </div>
   );
 }
+/* ════ BUYER VIEW — single-select dropdown: Interest · Inspections · Contracts · Enquiries ════ */
+function ViewFilter({ view, onChange, options }){
+  const [open,setOpen]=useState(false);
+  const cur=options.find(o=>o.k===view)||options[0];
+  return (
+    <div style={{position:"relative",padding:"4px 0 12px"}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{display:"flex",alignItems:"center",gap:9,background:SAND,border:`1px solid ${SAND_D}`,borderRadius:100,padding:"9px 16px",fontSize:13,fontWeight:700,color:BROWN,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>
+        <span>View: {cur?cur.l:"Interest"}</span>
+        <span style={{fontSize:9,opacity:.55,transform:open?"rotate(180deg)":"none",transition:"transform .15s"}}>▼</span>
+      </button>
+      {open&&<>
+        <div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:20}}/>
+        <div style={{position:"absolute",top:"100%",left:0,zIndex:21,marginTop:2,background:WHITE,border:`1px solid ${SAND_D}`,borderRadius:12,boxShadow:"0 8px 24px rgba(49,30,16,.16)",overflow:"hidden",minWidth:230,maxWidth:290}}>
+          {options.map((o,i)=>{ const on=o.k===view; return (
+            <button key={o.k} onClick={()=>{onChange(o.k);setOpen(false);}} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,width:"100%",border:"none",borderTop:i?`1px solid ${SAND}`:"none",background:on?LINEN:"#fff",padding:"12px 16px",fontSize:14,fontWeight:on?700:500,color:BROWN,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",textAlign:"left"}}>
+              <span>{on?"✓ ":""}{o.l}</span>
+              {o.n!=null&&<span style={{fontSize:12.5,color:on?BLUE_D:BROWN_L,fontWeight:700}}>{o.n}</span>}
+            </button>
+          );})}
+        </div>
+      </>}
+    </div>
+  );
+}
 /* ════════════════════════════════════════════
    DESKTOP CRM  (wide screens only — the phone layout is untouched)
    A HubSpot-style shell: left sidebar + a main pane with Dashboard, Opens,
@@ -3810,7 +3837,8 @@ export default function App(){
   const[buyersLoading,setBuyersLoading]=useState(false);
   const[showAdd,setShowAdd]=useState(false);
   const[showDetail,setShowDetail]=useState(false);
-  const[bFilters,setBFilters]=useState([]); // active keys: hot|watching|cool|contract|repeat (empty = all)
+  const[bFilters,setBFilters]=useState([]); // active keys: hot|watching|cool|contract|repeat (empty = all) — desktop CRM
+  const[bView,setBView]=useState("interest"); // phone buyer-list view: interest|inspections|contracts|enquiries
   const[active,setActive]=useState(null);
   // Contact-search → open that person's full page (their profile across every property).
   const[searchProfile,setSearchProfile]=useState(null);
@@ -3869,27 +3897,21 @@ export default function App(){
   const propReal=propAll.filter(b=>!b.isEnquiry);
   const pbReal=pb.filter(b=>!b.isEnquiry);
   const propExtraReal=propExtra.filter(b=>!b.isEnquiry).slice().sort((a,b)=>buyerHeat(b).score-buyerHeat(a).score);
-  const enqActive=bFilters[0]==="enquiry";
   const allN=id=>(buyers[id]||[]).length;
-  // Multi-select filter across everyone registered to this property (for callbacks).
-  // Interest chips OR within interest; contract/repeat AND on top. e.g. "Contract + Hot".
-  const INTEREST_KEYS=["hot","watching","cool"];
-  const selInterests=bFilters.filter(k=>INTEREST_KEYS.includes(k));
-  // OR across selected filters (Luke's choice): "Warm + Contract sent" = anyone who is
-  // warm OR has a contract sent. Enquiry is handled separately (enqActive).
-  const matchFilter=(b)=>{
-    const keys=bFilters.filter(k=>k!=="enquiry");
-    if(!keys.length) return true;
-    return keys.some(k=> k==="contract" ? !!b.contractSent : k==="repeat" ? ((b.visits||1)>1) : k.slice(0,3)==="oh:" ? (b.openHomeIds||[]).includes(k.slice(3)) : (b.interest===k));
-  };
-  const filterActive=bFilters.length>0;
-  const byHeat=(a,b)=>buyerHeat(b).score-buyerHeat(a).score; // strongest buyers first
+  // Buyer-list VIEW picker (replaces the old hot/warm/cold multi-filter): one of four.
   // Default order = interest level high→low (hot, watching, cool, then none), heat as tiebreak.
   const _iRank={hot:3,watching:2,cool:1};
   const byInterest=(a,b)=>((_iRank[b.interest]||0)-(_iRank[a.interest]||0))||(buyerHeat(b).score-buyerHeat(a).score);
-  const filteredBuyers=enqActive?enquiries:propReal.filter(matchFilter).slice().sort(byInterest);
-  const countFor=(k)=>k==="enquiry"?enquiries.length:k==="contract"?propReal.filter(b=>b.contractSent).length:k==="repeat"?propReal.filter(b=>(b.visits||1)>1).length:propReal.filter(b=>b.interest===k).length;
-  const toggleFilter=(k)=>setBFilters(prev=>prev.includes(k)?prev.filter(x=>x!==k):[...prev,k]);
+  const inspTs=(b)=> b.lastInspectedAt || new Date(b._createdAt||0).getTime() || 0;
+  const byInspection=(a,b)=> (inspTs(b)-inspTs(a)) || byInterest(a,b);   // most-recent inspection first
+  const contractsList=propReal.filter(b=>b.contractSent);
+  const VIEW_LABEL={interest:"Interest",inspections:"Inspections",contracts:"Contracts",enquiries:"Enquiries"};
+  // Sort used by the "everyone" views (Interest / Inspections).
+  const viewSort = bView==="inspections" ? byInspection : byInterest;
+  // The list the current view shows (also what the bulk-text sheet acts on).
+  const filteredBuyers = bView==="contracts" ? contractsList.slice().sort(byInspection)
+                       : bView==="enquiries" ? enquiries.slice().sort((a,b)=>inspTs(b)-inspTs(a))
+                       : propReal.slice().sort(viewSort);
   const rowOf=(b,kp)=>(
     <div key={kp+b.id} className="brow" onClick={()=>{setActive(b);setShowDetail(true);}}>
       <div className="brow-top">
@@ -4615,37 +4637,26 @@ export default function App(){
           <button onClick={refreshBuyers} disabled={buyersLoading} style={{display:"inline-flex",alignItems:"center",gap:6,background:"none",border:"none",color:BLUE_D,fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",opacity:buyersLoading?0.5:1}}>{buyersLoading?"Refreshing…":"↻ Refresh buyers"}</button>
         </div>}
         {/* Filter — a single dropdown to organise callbacks by interest / contract / repeat */}
-        {propAll.length>0&&<BuyerFilter
-          active={bFilters}
-          onSelect={k=>{
-            if(k==="all"){setBFilters([]);return;}
-            if(k==="enquiry"){setBFilters(prev=>prev[0]==="enquiry"?[]:["enquiry"]);return;}
-            setBFilters(prev=>{const base=prev.filter(x=>x!=="enquiry");return base.includes(k)?base.filter(x=>x!==k):[...base,k];});
-          }}
-          options={[{k:"all",l:"All buyers",n:propReal.length}].concat(
-            [{k:"hot",l:"Hot"},{k:"watching",l:"Warm"},{k:"cool",l:"Cold"},{k:"contract",l:"Contract sent"},{k:"repeat",l:"Repeat visit"},{k:"enquiry",l:"Enquiries"}]
-              .map(f=>({...f,n:countFor(f.k)})).filter(o=>o.n>0)
-          ).concat((()=>{
-            // Filter by which open session they came through — only shown when this
-            // property has more than one open, so the menu stays clean.
-            const propOpens=(visibleOpens||[]).filter(o=>o.propertyId===openHome?.propertyId&&!o._listing&&!o._demo);
-            if(propOpens.length<2) return [];
-            const lbl=o=>{const d=o.date?new Date(o.date+"T00:00:00"):null;const wd=d?d.toLocaleDateString("en-AU",{weekday:"short"}):"";const start=String(o.time||"").split(/[–-]/)[0].trim();return ["📅",wd,start].filter(Boolean).join(" ");};
-            return propOpens.map(o=>({k:"oh:"+o.id,l:lbl(o),n:propReal.filter(b=>(b.openHomeIds||[]).includes(o.id)).length})).filter(o=>o.n>0);
-          })())}
-        />}
+        {propAll.length>0&&<ViewFilter view={bView} onChange={setBView} options={[
+          {k:"interest",l:"Interest",n:propReal.length},
+          {k:"inspections",l:"Inspections",n:propReal.length},
+          {k:"contracts",l:"Contracts",n:contractsList.length},
+          {k:"enquiries",l:"Enquiries",n:enquiries.length},
+        ]}/>}
 
         {buyersLoading&&<div style={{textAlign:"center",padding:"24px"}}><div className="sp"/></div>}
 
-        {!buyersLoading&&filterActive&&<>
-          <div className="sec-lbl" style={{padding:"2px 0 10px"}}>{filteredBuyers.length} {enqActive?(filteredBuyers.length===1?"enquiry":"enquiries"):(filteredBuyers.length===1?"buyer":"buyers")}</div>
+        {/* Contracts / Enquiries = flat filtered list, newest inspection first */}
+        {!buyersLoading&&(bView==="contracts"||bView==="enquiries")&&<>
+          <div className="sec-lbl" style={{padding:"2px 0 10px"}}>{filteredBuyers.length} {bView==="enquiries"?(filteredBuyers.length===1?"enquiry":"enquiries"):(filteredBuyers.length===1?"buyer":"buyers")}</div>
           {filteredBuyers.some(b=>b.mobile)&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:12,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Text these {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
           {filteredBuyers.length===0
-            ? <div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>{enqActive?"No enquiries yet.":"No buyers match this filter."}</div>
+            ? <div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>{bView==="enquiries"?"No enquiries yet.":"No contracts sent yet."}</div>
             : filteredBuyers.map(b=>rowOf(b,"f"))}
         </>}
 
-        {!buyersLoading&&!filterActive&&<>
+        {/* Interest / Inspections = the same buyers, sorted by heat or by most-recent inspection */}
+        {!buyersLoading&&(bView==="interest"||bView==="inspections")&&<>
           {filteredBuyers.filter(b=>b.mobile).length>0&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:14,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Text all {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
           {!openHome._listing&&<>
             <div className="sec-lbl" style={{padding:"2px 0 10px"}}>At this open</div>
@@ -4653,13 +4664,13 @@ export default function App(){
               <div style={{fontSize:36,marginBottom:10}}>👥</div>
               <div style={{fontSize:14,lineHeight:1.5}}>No buyers yet — tap Add buyer to register the first.</div>
             </div>}
-            {pbReal.slice().sort(byInterest).map(b=>rowOf(b,"o"))}
+            {pbReal.slice().sort(viewSort).map(b=>rowOf(b,"o"))}
           </>}
           {(propExtraReal.length>0||openHome._listing)&&<>
             <div className="sec-lbl" style={{padding:openHome._listing?"2px 0 4px":"20px 0 4px"}}>{openHome._listing?"Buyers · this property":"All buyers · this property"}</div>
             <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Everyone registered to this property to date — call back, add notes or send a contract any day.</div>
             {propExtraReal.length===0&&openHome._listing&&<div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8"}}><div style={{fontSize:36,marginBottom:10}}>👥</div><div style={{fontSize:14,lineHeight:1.5}}>No buyers registered on this listing yet — tap Add buyer to add one.</div></div>}
-            {propExtraReal.slice().sort(byInterest).map(b=>rowOf(b,"p"))}
+            {propExtraReal.slice().sort(viewSort).map(b=>rowOf(b,"p"))}
           </>}
           {enquiries.length>0&&<>
             <div className="sec-lbl" style={{padding:"24px 0 4px"}}>Enquiries · {enquiries.length}</div>
@@ -4679,7 +4690,7 @@ export default function App(){
     </button>}
     <AddSheet open={showAdd} onClose={()=>{setShowAdd(false);setAiPrefill(null);}} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)} prefill={aiPrefill}/>
     <AiAssistantSheet open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={handleEnquiry}/>
-    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} suburb={openHome?.suburb} isAuction={!!openHome?.auctionDate} onLogNote={(b,sent,mode)=>{ if(!isDemo&&openHome?.id&&b?.id) addNote(openHome.id,b.id,mode&&mode!=="custom"?formSentNote(mode,"text"):`Text sent: "${sent}"`); }} label={filterActive?(({hot:"Hot",watching:"Warm",cool:"Cold",contract:"Contract sent",repeat:"Repeat visit",enquiry:"Enquiries"})[bFilters[0]]||"Filtered"):"All buyers"}/>
+    <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} suburb={openHome?.suburb} isAuction={!!openHome?.auctionDate} onLogNote={(b,sent,mode)=>{ if(!isDemo&&openHome?.id&&b?.id) addNote(openHome.id,b.id,mode&&mode!=="custom"?formSentNote(mode,"text"):`Text sent: "${sent}"`); }} label={VIEW_LABEL[bView]||"Buyers"}/>
     <DetailHost desktop={isDesktop} open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id} propIndex={propIndex} opens={visibleOpens}
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
