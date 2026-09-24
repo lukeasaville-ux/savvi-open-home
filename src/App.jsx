@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v42-live-sync";
+const BUILD = "v43-open-picker";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -263,6 +263,16 @@ const Attio = {
     return { ok: true, data: data.map(normBuyer) };
   },
   // One fetch → "at this open" + "all buyers ever registered to this property" (deduped by contact).
+  // Every open (past + upcoming) for a property, for the "Add to an open" picker.
+  async getPropertyOpens(propertyId){
+    if(!propertyId) return [];
+    const j=await call("listRecords",{objectSlug:"open_homes"});
+    if(!j?.ok||!Array.isArray(j.data)) return [];
+    const rref=(r,f)=>r?.values?.[f]?.[0]?.target_record_id??null;
+    const rval=(r,f)=>r?.values?.[f]?.[0]?.value??null;
+    return j.data.filter(o=>rref(o,"property")===propertyId).map(o=>({ id:o.id.record_id, date:rval(o,"date")||"", time:rval(o,"start_time")||"", end_time:rval(o,"end_time")||"", agent_name:rval(o,"agent_name")||"" }))
+      .sort((a,b)=>String(b.date).localeCompare(String(a.date))||String(b.time).localeCompare(String(a.time)));
+  },
   async getBuyersFor(openHomeId, propertyId) {
     let inspData, pplData;
     // Fast path: the backend returns ONLY this property's inspections, those contacts'
@@ -801,6 +811,15 @@ const FOLLOWUP_URL = "https://n8n.getsavvi.com.au/webhook/savvi-followup";
 const smsSig = a => AGENT_FULL[String(a||"").trim().split(" ")[0]] || "Luke Saville";
 // "Sat 12 Sep 11:00am" for an open home — used in the "Inspected at the … open" notes.
 const openWhen = oh => [oh?.date ? new Date(oh.date + "T00:00:00").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" }) : "", String(oh?.time || "").split(/[–-]/)[0].trim()].filter(Boolean).join(" ");
+// Parse an open's start into a local Date (the agent's phone is in Melbourne). Handles
+// date "2026-09-25" + time "12:45pm" or a range "12:30–1:00pm".
+const openStartAt = (o) => { if(!o||!o.date) return null; const t=String(o.time||"").split(/[–-]/)[0].trim(); const m=t.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i); let hh=m?+m[1]:12, mm=(m&&m[2])?+m[2]:0; const ap=m?m[3].toLowerCase():"pm"; if(ap==="pm"&&hh<12)hh+=12; if(ap==="am"&&hh===12)hh=0; const p=String(o.date).split("-").map(Number); if(p.length<3) return null; return new Date(p[0],(p[1]||1)-1,p[2]||1,hh,mm,0,0); };
+// You can only add a buyer to an open once it has effectively started — from 30 minutes
+// before its start time onward. Before that (a genuinely upcoming open) it's locked, so an
+// "Attended inspection" record is always truthful. Past opens stay addable (late logging).
+const OPEN_LEAD_MS = 30*60000;
+const canAddToOpen = (o) => { const d=openStartAt(o); return d ? Date.now() >= d.getTime()-OPEN_LEAD_MS : false; };
+const openOpensFromLabel = (o) => { const d=openStartAt(o); if(!d) return ""; return new Date(d.getTime()-OPEN_LEAD_MS).toLocaleTimeString("en-AU",{hour:"numeric",minute:"2-digit"}).replace(/\s/g,"").toLowerCase(); };
 // Every inspection a buyer has had, from their "Inspected … at the <when> open" notes plus
 // (for older records without one) the opens they're registered at that we can date.
 const inspectionsOf = (buyer, opens) => { const seen = new Set(), out = []; (buyer?.notes || []).forEach(n => { const m = /^Inspected .*? at the (.+?) open/i.exec(n.text || ""); if (m && !seen.has(m[1])) { seen.add(m[1]); out.push(m[1]); } }); (buyer?.openHomeIds || []).forEach(id => { const o = (opens || []).find(x => x.id === id); const w = o ? openWhen(o) : ""; if (w && !seen.has(w)) { seen.add(w); out.push(w); } }); return out; };
@@ -1986,8 +2005,11 @@ function SendCard({ buyer, propId, hasContract, onSendContract, onTextContract, 
 }
 
 function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink,onCheckIn}){
-  const [checkin,setCheckin]=useState(""); // "" | busy | done | err — "Add to this open" button state
-  useEffect(()=>{ setCheckin(""); },[buyer?.id,openHome?.id]);
+  const [checkin,setCheckin]=useState("");      // per-add status: "" | done | err
+  const [checkinId,setCheckinId]=useState("");  // id of the open currently being added to
+  const [pickOpen,setPickOpen]=useState(false); // the "Add to an open" picker is showing
+  const [openList,setOpenList]=useState(null);  // this property's opens (null = not fetched yet)
+  useEffect(()=>{ setCheckin(""); setCheckinId(""); setPickOpen(false); setOpenList(null); },[buyer?.id,openHome?.id]);
   const[noteText,setNoteText]=useState("");
   const[showNote,setShowNote]=useState(false);
   const[copied,setCopied]=useState(false);
@@ -2136,10 +2158,34 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
 
       {/* A buyer already on the listing (earlier open / enquiry) who has turned up again:
           one tap puts them in THIS open instead of re-registering them from scratch. */}
-      {onCheckIn&&openHome&&!openHome._listing&&!openHome._demo&&buyer.contactId&&!(buyer.openHomeIds||[]).includes(openHome.id)&&
-        <button className={`checkin-btn${checkin==="done"?" done":""}`} disabled={checkin==="busy"||checkin==="done"} onClick={async()=>{ setCheckin("busy"); const r=await onCheckIn(propId,buyer); setCheckin(r&&r.ok?"done":"err"); }}>
-          {checkin==="done"?"Added to this open ✓":checkin==="busy"?"Adding…":checkin==="err"?"Couldn't add them, tap to try again":"Add to this open"}
-        </button>}
+      {onCheckIn&&openHome&&!openHome._demo&&buyer.contactId&&<div style={{padding:"0 16px 10px"}}>
+        {!pickOpen
+          ? <button className="checkin-btn" style={{width:"100%",margin:0}} onClick={()=>{ setPickOpen(true); setCheckin(""); setCheckinId(""); if(openList===null){ Attio.getPropertyOpens(openHome.propertyId||openHome.id).then(l=>setOpenList(l||[])).catch(()=>setOpenList([])); } }}>Add to an open</button>
+          : <div style={{border:`1px solid ${SAND_D}`,borderRadius:12,background:"#fff",padding:"11px 12px"}}>
+              <div style={{fontSize:12.5,fontWeight:800,color:ESPRESSO,marginBottom:8}}>Add {(buyer.name||"them").split(" ")[0]} to which open?</div>
+              {openList===null&&<div style={{fontSize:12.5,color:BROWN_L,padding:"4px 0"}}>Loading opens…</div>}
+              {openList&&openList.length===0&&<div style={{fontSize:12.5,color:BROWN_L,padding:"4px 0"}}>No opens on this listing yet.</div>}
+              {openList&&openList.map(o=>{
+                const already=(buyer.openHomeIds||[]).includes(o.id);
+                const ok=canAddToOpen(o);
+                const label=openWhen(o)||o.date||"Open";
+                const busy=checkinId===o.id&&checkin!=="err"&&checkin!=="done";
+                const done=checkin==="done"&&checkinId===o.id;
+                return <button key={o.id} disabled={already||!ok||busy||done}
+                  onClick={async()=>{ setCheckinId(o.id); setCheckin("busy"); const r=await onCheckIn(propId,buyer,o); setCheckin(r&&r.ok?"done":"err"); if(r&&r.ok) setTimeout(()=>setPickOpen(false),900); }}
+                  style={{width:"100%",textAlign:"left",padding:"10px 12px",marginBottom:7,borderRadius:10,border:`1px solid ${done?"#A9DFBF":SAND_D}`,background:done?GRN_BG:(already||!ok)?"#FAF7F1":"#fff",cursor:(already||!ok||busy)?"default":"pointer",opacity:((already||!ok)&&!done)?.75:1,fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                    <span style={{fontWeight:700,fontSize:13.5,color:ESPRESSO}}>{label}{o.agent_name?` · ${o.agent_name}`:""}</span>
+                    <span style={{fontSize:12,fontWeight:800,color:done?GRN:already?BROWN_L:!ok?"#B08A4A":busy?BROWN_L:BLUE_D}}>
+                      {done?"Added ✓":busy?"Adding…":already?"Already on":!ok?`from ${openOpensFromLabel(o)}`:"Add"}
+                    </span>
+                  </div>
+                </button>;
+              })}
+              {checkin==="err"&&<div style={{fontSize:12,color:AMBER_D,fontWeight:600,padding:"2px 0 6px"}}>Couldn't add them — tap Add again.</div>}
+              <button className="btn-cream" style={{marginTop:2}} onClick={()=>{ setPickOpen(false); setCheckin(""); setCheckinId(""); }}>Cancel</button>
+            </div>}
+      </div>}
 
       {/* Interest: the three tiles (Luke's preferred picker), one line, above the send card */}
       <div className="cgr mini">{ISET.map(o=><div key={o.v} className={`cb ${buyer.interest===o.v?(o.v==="hot"?"ah":o.v==="watching"?"aw":"ac"):""}`} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}>
@@ -4014,12 +4060,18 @@ export default function App(){
   // "Add to this open" (buyer card): someone already on the listing from an earlier open or
   // an enquiry has turned up again — create their inspection for THIS open (a repeat visit,
   // interest carried over, no welcome SMS), log it, then reload so they show under "At this open".
-  const checkInBuyer=useCallback(async(pid,b)=>{
-    if(!openHome||openHome._listing||openHome._demo||!b?.contactId) return {ok:false};
-    const r=await Attio.createInspection({contactId:b.contactId,propertyId:openHome.propertyId,openHomeId:openHome.id,interest:b.interest||"",agent:agentName}).catch(()=>({ok:false}));
+  const checkInBuyer=useCallback(async(pid,b,target)=>{
+    const propId2=openHome?.propertyId||openHome?.id;
+    const oh=target||openHome;
+    if(!oh||oh._demo||!propId2||!b?.contactId) return {ok:false};
+    if(!target && openHome?._listing) return {ok:false};   // need a real open to add to
+    if(!canAddToOpen(oh)) return {ok:false,reason:"not_started"}; // 30-min rule, enforced here too
+    const r=await Attio.createInspection({contactId:b.contactId,propertyId:propId2,openHomeId:oh.id,interest:b.interest||"",agent:agentName}).catch(()=>({ok:false}));
     if(!r||!r.ok||!r.id) return {ok:false};
     const agentFull=AGENT_FULL[agentName]||agentName||"";
-    Attio.updateInspection(r.id,{notes:`${new Date().toISOString()}\t${agentFull}\tAttended inspection ${openWhen(openHome)||""}${openWhen(openHome)?", ":""}${streetLine(openHome.address,openHome.suburb)||"the property"} (added by ${agentFull})`}).catch(()=>{});
+    const when=openWhen(oh)||"";
+    const addr=streetLine(openHome?.address,openHome?.suburb)||"the property";
+    Attio.updateInspection(r.id,{notes:`${new Date().toISOString()}\t${agentFull}\tAttended inspection ${when}${when?", ":""}${addr} (added by ${agentFull})`}).catch(()=>{});
     await refreshBuyers();
     return {ok:true};
   },[openHome,agentName,refreshBuyers]);
@@ -4611,7 +4663,7 @@ export default function App(){
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
       onAddNote={addNote} onEditNote={editNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}
       onRemoveBuyer={removeBuyer} onTransferBuyer={transferBuyer} onRequestContract={requestContract} onOpenContact={openContact} onSendLink={sendBuyerLink}
-      onCheckIn={(active&&openHome&&!openHome._listing&&!openHome._demo&&active.contactId&&!pb.some(x=>x.contactId===active.contactId))?checkInBuyer:undefined}/>
+      onCheckIn={(active&&openHome&&!openHome._demo&&active.contactId)?checkInBuyer:undefined}/>
     {/* Contact-search detail: the searched person's full page, with their own inspection as
         the edit context. View + call/text/email + notes + interest across every property. */}
     <DetailHost desktop={isDesktop} open={searchDetailOpen} onClose={()=>setSearchDetailOpen(false)} buyer={searchProfile}
