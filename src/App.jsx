@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v46-inspections-grouped";
+const BUILD = "v47-keep-sold-listings";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1785,12 +1785,22 @@ function ContractUpload({ propertyId, onUploaded, compact=false, label="Add cont
     {err&&<div style={{fontSize:12,color:"#C0392B",marginTop:6}}>{err}</div>}
   </span>;
 }
+// Status pill for a non-active listing: [label, text colour, background].
+const STATUS_BADGE = { "sold":["Sold","#3E8E5A","#EAF5EE"], "under offer":["Under offer","#B7770D","#FBF0DC"], "withdrawn":["Withdrawn","#8A7A66","#F0ECE3"], "off-market":["Off market","#8A7A66","#F0ECE3"] };
+const statusBadge = s => STATUS_BADGE[String(s||"").toLowerCase()] || null;
+
 function OpenListingInfo({ openHome, onContractUploaded }){
   const notes=(openHome?.listingNotes||"").trim();
   const contractUrl=openHome?.contractUrl||"";
   const pid=openHome?.propertyId||openHome?.id;
+  const sb=statusBadge(openHome?.statusText);
   return (
     <div style={{padding:"8px 14px 0"}}>
+      {(sb||openHome?.settlementDate||openHome?.soldPrice)&&<div style={{display:"flex",flexWrap:"wrap",gap:8,alignItems:"center",marginBottom:10}}>
+        {sb&&<span style={{fontSize:11.5,fontWeight:800,color:sb[1],background:sb[2],borderRadius:100,padding:"3px 10px"}}>{sb[0]}</span>}
+        {openHome?.soldPrice&&<span style={{fontSize:12.5,color:ESPRESSO,fontWeight:700}}>Sold ${Number(openHome.soldPrice).toLocaleString("en-US")}</span>}
+        {openHome?.settlementDate&&<span style={{fontSize:12.5,color:BROWN_L}}>Settles {fmtAuction(openHome.settlementDate)}</span>}
+      </div>}
       {!contractUrl&&onContractUploaded&&pid&&<div style={{marginBottom:10}}><div style={{fontSize:12,color:BROWN_L,marginBottom:6}}>No contract on this listing yet. Add the PDF and it's ready to send straight away.</div><ContractUpload propertyId={pid} onUploaded={onContractUploaded}/></div>}
       {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none",marginBottom:notes?8:0}}>Open / read the full contract</a>}
       {notes&&<div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"12px 13px",fontSize:13,lineHeight:1.5,color:ESPRESSO,whiteSpace:"pre-wrap"}}>{notes}</div>}
@@ -3463,6 +3473,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const [indexAt,setIndexAt]=useState(0); const [indexing,setIndexing]=useState(false);
   const [gq,setGq]=useState(""); const [gqOpen,setGqOpen]=useState(false); const [gqHl,setGqHl]=useState(0); const gqRef=useRef(null);
   const [dq,setDq]=useState("");                  // opens/listings list search
+  const [lstatus,setLstatus]=useState("active");  // listings tab status filter: active|sold|under offer|withdrawn|off-market|all
   const [tq,setTq]=useState(""); const [tf,setTf]=useState("all");     // detail table search + filter
   const [cq,setCq]=useState(""); const [cf,setCf]=useState("all"); const [csort,setCsort]=useState({k:"last",d:-1}); const [csel,setCsel]=useState({}); const [chl,setChl]=useState(-1);
   const [cbulk,setCbulk]=useState(false); const [showDupes,setShowDupes]=useState(false); const [showInfo,setShowInfo]=useState(false);
@@ -3487,10 +3498,11 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   // ⌘K → search, Esc → clear.
   useEffect(()=>{ const k=e=>{ if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="k"){ e.preventDefault(); gqRef.current?.focus(); gqRef.current?.select(); } }; window.addEventListener("keydown",k); return ()=>window.removeEventListener("keydown",k); },[]);
 
-  const listingOh=(p)=>{ const pid=p.propertyId||p.id; return { id:`listing_${pid}`, propertyId:pid, address:p.address||"Unknown", suburb:p.suburb||"", beds:p.beds,baths:p.baths,car:p.car, price:p.price||"", contractUrl:p.contractUrl||"", igUrl:p.igUrl||"", auctionDate:p.auctionDate||"", access:p.access||"", notes:p.notes||"", _listing:true }; };
+  const listingOh=(p)=>{ const pid=p.propertyId||p.id; return { id:`listing_${pid}`, propertyId:pid, address:p.address||"Unknown", suburb:p.suburb||"", beds:p.beds,baths:p.baths,car:p.car, price:p.price||"", contractUrl:p.contractUrl||"", igUrl:p.igUrl||"", auctionDate:p.auctionDate||"", access:p.access||"", notes:p.notes||"", listingNotes:p.listingNotes||"", statusText:p.statusText||"", settlementDate:p.settlementDate||"", soldPrice:p.soldPrice||null, _listing:true }; };
   const specOf=(o)=>[o.beds&&`${o.beds}b`,o.baths&&`${o.baths}ba`,o.car&&`${o.car}c`].filter(Boolean).join(" · ")||"Apartment";
   const select=(oh)=>{ setSel(oh); setTq(""); setTf("all"); setShowInfo(false); crm.enterOpenHome(oh); };
   const auctionByProp=useMemo(()=>{ const m={}; [...(allListings||[]),...(opens||[])].forEach(o=>{ const pid=o.propertyId||o.id; if(o.auctionDate&&pid&&!m[pid]) m[pid]=o.auctionDate; }); return m; },[allListings,opens]);
+  const activeCount=(allListings||[]).filter(p=>!["sold","withdrawn","off-market","under offer"].includes(String(p.statusText||"").toLowerCase())).length;
   const feed=useMemo(()=>crmBuildFeed(index,auctionByProp),[index,auctionByProp]);
   const contacts=index?index.contacts:null;
   const hotCount=(contacts||[]).filter(c=>c.interest==="hot").length;
@@ -3594,8 +3606,17 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
       <div className="crm-filters" style={{border:"none",padding:"0 0 14px"}}><input value={dq} onChange={e=>setDq(e.target.value)} placeholder={tab==="opens"?"Filter opens…":"Filter listings…"} style={{marginLeft:0,minWidth:320}}/><span style={{marginLeft:"auto",fontSize:12.5,color:BROWN_L}}>Pick one to work it</span></div>
       {tab==="opens"&&(openDays||[]).filter(d=>(opensByDay[d]||[]).some(m)).map(d=><div key={d}><div className="crm-daylbl" style={{padding:"6px 2px 8px"}}>{crm.fmtDay?crm.fmtDay(d):d}</div><div className="crm-grid">{(opensByDay[d]||[]).filter(m).map(o=>card(o))}</div></div>)}
       {tab==="opens"&&opens.filter(m).length===0&&<div className="crm-empty">No opens match.</div>}
-      {tab==="listings"&&<div className="crm-grid">{(allListings||[]).filter(m).map(p=>card(listingOh(p)))}</div>}
-      {tab==="listings"&&(allListings||[]).filter(m).length===0&&<div className="crm-empty">No listings match.</div>}
+      {tab==="listings"&&<>
+        <div className="crm-filters" style={{border:"none",padding:"0 0 12px"}}>
+          {[["active","Active"],["sold","Sold"],["under offer","Under offer"],["withdrawn","Withdrawn"],["off-market","Off market"],["all","All"]].map(([k,l])=>{
+            const n=k==="all"?(allListings||[]).length:k==="active"?(allListings||[]).filter(p=>!["sold","withdrawn","off-market","under offer"].includes(String(p.statusText||"").toLowerCase())).length:(allListings||[]).filter(p=>String(p.statusText||"").toLowerCase()===k).length;
+            return <button key={k} className={`fchip${lstatus===k?" on":""}`} onClick={()=>setLstatus(k)}>{l}<span className="n" style={{marginLeft:5,opacity:.7}}>{n}</span></button>;
+          })}
+        </div>
+        {(()=>{ const sel=(allListings||[]).filter(m).filter(p=>{ const st=String(p.statusText||"").toLowerCase(); return lstatus==="all"?true:lstatus==="active"?!["sold","withdrawn","off-market","under offer"].includes(st):st===lstatus; });
+          return sel.length?<div className="crm-grid">{sel.map(p=>{ const sb=statusBadge(p.statusText); return card(listingOh(p), sb?<div style={{marginTop:6}}><span style={{fontSize:10.5,fontWeight:800,color:sb[1],background:sb[2],borderRadius:100,padding:"2px 8px"}}>{sb[0]}</span>{p.settlementDate?<span style={{fontSize:11,color:BROWN_L,marginLeft:8}}>Settles {fmtAuction(p.settlementDate)}</span>:null}</div>:null); })}</div>:<div className="crm-empty">No listings match.</div>;
+        })()}
+      </>}
     </div>;
   };
 
@@ -3616,9 +3637,9 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const feedCounts=feed.reduce((m,r)=>{ m[r.k]=(m[r.k]||0)+1; return m; },{});
   const todayOpens=(openDays||[]).map(d=>({d,list:(opensByDay[d]||[])})).filter(x=>x.list.length);
 
-  const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:allListings.length},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"owners",l:"Owners",ic:"⌘",ct:index?index.owners.length:null},{k:"match",l:"Buyer match",ic:"◎"}];
+  const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:activeCount},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"owners",l:"Owners",ic:"⌘",ct:index?index.owners.length:null},{k:"match",l:"Buyer match",ic:"◎"}];
   const title={today:"Today",opens:"Open homes",listings:"Listings",contacts:"Contacts",owners:"Owners",match:"Buyer match"}[tab];
-  const subtitle={today:new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"}),opens:`${opens.length} this week`,listings:`${allListings.length} active`,contacts:contacts?`${contacts.length} people · ${hotCount} hot`:"loading…",owners:index?`${index.owners.length} people who own property with Savvi`:"loading…",match:"Describe a property, find the buyers"}[tab];
+  const subtitle={today:new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"}),opens:`${opens.length} this week`,listings:`${activeCount} active`,contacts:contacts?`${contacts.length} people · ${hotCount} hot`:"loading…",owners:index?`${index.owners.length} people who own property with Savvi`:"loading…",match:"Describe a property, find the buyers"}[tab];
   const _q=dq.trim().toLowerCase(); const _m=o=>!_q||((o.address||"")+" "+(o.suburb||"")).toLowerCase().includes(_q);
 
   return <div className="crm">
@@ -3655,7 +3676,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
             <div className="crm-stats">
               <div className="crm-stat due" onClick={()=>setFeedFilter("all")}><div className="n">{feed.length}</div><div className="l">Actions waiting</div></div>
               <div className="crm-stat" onClick={()=>setTab("opens")}><div className="n">{opens.length}</div><div className="l">Opens this week</div></div>
-              <div className="crm-stat" onClick={()=>setTab("listings")}><div className="n">{allListings.length}</div><div className="l">Active listings</div></div>
+              <div className="crm-stat" onClick={()=>setTab("listings")}><div className="n">{activeCount}</div><div className="l">Active listings</div></div>
               <div className="crm-stat hot" onClick={()=>{ setTab("contacts"); setCf("hot"); }}><div className="n">{hotCount}</div><div className="l">Hot buyers</div></div>
             </div>
             <div className="crm-2col">
@@ -3860,6 +3881,8 @@ export default function App(){
   const[ctrBuyer,setCtrBuyer]=useState(null);
   const[ctrChannel,setCtrChannel]=useState("email");
   const[allListings,setAllListings]=useState([]);
+  const[showPast,setShowPast]=useState(false); // reveal sold/under-offer/past listings on the home screen
+  const[pastQ,setPastQ]=useState("");
   // Synthetic open context for the searched contact (their most-recent inspection's property),
   // so contract/interest actions target the right inspection. Carries the listing's contract
   // URL / suburb when we know the property, so the record's "Contract of sale" row can send
@@ -4462,7 +4485,10 @@ export default function App(){
   const propIndex = {};
   visibleOpens.forEach(oh => { if (oh.propertyId) propIndex[oh.propertyId] = `${oh.address||""}${oh.suburb?", "+oh.suburb:""}`.trim(); });
   (allListings||[]).forEach(p => { const pid = p.propertyId||p.id; if (pid && !propIndex[pid]) propIndex[pid] = `${p.address||""}${p.suburb?", "+p.suburb:""}`.trim(); });
-  const listingsOnly = allListings.filter(p => !openPropIds.has(Attio.id(p)));
+  const isLiveStatus = s => !["sold","withdrawn","off-market","under offer"].includes(String(s||"").toLowerCase());
+  const activeListings = (allListings||[]).filter(p => isLiveStatus(p.statusText));
+  const pastListings = (allListings||[]).filter(p => !isLiveStatus(p.statusText));
+  const listingsOnly = activeListings.filter(p => !openPropIds.has(Attio.id(p)));
   // Listing/open search: match on address + suburb so an agent can jump straight to one.
   const _lq = listingQ.trim().toLowerCase();
   const _oMatch = oh => !_lq || `${oh.address||""} ${oh.suburb||""}`.toLowerCase().includes(_lq);
@@ -4599,6 +4625,25 @@ export default function App(){
               </div>
             );
           })}
+
+          {/* ── SOLD & PAST LISTINGS: still openable to review buyers + settlement dates ── */}
+          {pastListings.length>0&&<>
+            <div className="sec-lbl" style={{paddingTop:22,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>setShowPast(v=>!v)}>
+              <span>Sold &amp; past listings · {pastListings.length}</span>
+              <span style={{fontSize:12,color:BLUE_D,fontWeight:800}}>{showPast?"Hide":"Show"}</span>
+            </div>
+            {showPast&&<div style={{padding:"0 20px 8px"}}>
+              <input className="fi" style={{width:"100%",marginBottom:10}} placeholder="Search sold & past…" value={pastQ} onChange={e=>setPastQ(e.target.value)}/>
+              {pastListings.filter(p=>!pastQ||(((p.address||"")+" "+(p.suburb||"")).toLowerCase().includes(pastQ.toLowerCase()))).sort((a,b)=>String(b.campaignStart||"").localeCompare(String(a.campaignStart||""))).map(p=>{
+                const pid=p.id; const sb=statusBadge(p.statusText);
+                const synthOh={id:`listing_${pid}`,propertyId:pid,address:p.address,suburb:p.suburb,beds:p.beds,baths:p.baths,car:p.car,price:p.price||"",igUrl:p.igUrl||"",contractUrl:p.contractUrl||"",listingNotes:p.listingNotes||"",settlementDate:p.settlementDate||"",soldPrice:p.soldPrice||null,statusText:p.statusText||"",auctionDate:p.auctionDate||"",time:"",date:"",agent:agentName,_listing:true};
+                return <div key={pid} onClick={()=>enterOpenHome(synthOh)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"11px 12px",marginBottom:8,borderRadius:11,border:`1px solid ${SAND_D}`,background:"#fff",cursor:"pointer"}}>
+                  <div style={{minWidth:0}}><div style={{fontWeight:700,fontSize:14,color:ESPRESSO,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{streetLine(p.address,p.suburb)}</div><div style={{fontSize:12,color:BROWN_L}}>{[p.suburb,p.settlementDate?`settles ${fmtAuction(p.settlementDate)}`:""].filter(Boolean).join(" · ")}</div></div>
+                  {sb&&<span style={{flexShrink:0,fontSize:11,fontWeight:800,color:sb[1],background:sb[2],borderRadius:100,padding:"3px 9px"}}>{sb[0]}</span>}
+                </div>;
+              })}
+            </div>}
+          </>}
         </>}
       </>}
 
