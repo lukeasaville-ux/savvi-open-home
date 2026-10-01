@@ -3514,7 +3514,7 @@ function GciPanel(){
   const kpi=(n,l,hot)=>(<div style={{flex:1,minWidth:150,background:hot?"#FBE9DF":LINEN,border:`1px solid ${hot?"#F3C3AC":SAND_D}`,borderRadius:12,padding:"13px 15px"}}>
     <div style={{fontSize:23,fontWeight:800,color:hot?AMBER_D:BROWN}}>{money(n)}</div>
     <div style={{fontSize:11,letterSpacing:.4,textTransform:"uppercase",color:BROWN_M,marginTop:3,fontWeight:700}}>{l}</div></div>);
-  const dealTable=(f)=>(<div className="crm-card" style={{flex:1,minWidth:300}}>
+  const dealTable=(f,key)=>(<div key={key} className="crm-card" style={{flex:1,minWidth:300}}>
     <div style={{fontSize:15,fontWeight:800,color:BROWN}}>{f.label} · {money(f.gross)}</div>
     <div style={{fontSize:12.5,color:BROWN_M,margin:"2px 0 12px"}}>{(f.deals||[]).length} exchanged · net {money(f.net)}</div>
     <table style={{width:"100%",borderCollapse:"collapse",fontSize:13.5}}>
@@ -3544,7 +3544,7 @@ function GciPanel(){
           </div>); })}
       </div>
     </div>
-    <div style={{display:"flex",gap:16,flexWrap:"wrap",marginTop:16}}>{fc.map((f,i)=><React.Fragment key={i}>{dealTable(f)}</React.Fragment>)}</div>
+    <div style={{display:"flex",gap:16,flexWrap:"wrap",marginTop:16}}>{fc.map((f,i)=>dealTable(f,i))}</div>
     <div style={{fontSize:11,color:BROWN_L,marginTop:16,lineHeight:1.5}}>Source: Stocklist → Sold 2026 CY (sold price, fee, gross &amp; net commission, settlement date). Forecast months use the contracted settlement date on exchanged deals.{upd?" Refreshed "+new Date(upd).toLocaleString("en-AU",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit"})+".":""}</div>
   </div>);
 }
