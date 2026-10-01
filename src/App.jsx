@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v51-vendor-precompute";
+const BUILD = "v52-vendor-endwrite";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -828,6 +828,8 @@ const openStartAt = (o) => { if(!o||!o.date) return null; const t=String(o.time|
 // "Attended inspection" record is always truthful. Past opens stay addable (late logging).
 const OPEN_LEAD_MS = 30*60000;
 const canAddToOpen = (o) => { const d=openStartAt(o); return d ? Date.now() >= d.getTime()-OPEN_LEAD_MS : false; };
+// End time of an open — from the end of its time range, else start + 30 min.
+const openEndAt = (o) => { if(!o||!o.date) return null; const endStr=(String(o.time||"").split(/[–-]/)[1]||"").trim(); const m=endStr.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i); if(m){ let hh=+m[1],mm=m[2]?+m[2]:0; const ap=m[3].toLowerCase(); if(ap==="pm"&&hh<12)hh+=12; if(ap==="am"&&hh===12)hh=0; const p=String(o.date).split("-").map(Number); if(p.length>=3) return new Date(p[0],(p[1]||1)-1,p[2]||1,hh,mm,0,0); } const s=openStartAt(o); return s?new Date(s.getTime()+30*60000):null; };
 const openOpensFromLabel = (o) => { const d=openStartAt(o); if(!d) return ""; return new Date(d.getTime()-OPEN_LEAD_MS).toLocaleTimeString("en-AU",{hour:"numeric",minute:"2-digit"}).replace(/\s/g,"").toLowerCase(); };
 // Every inspection a buyer has had, from their "Inspected … at the <when> open" notes plus
 // (for older records without one) the opens they're registered at that we can date.
@@ -4148,6 +4150,8 @@ export default function App(){
   // so it's ready to show the instant "Vendor update" is tapped. Debounced, current open only.
   const vendorReport = useRef({});   // { [openHomeId]: { sig, text } }
   const vendorTimer = useRef(null);
+  const buyersRef = useRef(buyers); buyersRef.current = buyers; // latest buyers, readable in a timer
+  const genVendor = (oh) => { const list=(buyersRef.current[oh.id]||[]); if(!list.length) return; const sig=vendorSig("open",list); if(vendorReport.current[oh.id]&&vendorReport.current[oh.id].sig===sig) return; aiVendorSummary(oh,list,"open").then(t=>{ if(t&&t.trim()) vendorReport.current[oh.id]={sig,text:t}; }).catch(()=>{}); };
   useEffect(()=>{
     if(!openHome||openHome._demo||isDemo) return;
     const ohId=openHome.id; const list=(buyers[ohId]||[]);
@@ -4156,10 +4160,22 @@ export default function App(){
     if(vendorReport.current[ohId]&&vendorReport.current[ohId].sig===sig) return; // cache already current
     clearTimeout(vendorTimer.current);
     const oh=openHome;
-    vendorTimer.current=setTimeout(async()=>{ try{ const t=await aiVendorSummary(oh, list, "open"); if(t&&t.trim()) vendorReport.current[ohId]={sig, text:t}; }catch(e){} }, 8000);
+    vendorTimer.current=setTimeout(()=>genVendor(oh), 8000);
     return ()=>clearTimeout(vendorTimer.current);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[buyers, openHome?.id, isDemo]);
+
+  // Final-minute auto-write: as a live open winds down, write the wrap once more at the end so
+  // it reflects every last note and is ready the moment you go to send it.
+  useEffect(()=>{
+    if(!openHome||openHome._demo||openHome._listing||isDemo) return;
+    const end=openEndAt(openHome); if(!end) return;
+    const delay=(end.getTime()-60000)-Date.now(); // ~1 min before the scheduled end
+    if(delay<-10*60000) return; // open ended well over 10 min ago — skip
+    const t=setTimeout(()=>genVendor(openHome), Math.max(1000,delay));
+    return ()=>clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[openHome?.id,isDemo]);
 
   // Fetch this property's full open-home list (past + upcoming) when the Inspections view is
   // opened — it groups buyers under each dated inspection session.
