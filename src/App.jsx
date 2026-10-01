@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v45-buyer-views";
+const BUILD = "v46-inspections-grouped";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3839,6 +3839,8 @@ export default function App(){
   const[showDetail,setShowDetail]=useState(false);
   const[bFilters,setBFilters]=useState([]); // active keys: hot|watching|cool|contract|repeat (empty = all) — desktop CRM
   const[bView,setBView]=useState("interest"); // phone buyer-list view: interest|inspections|contracts|enquiries
+  const[propOpens,setPropOpens]=useState([]);   // all opens for the current property (for the Inspections view grouping)
+  const[propOpensFor,setPropOpensFor]=useState(null); // which propertyId propOpens was fetched for
   const[active,setActive]=useState(null);
   // Contact-search → open that person's full page (their profile across every property).
   const[searchProfile,setSearchProfile]=useState(null);
@@ -4090,6 +4092,16 @@ export default function App(){
     return ()=>{ clearInterval(iv); window.removeEventListener("focus",tick); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[openHome?.id,isDemo]);
+
+  // Fetch this property's full open-home list (past + upcoming) when the Inspections view is
+  // opened — it groups buyers under each dated inspection session.
+  useEffect(()=>{
+    if(bView!=="inspections"||!openHome||openHome._demo) return;
+    const pid=openHome.propertyId||openHome.id;
+    if(propOpensFor===pid) return;
+    Attio.getPropertyOpens(pid).then(l=>{ setPropOpens(l||[]); setPropOpensFor(pid); }).catch(()=>{ setPropOpens([]); setPropOpensFor(pid); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[bView,openHome?.id]);
 
   // "Add to this open" (buyer card): someone already on the listing from an earlier open or
   // an enquiry has turned up again — create their inspection for THIS open (a repeat visit,
@@ -4655,8 +4667,8 @@ export default function App(){
             : filteredBuyers.map(b=>rowOf(b,"f"))}
         </>}
 
-        {/* Interest / Inspections = the same buyers, sorted by heat or by most-recent inspection */}
-        {!buyersLoading&&(bView==="interest"||bView==="inspections")&&<>
+        {/* Interest = At this open + all buyers, sorted hottest first */}
+        {!buyersLoading&&bView==="interest"&&<>
           {filteredBuyers.filter(b=>b.mobile).length>0&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:14,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Text all {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
           {!openHome._listing&&<>
             <div className="sec-lbl" style={{padding:"2px 0 10px"}}>At this open</div>
@@ -4664,19 +4676,46 @@ export default function App(){
               <div style={{fontSize:36,marginBottom:10}}>👥</div>
               <div style={{fontSize:14,lineHeight:1.5}}>No buyers yet — tap Add buyer to register the first.</div>
             </div>}
-            {pbReal.slice().sort(viewSort).map(b=>rowOf(b,"o"))}
+            {pbReal.slice().sort(byInterest).map(b=>rowOf(b,"o"))}
           </>}
           {(propExtraReal.length>0||openHome._listing)&&<>
             <div className="sec-lbl" style={{padding:openHome._listing?"2px 0 4px":"20px 0 4px"}}>{openHome._listing?"Buyers · this property":"All buyers · this property"}</div>
             <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Everyone registered to this property to date — call back, add notes or send a contract any day.</div>
             {propExtraReal.length===0&&openHome._listing&&<div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8"}}><div style={{fontSize:36,marginBottom:10}}>👥</div><div style={{fontSize:14,lineHeight:1.5}}>No buyers registered on this listing yet — tap Add buyer to add one.</div></div>}
-            {propExtraReal.slice().sort(viewSort).map(b=>rowOf(b,"p"))}
+            {propExtraReal.slice().sort(byInterest).map(b=>rowOf(b,"p"))}
           </>}
           {enquiries.length>0&&<>
             <div className="sec-lbl" style={{padding:"24px 0 4px"}}>Enquiries · {enquiries.length}</div>
             <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Online enquiries from realestate.com.au &amp; Domain — lower priority than buyers who've inspected.</div>
             {enquiries.map(b=>rowOf(b,"e"))}
           </>}
+        </>}
+
+        {/* Inspections = grouped by inspection session, most recent first, with buyers under each */}
+        {!buyersLoading&&bView==="inspections"&&<>
+          {filteredBuyers.filter(b=>b.mobile).length>0&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:14,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Text all {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
+          {(()=>{
+            const pid=openHome.propertyId||openHome.id;
+            if(propOpensFor!==pid) return <div style={{textAlign:"center",padding:"24px"}}><div className="sp"/></div>;
+            const sorted=(propOpens||[]).slice().sort((a,b)=>{const da=openStartAt(a),db=openStartAt(b);return (db?db.getTime():0)-(da?da.getTime():0);});
+            const shown=new Set(); const groups=[];
+            for(const o of sorted){ const bs=propReal.filter(b=>(b.openHomeIds||[]).includes(o.id)); if(bs.length){ bs.forEach(b=>shown.add(b.id)); groups.push({o,bs}); } }
+            const orphans=propReal.filter(b=>!shown.has(b.id));
+            if(groups.length===0&&orphans.length===0) return <div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>No inspections recorded yet.</div>;
+            return <>
+              {groups.map(({o,bs})=><div key={o.id}>
+                <div className="sec-lbl" style={{padding:"14px 0 8px",display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
+                  <span>{openWhen(o)||o.date}{o.end_time?`–${o.end_time}`:""}{o.agent_name?` · ${o.agent_name}`:""}</span>
+                  <span style={{fontSize:12,color:BROWN_L,fontWeight:600}}>{bs.length} buyer{bs.length===1?"":"s"}</span>
+                </div>
+                {bs.slice().sort(byInterest).map(b=>rowOf(b,"g"+o.id))}
+              </div>)}
+              {orphans.length>0&&<div>
+                <div className="sec-lbl" style={{padding:"18px 0 6px"}}>Not tied to a dated inspection</div>
+                {orphans.slice().sort(byInspection).map(b=>rowOf(b,"gx"))}
+              </div>}
+            </>;
+          })()}
         </>}
         <div style={{height:80}}/>
       </div>
