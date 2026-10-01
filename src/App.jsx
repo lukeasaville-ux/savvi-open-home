@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v47-keep-sold-listings";
+const BUILD = "v48-vendor-btn-instant";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2312,6 +2312,7 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers}){
   const[sumText,setSumText]=useState("");
   const[loading,setLoading]=useState(false);
   const[copied,setCopied]=useState(false);
+  const[edited,setEdited]=useState(false); // the agent has hand-edited the text — don't clobber on a refresh
   const[mode,setMode]=useState("open"); // "open" = quick post-open wrap (auto) · "campaign" = full weekly report
   const genSeq=useRef(0); // ignore a slower in-flight generation once you've switched mode
   const drag=useSheetDrag(onClose);
@@ -2359,8 +2360,15 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers}){
     if(genSeq.current===seq) setLoading(false);
   },[openHome,buyers,allBuyers,build]);
   // On open, instantly generate the quick post-open wrap (unchanged behaviour).
-  useEffect(()=>{if(open){setMode("open");gen("open");}},[open]);
-  const switchMode=useCallback((m)=>{ setMode(m); gen(m); },[gen]);
+  const lastSig=useRef("");
+  const sigFor=(m)=>{ const src=m==="campaign"?((allBuyers&&allBuyers.length)?allBuyers:buyers):buyers; return m+"|"+src.map(b=>b.id+":"+b.interest+":"+((b.notes||[]).length)+":"+(b.contractSent?1:0)).join(","); };
+  // On open: show the quick post-open wrap straight away (button is instant; the refresh
+  // runs in the background).
+  useEffect(()=>{ if(open){ setMode("open"); setEdited(false); lastSig.current=sigFor("open"); gen("open"); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[open]);
+  // Regenerate when you switch mode, or when a background refresh brings newer buyer data
+  // (e.g. Sam's latest note) — never while you're mid-edit, and skip if nothing changed.
+  useEffect(()=>{ if(!open||edited) return; const s=sigFor(mode); if(s===lastSig.current) return; lastSig.current=s; gen(mode); /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[buyers,allBuyers,mode]);
+  const switchMode=useCallback((m)=>{ setEdited(false); setMode(m); },[]);
 
   // Send the (edited) update via WhatsApp: opens WhatsApp with the text pre-filled
   // so you pick the listing's group and hit send — a chance to eyeball it first.
@@ -2388,7 +2396,7 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers}){
         <div className="sum-box">
           <div className="sum-lbl">{mode==="campaign"?"Weekly campaign report · edit before sending":"Update for today's open · edit before sending"}</div>
           {loading&&<div className="sum-loading"><div className="sp"/><div className="sp-txt">{mode==="campaign"?"Writing the campaign report…":"Writing your vendor update…"}</div></div>}
-          {!loading&&<textarea className="sum-edit" value={sumText} onChange={e=>setSumText(e.target.value)} onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()} spellCheck={true}/>}
+          {!loading&&<textarea className="sum-edit" value={sumText} onChange={e=>{setSumText(e.target.value);setEdited(true);}} onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()} spellCheck={true}/>}
         </div>
         <div className="cpy-row">
           <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 16px",fontSize:13,whiteSpace:"nowrap"}} onClick={()=>{navigator.clipboard?.writeText(sumText).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),2000);}}>{copied?"✓ Copied":"Copy"}</button>
@@ -3558,7 +3566,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
           <button className="crm-btn" disabled={!propAll.some(b=>b.mobile)} onClick={()=>{ crm.setBFilters([]); crm.setShowBulk(true); }}>Text buyers</button>
           <button className="crm-btn" disabled={!propAll.some(b=>b.email)} onClick={()=>emailBuyers(propReal)}>Email buyers</button>
           {oh.contractUrl?<button className="crm-btn" onClick={()=>crm.openQuickContract(oh)}>Send contract</button>:<ContractUpload compact label="Add contract PDF" propertyId={oh.propertyId} onUploaded={crm.applyContractUrl}/>}
-          <button className="crm-btn" onClick={async()=>{ if(crm.refreshBuyers) await crm.refreshBuyers(); crm.setShowSum(true); }}>Vendor update</button>
+          <button className="crm-btn" onClick={()=>{ crm.setShowSum(true); if(crm.refreshBuyers) crm.refreshBuyers(); }}>Vendor update</button>
           <button className="crm-btn" onClick={()=>crm.setShowMatch(true)}>Matching buyers</button>
           <button className="crm-btn" onClick={()=>crm.setShowAssistant(true)}>AI assistant</button>
           <button className="crm-btn" onClick={()=>setShowInfo(v=>!v)}>Listing info {showInfo?"▴":"▾"}</button>
@@ -4676,7 +4684,7 @@ export default function App(){
         <button className="btn-blue" onClick={()=>setShowAssistant(true)}>AI assistant</button>
       </div>
       <div className="acts" style={{paddingTop:8}}>
-        <button className="btn-outline" style={{flex:1}} onClick={async()=>{ await refreshBuyers(); setShowSum(true); }}>Vendor update</button>
+        <button className="btn-outline" style={{flex:1}} onClick={()=>{ setShowSum(true); refreshBuyers(); }}>Vendor update</button>
         {listingHasInfo(openHome)&&<button className="btn-outline" style={{flex:1}} onClick={()=>setShowInfo(s=>!s)}>Listing info {showInfo?"▲":"▼"}</button>}
       </div>
       <div className="acts" style={{paddingTop:8}}>
