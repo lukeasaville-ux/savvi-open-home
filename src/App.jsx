@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v49-vendor-voice";
+const BUILD = "v50-vendor-instant-draft";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2313,6 +2313,8 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers}){
   const[loading,setLoading]=useState(false);
   const[copied,setCopied]=useState(false);
   const[edited,setEdited]=useState(false); // the agent has hand-edited the text — don't clobber on a refresh
+  const editedRef=useRef(false);           // same flag, readable synchronously inside an in-flight generation
+  const[polishing,setPolishing]=useState(false); // AI is upgrading the instant draft in the background
   const[mode,setMode]=useState("open"); // "open" = quick post-open wrap (auto) · "campaign" = full weekly report
   const genSeq=useRef(0); // ignore a slower in-flight generation once you've switched mode
   const drag=useSheetDrag(onClose);
@@ -2352,23 +2354,32 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers}){
     if(!openHome)return;
     const useMode=m||"open";
     const seq=++genSeq.current; // this is now the current request
-    // Post-open wrap = today's attendees. Campaign report = EVERYONE on the property.
     const src=useMode==="campaign"?((allBuyers&&allBuyers.length)?allBuyers:buyers):buyers;
-    setLoading(true);setSumText("");
-    try{ const t=await aiVendorSummary(openHome,src,useMode); if(genSeq.current!==seq)return; if(t&&t.trim()) setSumText(t); else build(); }
-    catch{ if(genSeq.current===seq) build(); }
-    if(genSeq.current===seq) setLoading(false);
+    if(useMode==="campaign"){
+      // Weekly report: structured + Opus-written, so show the spinner while it generates.
+      setPolishing(false);setLoading(true);setSumText("");
+      try{ const t=await aiVendorSummary(openHome,src,useMode); if(genSeq.current!==seq)return; if(t&&t.trim()) setSumText(t); else build(); }
+      catch{ if(genSeq.current===seq) build(); }
+      if(genSeq.current===seq) setLoading(false);
+      return;
+    }
+    // Post-open wrap: show a draft straight from OUR notes INSTANTLY (no spinner), then
+    // quietly upgrade it to the polished version in the background — so it never feels slow.
+    setLoading(false); build(); setPolishing(true);
+    try{ const t=await aiVendorSummary(openHome,src,useMode); if(genSeq.current!==seq)return; if(t&&t.trim()&&!editedRef.current) setSumText(t); }
+    catch{ /* keep the instant draft */ }
+    if(genSeq.current===seq) setPolishing(false);
   },[openHome,buyers,allBuyers,build]);
   // On open, instantly generate the quick post-open wrap (unchanged behaviour).
   const lastSig=useRef("");
   const sigFor=(m)=>{ const src=m==="campaign"?((allBuyers&&allBuyers.length)?allBuyers:buyers):buyers; return m+"|"+src.map(b=>b.id+":"+b.interest+":"+((b.notes||[]).length)+":"+(b.contractSent?1:0)).join(","); };
   // On open: show the quick post-open wrap straight away (button is instant; the refresh
   // runs in the background).
-  useEffect(()=>{ if(open){ setMode("open"); setEdited(false); lastSig.current=sigFor("open"); gen("open"); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[open]);
+  useEffect(()=>{ if(open){ setMode("open"); setEdited(false); editedRef.current=false; lastSig.current=sigFor("open"); gen("open"); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[open]);
   // Regenerate when you switch mode, or when a background refresh brings newer buyer data
   // (e.g. Sam's latest note) — never while you're mid-edit, and skip if nothing changed.
   useEffect(()=>{ if(!open||edited) return; const s=sigFor(mode); if(s===lastSig.current) return; lastSig.current=s; gen(mode); /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[buyers,allBuyers,mode]);
-  const switchMode=useCallback((m)=>{ setEdited(false); setMode(m); },[]);
+  const switchMode=useCallback((m)=>{ setEdited(false); editedRef.current=false; setMode(m); },[]);
 
   // Send the (edited) update via WhatsApp: opens WhatsApp with the text pre-filled
   // so you pick the listing's group and hit send — a chance to eyeball it first.
@@ -2395,8 +2406,11 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers}){
         </div>
         <div className="sum-box">
           <div className="sum-lbl">{mode==="campaign"?"Weekly campaign report · edit before sending":"Update for today's open · edit before sending"}</div>
-          {loading&&<div className="sum-loading"><div className="sp"/><div className="sp-txt">{mode==="campaign"?"Writing the campaign report…":"Writing your vendor update…"}</div></div>}
-          {!loading&&<textarea className="sum-edit" value={sumText} onChange={e=>{setSumText(e.target.value);setEdited(true);}} onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()} spellCheck={true}/>}
+          {loading&&<div className="sum-loading"><div className="sp"/><div className="sp-txt">Writing the campaign report…</div></div>}
+          {!loading&&<>
+            {polishing&&<div style={{display:"flex",alignItems:"center",gap:7,fontSize:12,color:BROWN_L,margin:"0 0 8px"}}><div className="sp" style={{width:13,height:13,borderWidth:2}}/>Tidying the wording — your draft below is ready to send now</div>}
+            <textarea className="sum-edit" value={sumText} onChange={e=>{setSumText(e.target.value);setEdited(true);editedRef.current=true;}} onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()} spellCheck={true}/>
+          </>}
         </div>
         <div className="cpy-row">
           <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 16px",fontSize:13,whiteSpace:"nowrap"}} onClick={()=>{navigator.clipboard?.writeText(sumText).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),2000);}}>{copied?"✓ Copied":"Copy"}</button>
