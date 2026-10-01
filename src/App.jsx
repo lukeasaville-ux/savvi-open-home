@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v52-vendor-endwrite";
+const BUILD = "v53-gci-pipeline";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -208,6 +208,12 @@ const Attio = {
   async getAllActiveListings() {
     const j = await call("getListings");
     return j?.ok ? { ok: true, data: j.data || [] } : { ok: false, data: [] };
+  },
+  // Commission/GCI snapshot (banked by month + Oct/Nov forecast) for the Pipeline tab.
+  // Written nightly by the refresh task from the Stocklist sheet; served from n8n.
+  async getGci() {
+    const j = await call("getGci");
+    return j?.ok ? (j.data || null) : null;
   },
   // Warm the shared inspection/people cache in the background (called on the home
   // screen) so the first tap into an open renders its buyer list instantly.
@@ -3494,6 +3500,55 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
 }
 function DetailHost(props){ const {desktop,...rest}=props; return desktop?<DesktopRecord {...rest}/>:<DetailSheet {...rest}/>; }
 
+/* ── Pipeline / GCI dashboard (desktop) — banked commission by month + forecast ── */
+function GciPanel(){
+  const [g,setG]=useState(null); const [err,setErr]=useState(false); const [upd,setUpd]=useState(null);
+  useEffect(()=>{ let on=true; (async()=>{ try{ const j=await call("getGci"); if(!on) return; if(j&&j.ok){ setG(j.data||{}); setUpd(j.updatedAt||null); } else setErr(true); }catch(e){ if(on) setErr(true); } })(); return ()=>{on=false;}; },[]);
+  const money=n=>"$"+Math.round(n||0).toLocaleString("en-AU");
+  if(err) return <div className="crm-card" style={{padding:26,color:BROWN_M,fontSize:14}}>Couldn't load the commission data just now. It refreshes each night from the Stocklist.</div>;
+  if(!g) return <div className="crm-card" style={{padding:50,textAlign:"center"}}><div className="sp"/></div>;
+  const monthly=g.monthly||[]; const fc=g.forecast||[]; const banked=g.banked||{gross:0,net:0,n:0};
+  const bankedMs=monthly.filter(m=>!m.fc);
+  const avg=bankedMs.length?Math.round(bankedMs.reduce((s,m)=>s+(m.gross||0),0)/bankedMs.length):0;
+  const max=Math.max(1,...monthly.map(m=>m.gross||0));
+  const kpi=(n,l,hot)=>(<div style={{flex:1,minWidth:150,background:hot?"#FBE9DF":LINEN,border:`1px solid ${hot?"#F3C3AC":SAND_D}`,borderRadius:12,padding:"13px 15px"}}>
+    <div style={{fontSize:23,fontWeight:800,color:hot?AMBER_D:BROWN}}>{money(n)}</div>
+    <div style={{fontSize:11,letterSpacing:.4,textTransform:"uppercase",color:BROWN_M,marginTop:3,fontWeight:700}}>{l}</div></div>);
+  const dealTable=(f)=>(<div className="crm-card" style={{flex:1,minWidth:300}}>
+    <div style={{fontSize:15,fontWeight:800,color:BROWN}}>{f.label} · {money(f.gross)}</div>
+    <div style={{fontSize:12.5,color:BROWN_M,margin:"2px 0 12px"}}>{(f.deals||[]).length} exchanged · net {money(f.net)}</div>
+    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13.5}}>
+      <tbody>{(f.deals||[]).map((d,i)=>(<tr key={i}>
+        <td style={{padding:"7px 0",borderTop:`1px solid ${SAND}`,color:BROWN}}>{d.addr}{d.cond?<span style={{fontSize:10,fontWeight:700,color:"#8A5A16",background:"#FBF0DC",padding:"1px 7px",borderRadius:20,marginLeft:6}}>conditional</span>:null}</td>
+        <td style={{padding:"7px 0",borderTop:`1px solid ${SAND}`,color:BROWN_M,whiteSpace:"nowrap"}}>{d.settle}</td>
+        <td style={{padding:"7px 0",borderTop:`1px solid ${SAND}`,textAlign:"right",fontWeight:700,color:BROWN,fontVariantNumeric:"tabular-nums"}}>{money(d.gross)}</td>
+      </tr>))}</tbody>
+    </table>
+    <div style={{display:"flex",justifyContent:"space-between",fontSize:13.5,fontWeight:800,color:BROWN,paddingTop:10,borderTop:`2px solid ${ESPRESSO}`,marginTop:4}}><span>Total</span><span>{money(f.gross)}</span></div>
+  </div>);
+  return (<div>
+    <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16}}>
+      {fc.map(f=>kpi(f.gross,`${f.label} · ${(f.deals||[]).length} deals`,true))}
+      {kpi(banked.gross,`Banked YTD · ${banked.n} settled`,false)}
+    </div>
+    <div className="crm-card">
+      <div style={{fontSize:15,fontWeight:800,color:BROWN}}>Gross commission by settlement month</div>
+      <div style={{fontSize:12.5,color:BROWN_M,margin:"2px 0 14px"}}>Solid = banked. Striped = forecast (exchanged, awaiting settlement). Monthly average banked so far: {money(avg)}.</div>
+      <div style={{display:"flex",alignItems:"flex-end",gap:10,height:210,paddingTop:6}}>
+        {monthly.map((m,i)=>{ const h=Math.round(18+((m.gross||0)/max)*150); const bg=m.fc?`repeating-linear-gradient(45deg,#C9A24B,#C9A24B 6px,#ddbf78 6px,#ddbf78 12px)`:AMBER;
+          return (<div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end"}}>
+            <div style={{display:"flex",alignItems:"flex-end",height:150}}><div style={{width:30,height:h,background:bg,borderRadius:"5px 5px 0 0"}}/></div>
+            <div style={{fontSize:11.5,fontWeight:800,marginTop:6,color:BROWN}}>{Math.round((m.gross||0)/1000)}k</div>
+            <div style={{fontSize:11,color:BROWN_M,marginTop:2}}>{m.label}{m.fc?"*":""}</div>
+            <div style={{fontSize:10,color:BROWN_L}}>{m.n}</div>
+          </div>); })}
+      </div>
+    </div>
+    <div style={{display:"flex",gap:16,flexWrap:"wrap",marginTop:16}}>{fc.map((f,i)=><React.Fragment key={i}>{dealTable(f)}</React.Fragment>)}</div>
+    <div style={{fontSize:11,color:BROWN_L,marginTop:16,lineHeight:1.5}}>Source: Stocklist → Sold 2026 CY (sold price, fee, gross &amp; net commission, settlement date). Forecast months use the contracted settlement date on exchanged deals.{upd?" Refreshed "+new Date(upd).toLocaleString("en-AU",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit"})+".":""}</div>
+  </div>);
+}
+
 /* ── The desktop shell ── */
 function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allListings, listingsOnly, propIndex, onOpenContact, onLogout, searchLoadingId, crm }){
   const [tab,setTabRaw]=useState(()=>{ try{ return localStorage.getItem("savvi_crm_tab")||"today"; }catch(e){ return "today"; } });
@@ -3667,7 +3722,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const feedCounts=feed.reduce((m,r)=>{ m[r.k]=(m[r.k]||0)+1; return m; },{});
   const todayOpens=(openDays||[]).map(d=>({d,list:(opensByDay[d]||[])})).filter(x=>x.list.length);
 
-  const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:activeCount},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"owners",l:"Owners",ic:"⌘",ct:index?index.owners.length:null},{k:"match",l:"Buyer match",ic:"◎"}];
+  const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:activeCount},{k:"pipeline",l:"Pipeline",ic:"◧"},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"owners",l:"Owners",ic:"⌘",ct:index?index.owners.length:null},{k:"match",l:"Buyer match",ic:"◎"}];
   const title={today:"Today",opens:"Open homes",listings:"Listings",contacts:"Contacts",owners:"Owners",match:"Buyer match"}[tab];
   const subtitle={today:new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"}),opens:`${opens.length} this week`,listings:`${activeCount} active`,contacts:contacts?`${contacts.length} people · ${hotCount} hot`:"loading…",owners:index?`${index.owners.length} people who own property with Savvi`:"loading…",match:"Describe a property, find the buyers"}[tab];
   const _q=dq.trim().toLowerCase(); const _m=o=>!_q||((o.address||"")+" "+(o.suburb||"")).toLowerCase().includes(_q);
@@ -3777,6 +3832,8 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
           </>}
 
           {(tab==="opens"||tab==="listings")&&(sel?renderWorkspace():renderPicker())}
+
+          {tab==="pipeline"&&<GciPanel/>}
 
           {tab==="contacts"&&<div className="crm-card">
             <div className="crm-filters">
