@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v50-vendor-instant-draft";
+const BUILD = "v51-vendor-precompute";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -763,6 +763,9 @@ async function aiBuyerProfile(buyer) {
 const VENDOR_NO_NOTE = "didn't get the chance to have much of a chat on the day — we'll follow them up this week";
 // A buyer marked cool with no other notes — keep it honest and neutral (no invented calls).
 const OUT_NO_NOTE = "had a look through but it's not quite what they're after";
+// Signature of a buyer set for the vendor wrap — changes when interest, note count or contract
+// status changes (order-independent), so a cached report can tell if it's still current.
+const vendorSig = (mode, list) => mode+"|"+(list||[]).map(b=>b.id+":"+b.interest+":"+((b.notes||[]).length)+":"+(b.contractSent?1:0)).sort().join(",");
 async function aiVendorSummary(openHome, buyers, mode) {
   const isCampaign = mode === "campaign";
   // The campaign report names only buyers who INSPECTED — online enquiries are counted,
@@ -2308,7 +2311,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
 /* ════════════════════════════════════════════
    VENDOR SUMMARY SHEET
 ════════════════════════════════════════════ */
-function SummarySheet({open,onClose,openHome,buyers,allBuyers}){
+function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed}){
   const[sumText,setSumText]=useState("");
   const[loading,setLoading]=useState(false);
   const[copied,setCopied]=useState(false);
@@ -2372,10 +2375,13 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers}){
   },[openHome,buyers,allBuyers,build]);
   // On open, instantly generate the quick post-open wrap (unchanged behaviour).
   const lastSig=useRef("");
-  const sigFor=(m)=>{ const src=m==="campaign"?((allBuyers&&allBuyers.length)?allBuyers:buyers):buyers; return m+"|"+src.map(b=>b.id+":"+b.interest+":"+((b.notes||[]).length)+":"+(b.contractSent?1:0)).join(","); };
+  const sigFor=(m)=>vendorSig(m, m==="campaign"?((allBuyers&&allBuyers.length)?allBuyers:buyers):buyers);
   // On open: show the quick post-open wrap straight away (button is instant; the refresh
   // runs in the background).
-  useEffect(()=>{ if(open){ setMode("open"); setEdited(false); editedRef.current=false; lastSig.current=sigFor("open"); gen("open"); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[open]);
+  useEffect(()=>{ if(open){ setMode("open"); setEdited(false); editedRef.current=false; const sig=sigFor("open"); lastSig.current=sig;
+      if(precomputed&&precomputed.sig===sig&&precomputed.text){ setLoading(false); setPolishing(false); setSumText(precomputed.text); } // ready in the background → instant
+      else gen("open");
+    } /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[open]);
   // Regenerate when you switch mode, or when a background refresh brings newer buyer data
   // (e.g. Sam's latest note) — never while you're mid-edit, and skip if nothing changed.
   useEffect(()=>{ if(!open||edited) return; const s=sigFor(mode); if(s===lastSig.current) return; lastSig.current=s; gen(mode); /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[buyers,allBuyers,mode]);
@@ -4138,6 +4144,23 @@ export default function App(){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[openHome?.id,isDemo]);
 
+  // Precompute the post-open vendor wrap in the BACKGROUND as buyer notes / interest change,
+  // so it's ready to show the instant "Vendor update" is tapped. Debounced, current open only.
+  const vendorReport = useRef({});   // { [openHomeId]: { sig, text } }
+  const vendorTimer = useRef(null);
+  useEffect(()=>{
+    if(!openHome||openHome._demo||isDemo) return;
+    const ohId=openHome.id; const list=(buyers[ohId]||[]);
+    if(!list.length) return;
+    const sig=vendorSig("open", list);
+    if(vendorReport.current[ohId]&&vendorReport.current[ohId].sig===sig) return; // cache already current
+    clearTimeout(vendorTimer.current);
+    const oh=openHome;
+    vendorTimer.current=setTimeout(async()=>{ try{ const t=await aiVendorSummary(oh, list, "open"); if(t&&t.trim()) vendorReport.current[ohId]={sig, text:t}; }catch(e){} }, 8000);
+    return ()=>clearTimeout(vendorTimer.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[buyers, openHome?.id, isDemo]);
+
   // Fetch this property's full open-home list (past + upcoming) when the Inspections view is
   // opened — it groups buyers under each dated inspection session.
   useEffect(()=>{
@@ -4814,7 +4837,7 @@ export default function App(){
       onUpdateDetails={(pid,id,d)=>{ setSearchProfile(a=>a&&{...a,name:d.name,mobile:d.mobile,email:d.email}); if(!isDemo&&searchProfile?.contactId) Attio.updatePerson({id:searchProfile.contactId,name:d.name,email:d.email,mobile:d.mobile}).catch(()=>{}); }}
       onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}} onOpenContact={openContact}
       onSendLink={(kind,channel,b)=>{ if(!b?._attioInspectionId) return false; const url=formLinkUrl(kind,b._attioInspectionId,agentName); const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const logSearch=(text)=>{ const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:AGENT_FULL[agentName]||agentName||""}; setSearchProfile(a=>{ if(!a) return a; const notes=[...(a.notes||[]),note]; if(!isDemo&&a._attioInspectionId){ const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; Attio.updateInspection(a._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); } return {...a,notes}; }); }; if(channel==="text"){ if(!b.mobile) return false; const msg=formLinkMsg(kind,first,addr,url,smsSig(agentName)); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:msg}).catch(()=>{}); logSearch(formSentNote(kind,"text")); return true; } if(channel==="email"){ if(!b.email) return false; Resend.sendFormLink({toEmail:b.email,toName:b.name,agentName,address:searchOpenHome?.address||addr,url,kind}).catch(()=>{}); logSearch(formSentNote(kind,"email")); return true; } return false; }}/>
-    <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll}/>
+    <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll} precomputed={openHome?vendorReport.current[openHome.id]:null}/>
     <MatchSheet open={showMatch} onClose={()=>setShowMatch(false)} openHome={openHome} excludeIds={propAll.map(b=>b.contactId).filter(Boolean)} agentName={agentName} propIndex={propIndex}/>
     <QuickContractSheet
       open={showQuickContract}
