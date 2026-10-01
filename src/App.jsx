@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v48-vendor-btn-instant";
+const BUILD = "v49-vendor-voice";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -760,9 +760,9 @@ async function aiBuyerProfile(buyer) {
 // Vendor updates only ever use a buyer's FIRST name (privacy — never surface a full
 // name to the vendor). When there's nothing noted for a buyer, we say we didn't get
 // a proper chat and will follow up, rather than inventing detail.
-const VENDOR_NO_NOTE = "we didn't get the chance to have much of a conversation — I'll follow them up early next week";
-// A buyer marked cool/out with no other notes: say they've confirmed they're out (via SMS).
-const OUT_NO_NOTE = "Haven't returned calls but responded to SMS confirming they are no longer interested";
+const VENDOR_NO_NOTE = "didn't get the chance to have much of a chat on the day — we'll follow them up this week";
+// A buyer marked cool with no other notes — keep it honest and neutral (no invented calls).
+const OUT_NO_NOTE = "had a look through but it's not quite what they're after";
 async function aiVendorSummary(openHome, buyers, mode) {
   const isCampaign = mode === "campaign";
   // The campaign report names only buyers who INSPECTED — online enquiries are counted,
