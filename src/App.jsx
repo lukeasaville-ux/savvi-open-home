@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v53-gci-pipeline";
+const BUILD = "v54-login-error";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -42,8 +42,15 @@ async function call(action, params = {}) {
 
 async function login(pin) {
   const j = await call("login", { pin });
-  if (j?.ok && j.token) { persistSession(j.token, j.who); return j.who; }
-  return null;
+  if (j?.ok && j.token) { persistSession(j.token, j.who); return { who: j.who }; }
+  // Distinguish a wrong code from a connection/server problem so the login
+  // screen can show the real reason (a failed fetch is NOT a wrong PIN).
+  const err = j && j.error;
+  const kind = err === "invalid_pin" ? "pin"
+             : err === "too_many_attempts" ? "locked"
+             : (!j || err === "unauthorized") ? "pin"
+             : "network";
+  return { error: kind };
 }
 function logout() { persistSession(null); }
 
@@ -1286,6 +1293,7 @@ function PinScreen({ onUnlock }) {
   const [digits, setDigits] = useState("");
   const [error,  setError]  = useState(false);
   const [shake,  setShake]  = useState(false);
+  const [errMsg, setErrMsg] = useState("Incorrect PIN — try again");
 
   // Wake the n8n backend while the agent is typing their PIN, so the login +
   // opens calls hit a warm container instead of paying a cold-start each.
@@ -1297,10 +1305,15 @@ function PinScreen({ onUnlock }) {
     setDigits(next);
     setError(false);
     if (next.length === 4) {
-      const who = await login(next);
-      if (who) {
-        onUnlock(who);
+      const r = await login(next);
+      if (r && r.who) {
+        onUnlock(r.who);
       } else {
+        setErrMsg(
+          r && r.error === "locked"  ? "Too many tries — wait a few minutes, then try again" :
+          r && r.error === "network" ? "Can't reach the server — check your internet, then close and reopen the app" :
+          "Incorrect PIN — try again"
+        );
         setShake(true); setError(true);
         setTimeout(() => { setDigits(""); setShake(false); }, 600);
       }
@@ -1344,7 +1357,7 @@ function PinScreen({ onUnlock }) {
         <button className="pb" onClick={() => press("0")}>0</button>
         <button className="pb del" onClick={del}>⌫</button>
       </div>
-      {error && <div className="pe">Incorrect PIN — try again</div>}
+      {error && <div className="pe">{errMsg}</div>}
     </div>
   );
 }
