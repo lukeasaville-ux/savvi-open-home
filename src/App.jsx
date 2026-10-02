@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v54-login-error";
+const BUILD = "v55-ai-assistant";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -955,14 +955,21 @@ function useSheetDrag(onClose){
   const cur=useRef(0);       // live delta — read on release so the close decision never sees a stale render
   const engaged=useRef(false); // whether this gesture has become a dismiss-drag (vs a normal scroll)
   const sheet=useRef(null);    // the .sh element the handlers sit on (also the scroll container)
-  const onTouchStart=e=>{ startY.current=e.touches?.[0]?.clientY ?? null; cur.current=0; engaged.current=false; sheet.current=e.currentTarget; };
+  const onTouchStart=e=>{
+    // Never start a dismiss-drag from an editable or interactive control (textarea,
+    // input, select, button, link). So editing a field, or scrolling while a field is
+    // under the finger, never pulls the sheet down or closes it mid-edit.
+    const t=e.target;
+    if(t&&t.closest&&t.closest('textarea,input,select,button,a,label,[contenteditable="true"]')){ startY.current=null; return; }
+    startY.current=e.touches?.[0]?.clientY ?? null; cur.current=0; engaged.current=false; sheet.current=e.currentTarget;
+  };
   // Grab-anywhere: start following the finger the moment they drag DOWN while the
   // sheet is scrolled to the top. If they're scrolled into the content, let it scroll.
   const onTouchMove=e=>{
     if(startY.current==null) return;
     const y=e.touches?.[0]?.clientY ?? startY.current;
     if(!engaged.current){
-      if((y-startY.current)>4 && (sheet.current?.scrollTop ?? 0)<=0){ engaged.current=true; startY.current=y; }
+      if((y-startY.current)>12 && (sheet.current?.scrollTop ?? 0)<=0){ engaged.current=true; startY.current=y; }
       else return;
     }
     const d=y-startY.current;
@@ -1702,7 +1709,8 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
       const dataUrl=await new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f);});
       const m=/^data:(.*?);base64,(.*)$/.exec(dataUrl||"");
       if(m){
-        const j=await call("aiParseEnquiry",{ image:m[2], mediaType:m[1]||"image/png" }); const d=(j&&j.data)||{};
+        const facts=[openHome?.address,openHome?.price&&("Price guide "+openHome.price),[openHome?.beds&&openHome.beds+" bed",openHome?.baths&&openHome.baths+" bath",openHome?.car&&openHome.car+" car"].filter(Boolean).join(", "),openHome?.listingNotes].filter(Boolean).join(". ");
+        const j=await call("aiParseEnquiry",{ image:m[2], mediaType:m[1]||"image/png", contractUrl:openHome?.contractUrl||"", address:addr||openHome?.address||"", facts }); const d=(j&&j.data)||{};
         const buyer={name:d.name||"",mobile:d.mobile||"",email:d.email||"",question:d.question||"",wantsContract:!!d.wantsContract};
         const reply=d.suggestedReply||"";
         // Stop for review — nothing is sent until the agent taps Confirm (they can edit first).
@@ -1763,7 +1771,7 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
                   </label>
                   <div style={{fontSize:11.5,color:BROWN_L,marginTop:6,lineHeight:1.45}}>
                     {x.reply.trim()&&x.buyer.mobile?"Reply will be texted. ":x.reply.trim()&&!x.buyer.mobile?"Reply set but no mobile to text it. ":"No reply will be sent. "}
-                    {x.buyer.wantsContract&&x.buyer.email&&openHome?.contractUrl?"Contract will be emailed.":x.buyer.wantsContract&&!x.buyer.email&&openHome?.contractUrl?"Contract wanted but no email — add one.":x.buyer.wantsContract&&!openHome?.contractUrl?"Contract requested — auto-sends once it's uploaded.":""}
+                    {!x.buyer.wantsContract?"":!openHome?.contractUrl?"Contract requested — auto-sends once it's uploaded.":x.buyer.email?"Contract will be emailed.":x.buyer.mobile?"Contract will be texted (no email on file).":"Add an email or mobile to send the contract."}
                   </div>
                   <div style={{display:"flex",gap:8,marginTop:14}}>
                     <button onClick={()=>confirmSend(i)} style={{flex:1,padding:"11px 0",borderRadius:10,border:"none",background:BLUE_D,color:"#fff",fontWeight:800,fontSize:14,cursor:"pointer"}}>Confirm &amp; send</button>
@@ -4557,20 +4565,32 @@ export default function App(){
       MM.sendMessage({ toPhone:enq.mobile, message:enq.reply, agent:agentName }).catch(()=>{});
       done.push(`Texted the reply to ${enq.mobile}`);
     }
-    // Auto-send contract if they asked and we can
+    // Send the contract if they asked. Default to EMAIL when we have an email; TEXT only
+    // if they asked to be texted in their message, or if there's no email on file.
     if(enq.wantsContract){
-      if(enq.email&&openHome?.contractUrl&&!isDemo){
-        const t=fmtDateTime();
-        Resend.sendContract({ toEmail:enq.email, toName:enq.name, agentName, address:openHome.address, contractUrl:openHome.contractUrl })
-          .then(res=>{ if(inspectionId) Attio.updateInspection(inspectionId,{contractSent:true,contractSentTime:t,...(res&&res.id?{resendId:res.id}:{})}).catch(()=>{}); }).catch(()=>{});
-        const markSent=x=>x.id===rowId?{...x,contractSent:true,contractSentTime:t}:x;
-        setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(markSent);return u;});
-        setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(markSent);return u;});
-        done.push(`Emailed the contract to ${enq.email}`);
-      } else if(!openHome?.contractUrl){
+      if(!openHome?.contractUrl){
         done.push("⚠️ No contract on file for this listing yet — send it once it's uploaded");
-      } else if(!enq.email){
-        done.push("⚠️ No email captured — add one to send the contract");
+      } else if(isDemo){
+        done.push("Contract ready to send (demo mode)");
+      } else {
+        const t=fmtDateTime();
+        const msgText=String(enq.question||"");
+        const textAsked=/\b(text|txt|sms|message me)\b/i.test(msgText) && !/\bemail\b/i.test(msgText);
+        const markSent=x=>x.id===rowId?{...x,contractSent:true,contractSentTime:t}:x;
+        const mark=()=>{ setPropBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(markSent);return u;}); setBuyers(p=>{const u={...p};u[pid]=(u[pid]||[]).map(markSent);return u;}); };
+        if((textAsked || !enq.email) && enq.mobile){
+          const trackUrl = inspectionId ? `https://go.getsavvi.com.au/c/${inspectionId.slice(0,13)}` : openHome.contractUrl;
+          const ctrMsg = buildContractSms({ firstName:(enq.name||"").split(" ")[0], address:openHome.address, contractUrl:trackUrl, agent:agentName });
+          MM.sendMessage({ toPhone:enq.mobile, agent:agentName, message:ctrMsg })
+            .then(()=>{ if(inspectionId) Attio.updateInspection(inspectionId,{contractSent:true,contractSentTime:t}).catch(()=>{}); }).catch(()=>{});
+          mark(); done.push(`Texted the contract to ${enq.mobile}`);
+        } else if(enq.email){
+          Resend.sendContract({ toEmail:enq.email, toName:enq.name, agentName, address:openHome.address, contractUrl:openHome.contractUrl })
+            .then(res=>{ if(inspectionId) Attio.updateInspection(inspectionId,{contractSent:true,contractSentTime:t,...(res&&res.id?{resendId:res.id}:{})}).catch(()=>{}); }).catch(()=>{});
+          mark(); done.push(`Emailed the contract to ${enq.email}`);
+        } else {
+          done.push("⚠️ No email or mobile captured — add one to send the contract");
+        }
       }
     }
     return { done, name:rName||enq.name||"", email:rEmail||enq.email||"", mobile:enq.mobile||"" };
@@ -4593,6 +4613,9 @@ export default function App(){
     setOpenHomes(p=>{ const u=p.map(o=>(o.propertyId===pid?{...o,contractUrl:url}:o)); try{ localStorage.setItem("savvi_opens",JSON.stringify(u)); }catch(e){} return u; });
     setOpenHome(cur=>cur&&cur.propertyId===pid?{...cur,contractUrl:url}:cur);
     setQuickContractProp(cur=>cur&&(cur.propertyId||cur.id)===pid?{...cur,contractUrl:url}:cur);
+    // Kick off a full contract review in the background so the assistant can answer
+    // OC / sinking-fund / major-works questions straight away (fire-and-forget).
+    if(url){ call("aiListingAsk",{contractUrl:url,fresh:true}).catch(()=>{}); }
   },[]);
   if (!agentName) return <PinScreen onUnlock={name => { setAgentName(name); }} />;
 
