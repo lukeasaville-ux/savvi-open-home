@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v56-general-enquiry";
+const BUILD = "v57-home-tidy";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4783,7 +4783,6 @@ export default function App(){
         {!loading&&<div className="hdr-chips">
           <div className="opens-chip">{`${visibleOpens.length} open${visibleOpens.length!==1?"s":""}${opensStale?"":" this week"}`}</div>
           <button className="add-listing-btn" onClick={()=>setShowGeneral(true)}>✦ General enquiry</button>
-          <button className="add-listing-btn" onClick={()=>setShowAddListing(true)}>+ Add listing</button>
         </div>}
       </div>
 
@@ -4900,6 +4899,7 @@ export default function App(){
       </>}
 
       {!loading&&homeTab==="match"&&<BuyerMatch propIndex={propIndex} agentName={agentName}/>}
+      {!loading&&<div style={{padding:"26px 20px 0",textAlign:"center"}}><button onClick={()=>setShowAddListing(true)} style={{background:"transparent",border:"none",color:BROWN_L,fontSize:12.5,fontWeight:600,cursor:"pointer",textDecoration:"underline",fontFamily:"inherit",opacity:.8}}>+ Add a listing</button></div>}
       <div style={{height:40}}/>
     </div>
 
