@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v55-ai-assistant";
+const BUILD = "v56-general-enquiry";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1669,6 +1669,78 @@ const AI_SUGGESTIONS=["Owners corp fees?","Recent AGM discussion points","Any sp
 // One AI assistant for the listing. A single prompt: type a question about the
 // property (reads the contract/S32) OR tap 📷 to drop in a screenshot of a buyer's
 // text — it works out what you want. No tabs.
+// General buyer enquiry (not about one listing): paste or screenshot a brief, it
+// records the buyer with their criteria, matches current stock, and drafts a reply
+// with the soft-launch link. Agent reviews + edits before anything is sent.
+function GeneralEnquirySheet({ open, onClose, listings, agentName, onRegister }){
+  const [text,setText]=useState("");
+  const [busy,setBusy]=useState(false);
+  const [item,setItem]=useState(null);
+  const fileRef=useRef(null);
+  const drag=useSheetDrag(onClose);
+  useEffect(()=>{ if(open){ setText(""); setBusy(false); setItem(null); } },[open]);
+  const stock=()=>(listings||[]).map(l=>({address:l.address,suburb:l.suburb,price:l.price,beds:l.beds,baths:l.baths,car:l.car,notes:l.listingNotes||l.notes||""}));
+  const analyse=async(payload)=>{ setBusy(true);
+    try{ const j=await call("aiGeneralEnquiry",{ ...payload, listings:stock() }); const d=(j&&j.data)||{};
+      if(d.error){ setItem({error:true,status:"error"}); }
+      else setItem({ buyer:{name:d.name||"",mobile:d.mobile||"",email:d.email||""}, budgetLow:d.budgetLow||"",budgetHigh:d.budgetHigh||"",suburbs:d.suburbs||[],beds:d.beds||"",requirements:d.requirements||"",questions:d.questions||"", matches:d.matches||[], reply:d.suggestedReply||"", status:"review" });
+    }catch(e){ setItem({error:true,status:"error"}); }
+    setBusy(false);
+  };
+  const onFile=async(e)=>{ const f=e.target.files&&e.target.files[0]; if(!f) return; setBusy(true);
+    try{ const dataUrl=await new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f);}); const m=/^data:(.*?);base64,(.*)$/.exec(dataUrl||""); if(m) await analyse({image:m[2],mediaType:m[1]||"image/png"}); }catch(e){} setBusy(false); if(fileRef.current) fileRef.current.value="";
+  };
+  const upd=(k,v)=>setItem(it=>({...it,[k]:v}));
+  const updB=(k,v)=>setItem(it=>({...it,buyer:{...it.buyer,[k]:v}}));
+  const confirm=async()=>{ setItem(it=>({...it,status:"working"})); let res={done:[]};
+    try{ res=(await onRegister({name:item.buyer.name,mobile:item.buyer.mobile,email:item.buyer.email,budgetLow:item.budgetLow,budgetHigh:item.budgetHigh,suburbs:item.suburbs,beds:item.beds,requirements:item.requirements,questions:item.questions,reply:item.reply}))||{done:[]}; }catch(e){ res={done:["⚠️ Something went wrong — check the contact list"]}; }
+    setItem(it=>({...it,status:"done",done:res.done||[]}));
+  };
+  if(!open) return null;
+  const inp={width:"100%",padding:"9px 11px",fontSize:13.5,border:`1px solid ${SAND_D}`,borderRadius:8,fontFamily:"'Neue Haas Unica Pro',sans-serif",marginTop:3};
+  return <div className="ov s" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",maxHeight:"90vh",display:"flex",flexDirection:"column",...drag.style}} {...drag.handlers}>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
+      <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
+      <div style={{padding:"4px 18px 8px"}}>
+        <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>General enquiry</div>
+        <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>Paste or screenshot a buyer's brief. It records them, matches your stock, and drafts a reply.</div>
+      </div>
+      <input ref={fileRef} type="file" accept="image/*" onChange={onFile} style={{display:"none"}}/>
+      <div style={{padding:"0 18px 18px",overflowY:"auto"}}>
+        {!item&&<>
+          <textarea style={{...inp,minHeight:120,resize:"vertical",lineHeight:1.5}} value={text} onChange={e=>setText(e.target.value)} placeholder="Paste the buyer's enquiry here — budget, areas, bedrooms, what they need…"/>
+          <div style={{display:"flex",gap:8,marginTop:10}}>
+            <button disabled={busy||!text.trim()} onClick={()=>analyse({text})} style={{flex:1,padding:"11px 0",borderRadius:10,border:"none",background:BLUE_D,color:"#fff",fontWeight:800,fontSize:14,cursor:"pointer",opacity:(busy||!text.trim())?.6:1}}>{busy?"Working…":"Find matches & draft reply"}</button>
+            <button disabled={busy} onClick={()=>fileRef.current&&fileRef.current.click()} style={{padding:"11px 15px",borderRadius:10,border:`1px solid ${SAND_D}`,background:"#fff",color:BROWN,fontWeight:700,fontSize:16,cursor:"pointer"}} aria-label="Screenshot">📷</button>
+          </div>
+        </>}
+        {item&&item.error&&<div style={{color:"#B23",fontSize:14,padding:"10px 0"}}>Couldn't read that one — try again or paste the text. <button onClick={()=>setItem(null)} style={{marginLeft:8,textDecoration:"underline",border:"none",background:"none",color:BLUE_D,cursor:"pointer"}}>Back</button></div>}
+        {item&&item.status==="done"&&<div style={{padding:"6px 0"}}>{(item.done||[]).map((d,i)=><div key={i} style={{fontSize:14,color:ESPRESSO,padding:"4px 0"}}>{/^⚠/.test(d)?d:"✓ "+d}</div>)}<button onClick={onClose} style={{marginTop:12,width:"100%",padding:"11px 0",borderRadius:10,border:"none",background:ESPRESSO,color:CREAM,fontWeight:800,fontSize:14,cursor:"pointer"}}>Done</button></div>}
+        {item&&(item.status==="review"||item.status==="working")&&<>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            <label style={{fontSize:11,fontWeight:700,color:BROWN_L}}>Name<input style={inp} value={item.buyer.name} onChange={e=>updB("name",e.target.value)}/></label>
+            <label style={{fontSize:11,fontWeight:700,color:BROWN_L}}>Mobile<input style={inp} value={item.buyer.mobile} onChange={e=>updB("mobile",e.target.value)}/></label>
+          </div>
+          <label style={{display:"block",fontSize:11,fontWeight:700,color:BROWN_L,marginTop:8}}>Email<input style={inp} value={item.buyer.email} onChange={e=>updB("email",e.target.value)}/></label>
+          <div style={{marginTop:10,fontSize:12.5,color:ESPRESSO,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:8,padding:"9px 11px"}}>
+            <div><b>Brief:</b> {(item.budgetLow&&item.budgetHigh)?("$"+Number(item.budgetLow).toLocaleString()+" - $"+Number(item.budgetHigh).toLocaleString()):"budget not stated"} · {item.beds||"?"} bed · {(item.suburbs||[]).join(", ")||"areas not stated"}</div>
+            {item.requirements&&<div style={{marginTop:3,color:BROWN_M}}>{item.requirements}</div>}
+          </div>
+          <div style={{marginTop:10,fontSize:12.5,color:ESPRESSO}}><b>Matches from stock:</b> {(item.matches&&item.matches.length)?item.matches.join("; "):"none that fit right now"}</div>
+          <label style={{display:"block",marginTop:10,fontSize:11,fontWeight:700,color:BROWN_L}}>Reply to send (edit, or clear to skip)
+            <textarea style={{...inp,minHeight:150,resize:"vertical",lineHeight:1.5}} value={item.reply} onChange={e=>upd("reply",e.target.value)}/></label>
+          <div style={{fontSize:11.5,color:BROWN_L,marginTop:6,lineHeight:1.45}}>{item.buyer.email?("Reply will be emailed to "+item.buyer.email+"."):item.buyer.mobile?("Reply will be texted to "+item.buyer.mobile+"."):"Add an email or mobile to send the reply."} The buyer is saved with their brief either way.</div>
+          <div style={{display:"flex",gap:8,marginTop:14}}>
+            <button disabled={item.status==="working"} onClick={confirm} style={{flex:1,padding:"11px 0",borderRadius:10,border:"none",background:BLUE_D,color:"#fff",fontWeight:800,fontSize:14,cursor:"pointer",opacity:item.status==="working"?.6:1}}>{item.status==="working"?"Saving…":"Register & send"}</button>
+            <button disabled={item.status==="working"} onClick={()=>setItem(null)} style={{padding:"11px 16px",borderRadius:10,border:`1px solid ${SAND_D}`,background:"#fff",color:BROWN,fontWeight:700,fontSize:14,cursor:"pointer"}}>Back</button>
+          </div>
+        </>}
+      </div>
+    </div>
+  </div>;
+}
+
 function AiAssistantSheet({ open, onClose, openHome, onRegister }){
   const [q,setQ]=useState("");
   const [thread,setThread]=useState([]); // {type:'ask',q,a} | {type:'reg',buyer,reply,copied}
@@ -3752,7 +3824,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
     <aside className="crm-side">
       <div className="crm-brand"><img src={wordmark} alt="Savvi"/><span>CRM</span></div>
       <nav className="crm-nav">{TABS.map(t=><button key={t.k} className={tab===t.k?"on":""} onClick={()=>setTab(t.k)}><span className="ic">{t.ic}</span>{t.l}{t.ct?<span className="ct">{t.ct}</span>:null}</button>)}</nav>
-      <div style={{marginTop:14}} className="crm-nav"><button onClick={()=>crm.setShowAddListing(true)}><span className="ic">+</span>Add listing</button></div>
+      <div style={{marginTop:14}} className="crm-nav"><button onClick={()=>crm.setShowGeneral(true)}><span className="ic">✦</span>General enquiry</button><button onClick={()=>crm.setShowAddListing(true)}><span className="ic">+</span>Add listing</button></div>
       <div className="crm-side-foot">
         <div className="crm-agent"><div className="av" style={{background:crmColor(agentName)}}>{crmInitials(agentName)}</div><div><div className="nm">{AGENT_FULL[agentName]||agentName}</div><div className="sub">{indexing?"Syncing CRM…":index?`Synced ${crmAgo(new Date(indexAt).toISOString())}`:"Loading CRM…"}</div></div></div>
         <div style={{display:"flex",gap:4}}><button className="crm-linkbtn" onClick={()=>loadIndex(true)}>↻ Sync now</button><button className="crm-linkbtn" style={{marginLeft:"auto"}} onClick={onLogout}>Log out</button></div>
@@ -4001,6 +4073,7 @@ export default function App(){
   const[showQuickContract,setShowQuickContract]=useState(false);
   const[showAddListing,setShowAddListing]=useState(false);
   const[showAssistant,setShowAssistant]=useState(false);
+  const[showGeneral,setShowGeneral]=useState(false);
   const[showInfo,setShowInfo]=useState(false);
   const[showBulk,setShowBulk]=useState(false);
   const[showMatch,setShowMatch]=useState(false);
@@ -4595,6 +4668,30 @@ export default function App(){
     }
     return { done, name:rName||enq.name||"", email:rEmail||enq.email||"", mobile:enq.mobile||"" };
   },[openHome,propBuyers,isDemo,agentName]);
+
+  // General buyer enquiry (no specific listing): save the buyer + their brief, and send
+  // the drafted reply (email if we have one, else text). Brief is stored as a note on a
+  // property-less inspection so Buyer Match can find them.
+  const handleGeneralEnquiry=useCallback(async(g)=>{
+    const done=[];
+    if(isDemo){ return { done:["Demo mode — not saved or sent"], name:g.name, email:g.email, mobile:g.mobile }; }
+    let contactId=null;
+    try{ if(g.mobile){ const ex=await Attio.findPersonByPhone(g.mobile).catch(()=>null); if(ex) contactId=ex.contactId||ex.id||Attio.id(ex); } }catch(e){}
+    if(!contactId){ const r=await Attio.createPerson({name:g.name,email:g.email,mobile:g.mobile}).catch(()=>({ok:false})); if(r&&r.ok) contactId=r.id; }
+    if(contactId){
+      const brief="[Buyer brief] Budget "+(g.budgetLow||"?")+" - "+(g.budgetHigh||"?")+". Areas: "+((g.suburbs||[]).join(", ")||"?")+". "+(g.beds||"?")+" bed. "+(g.requirements||"")+(g.questions?(" | Asked: "+g.questions):"");
+      try{ const ins=await Attio.createInspection({contactId,interest:"watching",agent:agentName}); if(ins&&ins.ok&&ins.id){ Attio.updateInspection(ins.id,{notes:fmtDateTime()+"\t"+(agentName||"Savvi")+"\t"+brief}).catch(()=>{}); } }catch(e){}
+      done.push("Saved "+(g.name||"the buyer")+" with their brief");
+    } else { done.push("⚠️ Couldn't save the buyer — add a name and a mobile or email"); }
+    const reply=(g.reply||"").trim();
+    if(reply){
+      const signed=reply+"\n"+(agentName||"Savvi");
+      if(g.email){ const r=await call("sendEmail",{toEmail:g.email,subject:"Thanks for reaching out — Savvi",body:signed}).catch(()=>({ok:false})); done.push((r&&r.ok)?("Emailed the reply to "+g.email):"⚠️ The email didn't send"); }
+      else if(g.mobile){ MM.sendMessage({toPhone:g.mobile,message:reply,agent:agentName}).catch(()=>{}); done.push("Texted the reply to "+g.mobile); }
+      else { done.push("No email or mobile — reply not sent"); }
+    }
+    return { done, name:g.name, email:g.email, mobile:g.mobile };
+  },[isDemo,agentName]);
   // Patch an optimistically-added buyer once its Attio write finishes (real ids), or
   // flag it if the write failed — keyed by the temp id used at registration.
   const reconcileBuyer=useCallback((pid,tempId,patch)=>{
@@ -4665,7 +4762,7 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setShowMatch, setShowAssistant, setShowAddListing, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
+  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
@@ -4685,6 +4782,7 @@ export default function App(){
         <div className="hdate" data-build={BUILD}>{today}</div>
         {!loading&&<div className="hdr-chips">
           <div className="opens-chip">{`${visibleOpens.length} open${visibleOpens.length!==1?"s":""}${opensStale?"":" this week"}`}</div>
+          <button className="add-listing-btn" onClick={()=>setShowGeneral(true)}>✦ General enquiry</button>
           <button className="add-listing-btn" onClick={()=>setShowAddListing(true)}>+ Add listing</button>
         </div>}
       </div>
@@ -4928,6 +5026,7 @@ export default function App(){
     </button>}
     <AddSheet open={showAdd} onClose={()=>{setShowAdd(false);setAiPrefill(null);}} openHome={openHome} onSave={handleSave} onReconcile={reconcileBuyer} agentName={agentName} propContactIds={propAll.map(b=>b.contactId).filter(Boolean)} prefill={aiPrefill}/>
     <AiAssistantSheet open={showAssistant} onClose={()=>setShowAssistant(false)} openHome={openHome} onRegister={handleEnquiry}/>
+    <GeneralEnquirySheet open={showGeneral} onClose={()=>setShowGeneral(false)} listings={allListings} agentName={agentName} onRegister={handleGeneralEnquiry}/>
     <BulkTextSheet open={showBulk} onClose={()=>setShowBulk(false)} buyers={filteredBuyers} agentName={agentName} address={openHome?.address} suburb={openHome?.suburb} isAuction={!!openHome?.auctionDate} onLogNote={(b,sent,mode)=>{ if(!isDemo&&openHome?.id&&b?.id) addNote(openHome.id,b.id,mode&&mode!=="custom"?formSentNote(mode,"text"):`Text sent: "${sent}"`); }} label={VIEW_LABEL[bView]||"Buyers"}/>
     <DetailHost desktop={isDesktop} open={showDetail} onClose={()=>setShowDetail(false)} buyer={active}
       openHome={openHome} propId={openHome?.id} propIndex={propIndex} opens={visibleOpens}
