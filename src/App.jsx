@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v57-home-tidy";
+const BUILD = "v58-open-tidy";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4139,7 +4139,7 @@ export default function App(){
           <span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>
         </div>
       </div>
-      {(b.notes||[]).length>0&&(()=>{const ln=b.notes[b.notes.length-1];const d=ln.ts?fmtDateTime(ln.ts):"";return <div className="row-note">{d&&<span style={{fontWeight:800,color:BROWN_L,marginRight:6}}>{d}</span>}{ln.text}</div>;})()}
+      {(()=>{const human=(b.notes||[]).filter(n=>!isAutoNote(n.text));const ln=human[human.length-1];if(!ln)return null;const d=ln.ts?fmtDateTime(ln.ts):"";return <div className="row-note">{d&&<span style={{fontWeight:800,color:BROWN_L,marginRight:6}}>{d}</span>}{ln.text}</div>;})()}
     </div>
   );
 
@@ -4968,7 +4968,7 @@ export default function App(){
         {!buyersLoading&&bView==="interest"&&<>
           {filteredBuyers.filter(b=>b.mobile).length>0&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:14,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Text all {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
           {!openHome._listing&&<>
-            <div className="sec-lbl" style={{padding:"2px 0 10px"}}>At this open</div>
+            <div className="sec-lbl" style={{padding:"2px 0 10px"}}>At this open{pbReal.length?` · ${pbReal.length}`:""}</div>
             {pbReal.length===0&&<div style={{textAlign:"center",padding:"36px 16px",color:"#C0B8A8"}}>
               <div style={{fontSize:36,marginBottom:10}}>👥</div>
               <div style={{fontSize:14,lineHeight:1.5}}>No buyers yet — tap Add buyer to register the first.</div>
