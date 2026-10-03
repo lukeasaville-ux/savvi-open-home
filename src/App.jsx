@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v59-open-counts";
+const BUILD = "v60-enquiry-attend";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -152,6 +152,20 @@ function parseContractOpens(str){
   });
 }
 
+/* An inspection note that marks a real open-home attendance / check-in.
+   Attendance SUPERSEDES an enquiry: once a buyer has physically been registered
+   at an open, they are a real buyer at that open — not an "online enquiry" — even
+   if their record still carries the original "Enquiry via …" note (e.g. an online
+   enquiry we later added to the open; the add seeds the new inspection with the
+   prior notes). Without this, such a buyer gets hidden under Enquiries and drops
+   off the "At this open" list. */
+const ENQ_RE = /^\s*((REA|Domain|Portal)\s+enquiry|Enquiry via (text|sms|email|phone|dm))/i;
+const ATTENDED_RE = /(Attended inspection|Checked in at)/i;
+const classifyEnquiry = notes => {
+  const txts = (notes || []).map(n => (typeof n === "string" ? n : n?.text) || "");
+  return txts.some(t => ENQ_RE.test(t)) && !txts.some(t => ATTENDED_RE.test(t));
+};
+
 /* Normalise a backend inspection into the exact shape the UI expects,
    filling any field the backend doesn't send (notes as array, avatar…). */
 function normBuyer(b) {
@@ -187,8 +201,9 @@ function normBuyer(b) {
     contractOpens: parseContractOpens(b.contractOpens),
     notes,
     // Online portal enquiries (REA/Domain) are auto-created with a note prefixed
-    // "<portal> enquiry:" — flag them so the app can show them separately.
-    isEnquiry: notes.some(n=>/^\s*((REA|Domain|Portal)\s+enquiry|Enquiry via (text|sms|email|phone|dm))/i.test(n.text||"")),
+    // "<portal> enquiry:" — flag them so the app can show them separately. But an
+    // enquiry who has since attended an open is a real buyer, not an enquiry.
+    isEnquiry: classifyEnquiry(notes),
     aiProfile: null,
     initials: b.initials || mkI(name),
     col: b.col || AVATAR_COLS[Math.abs(name.charCodeAt(0) || 65) % AVATAR_COLS.length],
@@ -525,7 +540,7 @@ const Attio = {
       const pr = rref(i, "property"); const m = propMeta[pr] || {};
       const it = (rval(i, "interest") || "").toLowerCase();
       const opens = parseContractOpens(rval(i, "contract_opens") || "");
-      const rec = { id: rid(i), propertyRef: pr, openHomeRef: rref(i, "open_home"), interest: it, notes, contractSent: !!rval(i, "contract_sent"), contractSentTime: rval(i, "contract_sent_time") || null, contractOpens: opens, createdAt: i?.created_at || null, isEnquiry: notes.some(n => ENQ.test(n.text || "")), address: m.address || "", suburb: m.suburb || "", price: m.price || "" };
+      const rec = { id: rid(i), propertyRef: pr, openHomeRef: rref(i, "open_home"), interest: it, notes, contractSent: !!rval(i, "contract_sent"), contractSentTime: rval(i, "contract_sent_time") || null, contractOpens: opens, createdAt: i?.created_at || null, isEnquiry: classifyEnquiry(notes), address: m.address || "", suburb: m.suburb || "", price: m.price || "" };
       c.insps.push(rec); c.notes.push(...notes); c.contractOpens.push(...opens);
       if ((rank[it] || 0) > (rank[c.interest] || 0)) c.interest = it;
       if (rec.contractSent) c.contractSent = true;
