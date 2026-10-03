@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v60-enquiry-attend";
+const BUILD = "v61-excl-purchasers";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -454,9 +454,15 @@ const Attio = {
     const pph = p => p?.values?.phone_numbers?.[0]?.phone_number ?? "";
     const pem = p => p?.values?.email_addresses?.[0]?.email_address ?? "";
     const rank = { hot: 3, watching: 2, cool: 1 };
+    // Buyers who recently PURCHASED through Savvi are excluded from the Buyer Match pool
+    // (set twice daily by the Box+Dice sweep) so they never get new-listing SMS right after
+    // buying off us. Their CRM record and history are untouched — this only scopes marketing.
+    let _excl = new Set();
+    try { const ex = await call("getMarketingExclusions"); if (ex?.ok && Array.isArray(ex.ids)) _excl = new Set(ex.ids.map(String)); } catch (e) {}
     const byC = {};
     inspData.forEach(insp => {
       const cid = rref(insp, "contact"); if (!cid) return;
+      if (_excl.has(String(cid))) return;
       const c = people[cid];
       const note = (rval(insp, "notes") || "").trim();
       const interest = (rval(insp, "interest") || "").toLowerCase();
