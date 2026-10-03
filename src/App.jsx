@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v62-name-noautocorrect";
+const BUILD = "v63-sold-listings";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -222,6 +222,9 @@ function normBuyer(b) {
 const Attio = {
   // tolerant id: works on a shaped object ({id}) or a raw Attio record
   id: r => (r && (r.id?.record_id ?? r.id)) ?? null,
+
+  // Purchaser + sale details for a sold / under-offer listing (review view).
+  async getListingParties(propertyId){ if(!propertyId) return null; try{ const j=await call("getListingParties",{propertyId}); return (j&&j.ok)?j:null; }catch(e){ return null; } },
 
   async getOpenHomesThisWeek() {
     const j = await call("getOpensWeek");
@@ -1919,12 +1922,27 @@ function OpenListingInfo({ openHome, onContractUploaded }){
   const contractUrl=openHome?.contractUrl||"";
   const pid=openHome?.propertyId||openHome?.id;
   const sb=statusBadge(openHome?.statusText);
+  // For a sold / under-offer listing, pull the purchaser + sale details on demand.
+  const [parties,setParties]=useState(null);
+  const st=String(openHome?.statusText||"").toLowerCase();
+  useEffect(()=>{ let on=true; setParties(null); if(pid&&(st==="sold"||st==="under offer")){ Attio.getListingParties(pid).then(r=>{ if(on&&r) setParties(r); }).catch(()=>{}); } return ()=>{on=false;}; },[pid,st]);
+  const soldPrice=openHome?.soldPrice??parties?.soldPrice;
+  const settlementDate=openHome?.settlementDate||parties?.settlementDate;
+  const purch=parties&&parties.purchaser&&(parties.purchaser.name||parties.purchaser.mobile||parties.purchaser.email)?parties.purchaser:null;
   return (
     <div style={{padding:"8px 14px 0"}}>
-      {(sb||openHome?.settlementDate||openHome?.soldPrice)&&<div style={{display:"flex",flexWrap:"wrap",gap:8,alignItems:"center",marginBottom:10}}>
+      {(sb||settlementDate||soldPrice)&&<div style={{display:"flex",flexWrap:"wrap",gap:8,alignItems:"center",marginBottom:10}}>
         {sb&&<span style={{fontSize:11.5,fontWeight:800,color:sb[1],background:sb[2],borderRadius:100,padding:"3px 10px"}}>{sb[0]}</span>}
-        {openHome?.soldPrice&&<span style={{fontSize:12.5,color:ESPRESSO,fontWeight:700}}>Sold ${Number(openHome.soldPrice).toLocaleString("en-US")}</span>}
-        {openHome?.settlementDate&&<span style={{fontSize:12.5,color:BROWN_L}}>Settles {fmtAuction(openHome.settlementDate)}</span>}
+        {soldPrice&&<span style={{fontSize:12.5,color:ESPRESSO,fontWeight:700}}>Sold ${Number(soldPrice).toLocaleString("en-US")}</span>}
+        {settlementDate&&<span style={{fontSize:12.5,color:BROWN_L}}>Settles {fmtAuction(settlementDate)}</span>}
+      </div>}
+      {purch&&<div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"10px 13px",marginBottom:10}}>
+        <div style={{fontSize:10.5,fontWeight:800,color:BROWN_L,textTransform:"uppercase",letterSpacing:.5,marginBottom:3}}>{st==="sold"?"Purchaser":"Purchaser (under offer)"}</div>
+        <div style={{fontWeight:700,fontSize:14,color:ESPRESSO}}>{purch.name||"Name not on file"}</div>
+        {(purch.mobile||purch.email)&&<div style={{fontSize:13,marginTop:3,display:"flex",flexWrap:"wrap",gap:"2px 14px"}}>
+          {purch.mobile&&<a href={`tel:${purch.mobile}`} style={{color:BLUE_D,textDecoration:"none"}}>{purch.mobile}</a>}
+          {purch.email&&<a href={`mailto:${purch.email}`} style={{color:BLUE_D,textDecoration:"none"}}>{purch.email}</a>}
+        </div>}
       </div>}
       {!contractUrl&&onContractUploaded&&pid&&<div style={{marginBottom:10}}><div style={{fontSize:12,color:BROWN_L,marginBottom:6}}>No contract on this listing yet. Add the PDF and it's ready to send straight away.</div><ContractUpload propertyId={pid} onUploaded={onContractUploaded}/></div>}
       {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none",marginBottom:notes?8:0}}>Open / read the full contract</a>}
@@ -4902,14 +4920,21 @@ export default function App(){
           })}
 
           {/* ── SOLD & PAST LISTINGS: still openable to review buyers + settlement dates ── */}
-          {pastListings.length>0&&<>
+          {pastListings.length>0&&(()=>{
+            // Searching the MAIN bar surfaces sold/under-offer listings here too (auto-expanded),
+            // so you never have to open the separate "Sold & past" search to find one.
+            const _pe=(_lq||pastQ).trim().toLowerCase();
+            const _open=showPast||!!_lq;
+            const _rows=pastListings.filter(p=>!_pe||(((p.address||"")+" "+(p.suburb||"")).toLowerCase().includes(_pe))).sort((a,b)=>String(b.campaignStart||"").localeCompare(String(a.campaignStart||"")));
+            return <>
             <div className="sec-lbl" style={{paddingTop:22,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>setShowPast(v=>!v)}>
-              <span>Sold &amp; past listings · {pastListings.length}</span>
-              <span style={{fontSize:12,color:BLUE_D,fontWeight:800}}>{showPast?"Hide":"Show"}</span>
+              <span>Sold &amp; under offer · {_lq?_rows.length:pastListings.length}</span>
+              <span style={{fontSize:12,color:BLUE_D,fontWeight:800}}>{_open?"Hide":"Show"}</span>
             </div>
-            {showPast&&<div style={{padding:"0 20px 8px"}}>
-              <input className="fi" style={{width:"100%",marginBottom:10}} placeholder="Search sold & past…" value={pastQ} onChange={e=>setPastQ(e.target.value)}/>
-              {pastListings.filter(p=>!pastQ||(((p.address||"")+" "+(p.suburb||"")).toLowerCase().includes(pastQ.toLowerCase()))).sort((a,b)=>String(b.campaignStart||"").localeCompare(String(a.campaignStart||""))).map(p=>{
+            {_open&&<div style={{padding:"0 20px 8px"}}>
+              {!_lq&&<input className="fi" style={{width:"100%",marginBottom:10}} placeholder="Search sold & under offer…" value={pastQ} onChange={e=>setPastQ(e.target.value)}/>}
+              {_rows.length===0&&<div style={{fontSize:13,color:BROWN_L,padding:"4px 2px 10px"}}>No sold or under offer listing matches.</div>}
+              {_rows.map(p=>{
                 const pid=p.id; const sb=statusBadge(p.statusText);
                 const synthOh={id:`listing_${pid}`,propertyId:pid,address:p.address,suburb:p.suburb,beds:p.beds,baths:p.baths,car:p.car,price:p.price||"",igUrl:p.igUrl||"",contractUrl:p.contractUrl||"",listingNotes:p.listingNotes||"",settlementDate:p.settlementDate||"",soldPrice:p.soldPrice||null,statusText:p.statusText||"",auctionDate:p.auctionDate||"",time:"",date:"",agent:agentName,_listing:true};
                 return <div key={pid} onClick={()=>enterOpenHome(synthOh)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"11px 12px",marginBottom:8,borderRadius:11,border:`1px solid ${SAND_D}`,background:"#fff",cursor:"pointer"}}>
@@ -4918,7 +4943,7 @@ export default function App(){
                 </div>;
               })}
             </div>}
-          </>}
+          </>;})()}
         </>}
       </>}
 
