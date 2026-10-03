@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v58-open-tidy";
+const BUILD = "v59-open-counts";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2890,10 +2890,13 @@ function BulkTextSheet({ open, onClose, buyers, agentName, label, address, subur
             <div style={{fontSize:11.5,fontWeight:800,letterSpacing:.5,color:BROWN_L}}>RECIPIENTS</div>
             {sendable.length>0&&<button onClick={toggleAll} style={{background:"none",border:"none",color:BLUE_D,fontWeight:700,cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>{allOn?"Clear all":"Select all"}</button>}
           </div>
-          {(buyers||[]).map(b=>{ const ok=canText(b,mode), on=ok&&!!sel[b.id], dn=formDone(b,mode), st=!dn&&linkSent(b,mode);
-            return <div key={b.id} onClick={()=>ok&&toggle(b.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 4px",opacity:ok?1:.45,cursor:ok?"pointer":"default",borderBottom:`1px solid ${SAND}`}}>
-              <div style={{width:20,height:20,borderRadius:6,border:`2px solid ${on?BLUE_D:SAND_D}`,background:on?BLUE_D:"#fff",color:"#fff",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{on?"✓":""}</div>
-              <div style={{flex:1,minWidth:0,fontSize:13.5,color:ESPRESSO,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}<span style={{color:BROWN_L,fontWeight:400,fontSize:12}}> · {b.mobile||"no mobile"}{!b._attioInspectionId&&isLink&&b.mobile?" · no link":""}</span></div>
+          {(buyers||[]).map(b=>{ const ok=canText(b,mode), on=ok&&!!sel[b.id], dn=formDone(b,mode), st=!dn&&linkSent(b,mode); const note=(b.notes||[]).filter(n=>!isAutoNote(n.text)).slice(-1)[0];
+            return <div key={b.id} onClick={()=>ok&&toggle(b.id)} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 4px",opacity:ok?1:.45,cursor:ok?"pointer":"default",borderBottom:`1px solid ${SAND}`}}>
+              <div style={{width:20,height:20,marginTop:1,borderRadius:6,border:`2px solid ${on?BLUE_D:SAND_D}`,background:on?BLUE_D:"#fff",color:"#fff",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{on?"✓":""}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13.5,color:ESPRESSO,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}<span style={{color:BROWN_L,fontWeight:400,fontSize:12}}> · {b.mobile||"no mobile"}{!b._attioInspectionId&&isLink&&b.mobile?" · no link":""}</span></div>
+                {note&&<div style={{fontSize:12,color:BROWN_L,lineHeight:1.4,marginTop:3,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{note.text}</div>}
+              </div>
               {dn?<span style={{fontSize:11,fontWeight:700,color:GRN,background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:100,padding:"3px 8px",flexShrink:0}}>{mode==="bid"?"Registered":"Offer in"}</span>
                 :st?<span style={{fontSize:11,fontWeight:700,color:BROWN_L,background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:100,padding:"3px 8px",flexShrink:0}}>Link sent</span>
                 :b.interest?<span className={`ibadge ${iCl(b.interest)}`}>{iLbl(b.interest)}</span>:null}
@@ -4578,7 +4581,7 @@ export default function App(){
     // An enquiry is property-level: it belongs in the property list (Enquiries
     // section), not under "At this open".
     if(b.isEnquiry) setPropBuyers(p=>({...p,[openHome.id]:[b,...(p[openHome.id]||[])]}));
-    else setBuyers(p=>({...p,[openHome.id]:[b,...(p[openHome.id]||[])]}));
+    else { setBuyers(p=>({...p,[openHome.id]:[b,...(p[openHome.id]||[])]})); setPropBuyers(p=>({...p,[openHome.id]:[b,...(p[openHome.id]||[])]})); } // add to BOTH so the Registered KPI (propReal) ticks live too
     setLastAdded(b);setShowAdd(false);
     setTimeout(()=>setShowOk(true),220);
   };
