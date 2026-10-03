@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v61-excl-purchasers";
+const BUILD = "v62-name-noautocorrect";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1848,7 +1848,7 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
                 ? <>
                   <div style={{fontSize:12,fontWeight:800,letterSpacing:.5,textTransform:"uppercase",color:BLUE_D,marginBottom:8}}>Review before sending</div>
                   <label style={{display:"block",fontSize:11,fontWeight:700,color:BROWN_L}}>Name
-                    <input style={inp} value={x.buyer.name} onChange={e=>updBuyer(i,"name",e.target.value)} placeholder="Full name"/></label>
+                    <input style={inp} value={x.buyer.name} onChange={e=>updBuyer(i,"name",e.target.value)} placeholder="Full name" autoCorrect="off" autoCapitalize="words" spellCheck={false}/></label>
                   <div style={{display:"flex",gap:8,marginTop:8}}>
                     <label style={{flex:1,fontSize:11,fontWeight:700,color:BROWN_L}}>Mobile
                       <input style={inp} value={x.buyer.mobile} onChange={e=>updBuyer(i,"mobile",e.target.value)} placeholder="Mobile"/></label>
@@ -2263,7 +2263,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
       {editing ? (
       <div style={{padding:"0 16px 14px"}}>
         <div style={{marginBottom:10}}><label className="fl">Full name</label>
-          <input className="fi" value={eName} onChange={e=>setEName(e.target.value)} placeholder="Full name" autoFocus/></div>
+          <input className="fi" value={eName} onChange={e=>setEName(e.target.value)} placeholder="Full name" autoFocus autoCorrect="off" autoCapitalize="words" spellCheck={false}/></div>
         <div style={{marginBottom:10}}><label className="fl">Mobile</label>
           <input className="fi" type="tel" value={eMobile} onChange={e=>setEMobile(e.target.value)} placeholder="04XX XXX XXX"/></div>
         <div style={{marginBottom:10}}><label className="fl">Email</label>
@@ -3540,7 +3540,7 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
           <div className="rec-sec">
             <div className="sh2">Details{!editing&&<span className="lnk" onClick={startEdit}>Edit</span>}</div>
             {editing ? <div style={{padding:"4px 14px 12px",display:"flex",flexDirection:"column",gap:8}}>
-              <input className="fi" value={eName} onChange={e=>setEName(e.target.value)} placeholder="Full name" autoFocus/>
+              <input className="fi" value={eName} onChange={e=>setEName(e.target.value)} placeholder="Full name" autoFocus autoCorrect="off" autoCapitalize="words" spellCheck={false}/>
               <input className="fi" type="tel" value={eMobile} onChange={e=>setEMobile(e.target.value)} placeholder="Mobile"/>
               <input className="fi" type="email" value={eEmail} onChange={e=>setEEmail(e.target.value)} placeholder="Email"/>
               <div style={{display:"flex",gap:8}}><button className="crm-btn p" disabled={savingEdit||!eName.trim()} onClick={saveDetails}>{savingEdit?"Saving…":"Save"}</button><button className="crm-btn" onClick={()=>setEditing(false)}>Cancel</button></div>
