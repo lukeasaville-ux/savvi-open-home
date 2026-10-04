@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v63-sold-listings";
+const BUILD = "v64-login-retry";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -25,19 +25,34 @@ function persistSession(token, who) {
 // Set by the app so an expired/invalid session (e.g. after the backend restarts)
 // drops the agent straight to the PIN screen instead of a silent, empty app.
 let onUnauthorized = null;
+// Reads + login are idempotent, so a transient network failure (patchy signal at an open) is
+// retried a few times before we surface an error — this is what stops the app throwing
+// "Can't reach the server" and forcing a close/reopen on a one-off mobile blip. Writes
+// (create/update/send/set/upload/delete) are NOT retried, so a timed-out write can never double-send.
+const RETRYABLE = a => /^(login|get|list|lookup|search|ai)/i.test(String(a || ""));
 async function call(action, params = {}) {
-  try {
-    const r = await fetch(API_BASE, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, token: SESSION_TOKEN, ...params }),
-    });
-    const j = await r.json();
-    if (j && j.ok === false && j.error === "unauthorized" && action !== "login" && onUnauthorized) onUnauthorized();
-    return j;
-  } catch (e) {
-    return { ok: false, error: e.message };
+  const body = JSON.stringify({ action, token: SESSION_TOKEN, ...params });
+  const attempts = RETRYABLE(action) ? 3 : 1;
+  let lastErr = "network";
+  for (let i = 0; i < attempts; i++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    try {
+      const r = await fetch(API_BASE, { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: ctrl.signal });
+      clearTimeout(timer);
+      if (r.status >= 500) { lastErr = "server"; }
+      else {
+        const j = await r.json();
+        if (j && j.ok === false && j.error === "unauthorized" && action !== "login" && onUnauthorized) onUnauthorized();
+        return j;
+      }
+    } catch (e) {
+      clearTimeout(timer);
+      lastErr = (e && e.name === "AbortError") ? "timeout" : ((e && e.message) || "network");
+    }
+    if (i < attempts - 1) await new Promise(res => setTimeout(res, 500 * (i + 1)));
   }
+  return { ok: false, error: lastErr };
 }
 
 async function login(pin) {
