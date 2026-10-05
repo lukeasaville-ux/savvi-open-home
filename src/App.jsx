@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v66-copy-email-and-listings-retry";
+const BUILD = "v67-request-throttle";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -30,7 +30,18 @@ let onUnauthorized = null;
 // "Can't reach the server" and forcing a close/reopen on a one-off mobile blip. Writes
 // (create/update/send/set/upload/delete) are NOT retried, so a timed-out write can never double-send.
 const RETRYABLE = a => /^(login|get|list|lookup|search|ai)/i.test(String(a || ""));
+// Concurrency gate (5 Oct 2026): the self-hosted n8n task runner processes ~5 jobs at once, so firing
+// the whole home screen's ~14 calls in parallel overran it and several came back 503, then retried —
+// that was the slow/"stuck on 0 listings" load. Cap in-flight requests to stay within the runner.
+// (Raising the runner concurrency server-side instead caused shared-session clobbering → mass
+// "unauthorized", so throttling the client is the safe fix.)
+const _MAX_INFLIGHT = 4;
+let _inflight = 0; const _waitQ = [];
+function _acquireSlot() { return new Promise(res => { if (_inflight < _MAX_INFLIGHT) { _inflight++; res(); } else { _waitQ.push(res); } }); }
+function _releaseSlot() { _inflight = Math.max(0, _inflight - 1); const next = _waitQ.shift(); if (next) { _inflight++; next(); } }
 async function call(action, params = {}) {
+  await _acquireSlot();
+  try {
   const body = JSON.stringify({ action, token: SESSION_TOKEN, ...params });
   const attempts = RETRYABLE(action) ? 3 : 1;
   let lastErr = "network";
@@ -53,6 +64,7 @@ async function call(action, params = {}) {
     if (i < attempts - 1) await new Promise(res => setTimeout(res, 500 * (i + 1)));
   }
   return { ok: false, error: lastErr };
+  } finally { _releaseSlot(); }
 }
 
 async function login(pin) {
