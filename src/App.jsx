@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v64-login-retry";
+const BUILD = "v65-private-inspection";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -674,8 +674,8 @@ const Attio = {
     // another person) rather than a bare boolean.
     return j || { ok: false };
   },
-  async createInspection({ contactId, propertyId, openHomeId, interest, agent }) {
-    const j = await call("createInspection", { contactId, propertyId, openHomeId, interest, agent });
+  async createInspection({ contactId, propertyId, openHomeId, interest, agent, date }) {
+    const j = await call("createInspection", { contactId, propertyId, openHomeId, interest, agent, date });
     if (j?.ok) invalidateBuyerCache();
     return j?.ok ? { ok: true, id: j.id } : { ok: false };
   },
@@ -2178,12 +2178,15 @@ function SendCard({ buyer, propId, hasContract, onSendContract, onTextContract, 
   </div>;
 }
 
-function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink,onCheckIn,onRemoveFromOpen}){
+function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink,onCheckIn,onRemoveFromOpen,onPrivateInspect}){
   const [checkin,setCheckin]=useState("");       // per-add status: "" | busy | done | err
   const [checkinId,setCheckinId]=useState("");   // id of the open currently being added to
   const [removingId,setRemovingId]=useState(""); // id of the open currently being removed from
-  const [pickOpen,setPickOpen]=useState(false);  // the "Add to an open" picker is showing
+  const [pickOpen,setPickOpen]=useState(false);  // the "Add Inspection" picker is showing
   const [openList,setOpenList]=useState(null);   // this property's opens (null = not fetched yet)
+  const [privMode,setPrivMode]=useState(false);  // private-inspection date picker is showing
+  const [privDate,setPrivDate]=useState("");     // chosen private-inspection date (YYYY-MM-DD)
+  const [privSaving,setPrivSaving]=useState(false);
   useEffect(()=>{ setCheckin(""); setCheckinId(""); setRemovingId(""); setPickOpen(false); setOpenList(null); },[buyer?.id,openHome?.id]);
   const[noteText,setNoteText]=useState("");
   const[showNote,setShowNote]=useState(false);
@@ -2331,16 +2334,16 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
       </div>}
       </>)}
 
-      {/* A buyer already on the listing (earlier open / enquiry) who has turned up again:
-          one tap puts them in THIS open instead of re-registering them from scratch. */}
-      {onCheckIn&&openHome&&!openHome._demo&&buyer.contactId&&<div style={{padding:"0 16px 10px"}}>
+      {/* A buyer already on the listing (earlier open / enquiry) who inspected again — add them to
+          a scheduled open, OR log a PRIVATE inspection on a chosen date (Savvi runs privates daily). */}
+      {(onCheckIn||onPrivateInspect)&&openHome&&!openHome._demo&&buyer.contactId&&<div style={{padding:"0 16px 10px"}}>
         {!pickOpen
-          ? <button className="checkin-btn" style={{width:"100%",margin:0}} onClick={()=>{ setPickOpen(true); setCheckin(""); setCheckinId(""); if(openList===null){ Attio.getPropertyOpens(openHome.propertyId||openHome.id).then(l=>setOpenList(l||[])).catch(()=>setOpenList([])); } }}>Add to an open</button>
+          ? <button className="checkin-btn" style={{width:"100%",margin:0}} onClick={()=>{ setPickOpen(true); setCheckin(""); setCheckinId(""); setPrivMode(false); if(!privDate){ const t=new Date(); setPrivDate(t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0")+"-"+String(t.getDate()).padStart(2,"0")); } if(onCheckIn&&openList===null){ Attio.getPropertyOpens(openHome.propertyId||openHome.id).then(l=>setOpenList(l||[])).catch(()=>setOpenList([])); } }}>Add Inspection</button>
           : <div style={{border:`1px solid ${SAND_D}`,borderRadius:12,background:"#fff",padding:"11px 12px"}}>
-              <div style={{fontSize:12.5,fontWeight:800,color:ESPRESSO,marginBottom:8}}>Add {(buyer.name||"them").split(" ")[0]} to which open?</div>
-              {openList===null&&<div style={{fontSize:12.5,color:BROWN_L,padding:"4px 0"}}>Loading opens…</div>}
-              {openList&&openList.length===0&&<div style={{fontSize:12.5,color:BROWN_L,padding:"4px 0"}}>No opens on this listing yet.</div>}
-              {openList&&openList.map(o=>{
+              <div style={{fontSize:12.5,fontWeight:800,color:ESPRESSO,marginBottom:8}}>Add {(buyer.name||"them").split(" ")[0]} to an inspection</div>
+              {onCheckIn&&openList===null&&<div style={{fontSize:12.5,color:BROWN_L,padding:"4px 0"}}>Loading opens…</div>}
+              {onCheckIn&&openList&&openList.length===0&&<div style={{fontSize:12.5,color:BROWN_L,padding:"4px 0"}}>No scheduled opens on this listing yet.</div>}
+              {onCheckIn&&openList&&openList.map(o=>{
                 const already=(buyer.openHomeIds||[]).includes(o.id);
                 const ok=canAddToOpen(o);
                 const label=openWhen(o)||o.date||"Open";
@@ -2366,7 +2369,20 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
                 </div>;
               })}
               {checkin==="err"&&<div style={{fontSize:12,color:AMBER_D,fontWeight:600,padding:"2px 0 6px"}}>Couldn't add them — tap Add again.</div>}
-              <button className="btn-cream" style={{marginTop:2}} onClick={()=>{ setPickOpen(false); setCheckin(""); setCheckinId(""); }}>Cancel</button>
+              {onPrivateInspect&&(!privMode
+                ? <button onClick={()=>{ setPrivMode(true); if(!privDate){ const t=new Date(); setPrivDate(t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0")+"-"+String(t.getDate()).padStart(2,"0")); } }} style={{width:"100%",padding:"10px 12px",margin:"2px 0 6px",borderRadius:10,border:`1px dashed ${BLUE_D}`,background:"#fff",color:BLUE_D,fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>+ Private inspection</button>
+                : <div style={{border:`1px solid ${SAND_D}`,borderRadius:10,background:LINEN,padding:"10px 11px",margin:"2px 0 6px"}}>
+                    <div style={{fontSize:12,fontWeight:800,color:BROWN,marginBottom:7}}>When did {(buyer.name||"they").split(" ")[0]} inspect privately?</div>
+                    <div style={{display:"flex",gap:6,marginBottom:8}}>
+                      {[["Today",0],["Yesterday",-1]].map(([lbl,off])=>{ const d=new Date(); d.setDate(d.getDate()+off); const ds=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); const sel=privDate===ds; return <button key={lbl} onClick={()=>setPrivDate(ds)} style={{flex:1,padding:"7px 0",borderRadius:8,border:`1px solid ${sel?BLUE_D:SAND_D}`,background:sel?BLUE_D:"#fff",color:sel?"#fff":BROWN,fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>{lbl}</button>; })}
+                    </div>
+                    <input className="fi" type="date" value={privDate} max={(()=>{const t=new Date();return t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0")+"-"+String(t.getDate()).padStart(2,"0");})()} onChange={e=>setPrivDate(e.target.value)} style={{marginBottom:9}}/>
+                    <div style={{display:"flex",gap:8}}>
+                      <button onClick={()=>setPrivMode(false)} style={{flex:1,padding:"10px",borderRadius:9,border:`1px solid ${SAND_D}`,background:WHITE,color:BROWN_L,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Back</button>
+                      <button disabled={!privDate||privSaving} onClick={async()=>{ setPrivSaving(true); const r=await onPrivateInspect(propId,buyer,privDate); setPrivSaving(false); if(r&&r.ok){ setPrivMode(false); setPickOpen(false); } }} style={{flex:2,padding:"10px",borderRadius:9,border:"none",background:(!privDate||privSaving)?BROWN_L:BLUE_D,color:"#fff",fontWeight:800,fontSize:13,cursor:(!privDate||privSaving)?"default":"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>{privSaving?"Adding…":"Add private inspection"}</button>
+                    </div>
+                  </div>)}
+              <button className="btn-cream" style={{marginTop:2}} onClick={()=>{ setPickOpen(false); setPrivMode(false); setCheckin(""); setCheckinId(""); }}>Cancel</button>
             </div>}
       </div>}
 
@@ -4424,6 +4440,23 @@ export default function App(){
     return {ok:!!ok};
   },[refreshBuyers]);
 
+  // PRIVATE inspection: a buyer who inspected outside a scheduled open (Savvi runs privates daily,
+  // and enquiries often convert straight to a private). There's no open_home to attach to, so we
+  // create a property-level inspection stamped with the private DATE and note it, so it reads as a
+  // private visit and the day-after follow-up text can still fire off that date.
+  const privateInspectBuyer=useCallback(async(pid,b,dateStr)=>{
+    const propId2=openHome?.propertyId||openHome?.id;
+    if(!propId2||!b?.contactId||!dateStr) return {ok:false};
+    const r=await Attio.createInspection({contactId:b.contactId,propertyId:propId2,openHomeId:null,interest:b.interest||"",agent:agentName,date:dateStr}).catch(()=>({ok:false}));
+    if(!r||!r.ok||!r.id) return {ok:false};
+    const agentFull=AGENT_FULL[agentName]||agentName||"";
+    const addr=streetLine(openHome?.address,openHome?.suburb)||"the property";
+    let whenNice=dateStr; try{ whenNice=new Date(dateStr+"T00:00:00").toLocaleDateString("en-AU",{weekday:"short",day:"numeric",month:"short"}); }catch(_){}
+    Attio.updateInspection(r.id,{notes:`${new Date().toISOString()}\t${agentFull}\tPrivate inspection ${whenNice}, ${addr} (added by ${agentFull})`}).catch(()=>{});
+    await refreshBuyers();
+    return {ok:true};
+  },[openHome,agentName,refreshBuyers]);
+
   // All mutations take explicit propId — no stale closure risk
   const updateInterest=useCallback((pid,id,val)=>{
     if(!pid)return;
@@ -5097,7 +5130,8 @@ export default function App(){
       onUpdateInterest={updateInterest} onSendContract={sendContract} onTextContract={textContract}
       onAddNote={addNote} onEditNote={editNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}
       onRemoveBuyer={removeBuyer} onTransferBuyer={transferBuyer} onRequestContract={requestContract} onOpenContact={openContact} onSendLink={sendBuyerLink}
-      onCheckIn={(active&&openHome&&!openHome._demo&&active.contactId)?checkInBuyer:undefined} onRemoveFromOpen={(!isDemo)?removeFromOpen:undefined}/>
+      onCheckIn={(active&&openHome&&!openHome._demo&&active.contactId)?checkInBuyer:undefined} onRemoveFromOpen={(!isDemo)?removeFromOpen:undefined}
+      onPrivateInspect={(!isDemo&&active&&openHome&&!openHome._demo&&active.contactId&&(openHome.propertyId||openHome.id))?privateInspectBuyer:undefined}/>
     {/* Contact-search detail: the searched person's full page, with their own inspection as
         the edit context. View + call/text/email + notes + interest across every property. */}
     <DetailHost desktop={isDesktop} open={searchDetailOpen} onClose={()=>setSearchDetailOpen(false)} buyer={searchProfile}
