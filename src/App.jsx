@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v67-request-throttle";
+const BUILD = "v68-genenq-sms-note-and-hide-sendcard";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2412,7 +2412,9 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         <span className="e">{o.e}</span>{o.l}
       </div>)}</div>
 
-      <SendCard buyer={buyer} propId={propId} hasContract={!!openHome?.contractUrl} onSendContract={onSendContract} onTextContract={onTextContract} onRequestContract={onRequestContract} onSend={onSendLink}/>
+      {/* Contract / offer / bid only make sense for a specific listing. A general enquiry has no
+          property attached, so hide the whole card there (Luke, 6 Oct). */}
+      {!!(openHome&&openHome.propertyId)&&<SendCard buyer={buyer} propId={propId} hasContract={!!openHome?.contractUrl} onSendContract={onSendContract} onTextContract={onTextContract} onRequestContract={onRequestContract} onSend={onSendLink}/>}
 
       {/* Notes: composer sits right under the label so a note is one tap away without scrolling */}
       <div className="sec-w"><div className="sec-i">Notes</div></div>
@@ -3627,10 +3629,10 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
             </div>}
             {!atThisOpen&&<div style={{padding:"4px 14px 12px"}}><button className={`checkin-btn${checkin==="done"?" done":""}`} style={{width:"100%",margin:0}} disabled={checkin==="busy"||checkin==="done"} onClick={async()=>{ setCheckin("busy"); const r=await onCheckIn(propId,buyer); setCheckin(r&&r.ok?"done":"err"); }}>{checkin==="done"?"Added to this open ✓":checkin==="busy"?"Adding…":checkin==="err"?"Couldn't add them, tap to try again":"Add to this open"}</button></div>}
           </div>
-          <div className="rec-sec">
+          {!!(openHome&&openHome.propertyId)&&<div className="rec-sec">
             <div className="sh2">Send to buyer</div>
             <SendCard buyer={buyer} propId={propId} hasContract={!!openHome?.contractUrl} onSendContract={onSendContract} onTextContract={onTextContract} onRequestContract={onRequestContract} onSend={onSendLink}/>
-          </div>
+          </div>}
           <div className="rec-sec">
             <AiProfile profile={buyer.aiProfile} onRegen={()=>{ onSetProfile(propId,buyer.id,null); setTimeout(()=>genProfile(buyer,propId,crossNotes),100); }}/>
           </div>
@@ -4789,16 +4791,21 @@ export default function App(){
     let contactId=null;
     try{ if(g.mobile){ const ex=await Attio.findPersonByPhone(g.mobile).catch(()=>null); if(ex) contactId=ex.contactId||ex.id||Attio.id(ex); } }catch(e){}
     if(!contactId){ const r=await Attio.createPerson({name:g.name,email:g.email,mobile:g.mobile}).catch(()=>({ok:false})); if(r&&r.ok) contactId=r.id; }
+    let genInspId=null;
     if(contactId){
       const brief="[Buyer brief] Budget "+(g.budgetLow||"?")+" - "+(g.budgetHigh||"?")+". Areas: "+((g.suburbs||[]).join(", ")||"?")+". "+(g.beds||"?")+" bed. "+(g.requirements||"")+(g.questions?(" | Asked: "+g.questions):"");
-      try{ const ins=await Attio.createInspection({contactId,interest:"watching",agent:agentName}); if(ins&&ins.ok&&ins.id){ Attio.updateInspection(ins.id,{notes:fmtDateTime()+"\t"+(agentName||"Savvi")+"\t"+brief}).catch(()=>{}); } }catch(e){}
+      try{ const ins=await Attio.createInspection({contactId,interest:"watching",agent:agentName}); if(ins&&ins.ok&&ins.id){ genInspId=ins.id; Attio.updateInspection(ins.id,{notes:fmtDateTime()+"\t"+(agentName||"Savvi")+"\t"+brief}).catch(()=>{}); } }catch(e){}
       done.push("Saved "+(g.name||"the buyer")+" with their brief");
     } else { done.push("⚠️ Couldn't save the buyer — add a name and a mobile or email"); }
     const reply=(g.reply||"").trim();
     if(reply){
       const signed=reply+"\n"+(agentName||"Savvi");
-      if(g.email){ const r=await call("sendEmail",{toEmail:g.email,subject:"Thanks for reaching out — Savvi",body:signed}).catch(()=>({ok:false})); done.push((r&&r.ok)?("Emailed the reply to "+g.email):"⚠️ The email didn't send"); }
-      else if(g.mobile){ MM.sendMessage({toPhone:g.mobile,message:reply,agent:agentName}).catch(()=>{}); done.push("Texted the reply to "+g.mobile); }
+      // Always LOG the reply on the buyer's record (sent or failed). The general-enquiry SMS used to
+      // send fire-and-forget with no note, so there was no record of it (Luke, 6 Oct). Await the send
+      // so the note reflects whether it actually went.
+      const logReply=txt=>{ if(genInspId) Attio.updateInspection(genInspId,{notes:fmtDateTime()+"\t"+(agentName||"Savvi")+"\t"+txt}).catch(()=>{}); };
+      if(g.email){ const r=await call("sendEmail",{toEmail:g.email,subject:"Thanks for reaching out — Savvi",body:signed}).catch(()=>({ok:false})); const ok=r&&r.ok; done.push(ok?("Emailed the reply to "+g.email):"⚠️ The email didn't send"); logReply(ok?("Emailed reply to "+g.email+": "+reply):("Reply email FAILED to send: "+reply)); }
+      else if(g.mobile){ const r=await MM.sendMessage({toPhone:g.mobile,message:reply,agent:agentName}).catch(()=>({ok:false})); const ok=r&&r.ok; done.push(ok?("Texted the reply to "+g.mobile):"⚠️ The text didn't send"); logReply(ok?("Texted reply to "+g.mobile+": "+reply):("Reply text FAILED to send: "+reply)); }
       else { done.push("No email or mobile — reply not sent"); }
     }
     return { done, name:g.name, email:g.email, mobile:g.mobile };
