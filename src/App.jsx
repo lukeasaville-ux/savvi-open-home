@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v65-private-inspection";
+const BUILD = "v66-copy-email-and-listings-retry";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -246,8 +246,15 @@ const Attio = {
     return j?.ok ? { ok: true, data: j.data || [] } : { ok: false, data: [] };
   },
   async getAllActiveListings() {
-    const j = await call("getListings");
-    return j?.ok ? { ok: true, data: j.data || [] } : { ok: false, data: [] };
+    // getListings is NEVER legitimately empty (there are always properties). A 0/failed result means
+    // a transient backend/Attio blip, so retry a few times before giving up — this stops the home
+    // screen from showing "0 listings" and sitting there until a manual Sync (Luke, 5 Oct 2026).
+    for (let i = 0; i < 3; i++) {
+      const j = await call("getListings");
+      if (j?.ok && j.data && j.data.length) return { ok: true, data: j.data };
+      if (i < 2) await new Promise(r => setTimeout(r, 600 * (i + 1)));
+    }
+    return { ok: false, data: [] };
   },
   // Commission/GCI snapshot (banked by month + Oct/Nov forecast) for the Pipeline tab.
   // Written nightly by the refresh task from the Stocklist sheet; served from n8n.
@@ -2191,6 +2198,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
   const[noteText,setNoteText]=useState("");
   const[showNote,setShowNote]=useState(false);
   const[copied,setCopied]=useState(false);
+  const[copiedEmail,setCopiedEmail]=useState(false);
   const[editing,setEditing]=useState(false);
   const[editNoteId,setEditNoteId]=useState(null);
   const[editNoteText,setEditNoteText]=useState("");
@@ -2321,7 +2329,8 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
       <a className="crow" href={buyer.email?`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(buyer.email)}`:undefined} onClick={buyer.email?(e=>openEmail(e,buyer.email)):undefined} target="_blank" rel="noreferrer" style={{marginBottom:4,textDecoration:"none",color:"inherit",cursor:buyer.email?"pointer":"default"}}>
         <div className="ci" style={{background:"#FFF4D5"}}>✉️</div>
         <div style={{flex:1}}><div className="ci-l">EMAIL</div><div className="ci-v">{buyer.email||"—"}</div></div>
-        {buyer.email&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:AMBER}}>Email ›</span>}
+        {buyer.email&&<span className="ci-cp" onClick={e=>{e.preventDefault();e.stopPropagation();navigator.clipboard?.writeText(buyer.email).catch(()=>{});setCopiedEmail(true);setTimeout(()=>setCopiedEmail(false),1500);}}>{copiedEmail?"Copied ✓":"Copy"}</span>}
+        {buyer.email&&<span style={{marginLeft:10,fontSize:12,fontWeight:700,color:AMBER}}>Email ›</span>}
       </a>
       <div style={{padding:"0 16px 8px",textAlign:"right"}}><span className="qa-edit" style={{fontSize:12}} onClick={startEdit}>Edit name, mobile or email</span></div>
       {callOpen&&<div style={{margin:"0 16px 12px",padding:"12px 13px",border:`1px solid ${SAND_D}`,borderRadius:11,background:LINEN}}>
@@ -3546,7 +3555,7 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
   const [editing,setEditing]=useState(false); const [eName,setEName]=useState(""); const [eMobile,setEMobile]=useState(""); const [eEmail,setEEmail]=useState(""); const [savingEdit,setSavingEdit]=useState(false);
   const [editNoteId,setEditNoteId]=useState(null); const [editNoteText,setEditNoteText]=useState("");
   const [callOpen,setCallOpen]=useState(false); const [callNote,setCallNote]=useState("");
-  const [copied,setCopied]=useState(false); const [manage,setManage]=useState(false); const [xfer,setXfer]=useState(false);
+  const [copied,setCopied]=useState(false); const [copiedEmail,setCopiedEmail]=useState(false); const [manage,setManage]=useState(false); const [xfer,setXfer]=useState(false);
   const [checkin,setCheckin]=useState(""); const [crossNotes,setCrossNotes]=useState(null);
   useEffect(()=>{ setNoteText(""); setNoteOpen(false); setEditing(false); setEditNoteId(null); setCallOpen(false); setManage(false); setXfer(false); setCheckin(""); setCrossNotes(null); },[buyer?.id,open]);
   useEffect(()=>{ if(!open) return; const k=e=>{ if(e.key==="Escape") onClose(); }; window.addEventListener("keydown",k); return ()=>window.removeEventListener("keydown",k); },[open,onClose]);
@@ -3597,7 +3606,7 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
               <div className="rec-attr"><span className="k">MOBILE</span><span className="v">{buyer.mobile||"—"}</span>
                 {buyer.mobile&&<><span className="a" onClick={()=>{ navigator.clipboard?.writeText(buyer.mobile).catch(()=>{}); setCopied(true); setTimeout(()=>setCopied(false),1500); }}>{copied?"Copied ✓":"Copy"}</span><a className="a g" href={`tel:${toE164AU(buyer.mobile)}`} onClick={()=>{ setCallNote(""); setCallOpen(true); }}>Call</a><a className="a o" href={`sms:${toE164AU(buyer.mobile)}`}>Text</a></>}
               </div>
-              <div className="rec-attr"><span className="k">EMAIL</span><span className="v">{buyer.email||"—"}</span>{buyer.email&&<a className="a o" href={`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(buyer.email)}`} onClick={e=>openEmail(e,buyer.email)} target="_blank" rel="noreferrer">Email</a>}</div>
+              <div className="rec-attr"><span className="k">EMAIL</span><span className="v">{buyer.email||"—"}</span>{buyer.email&&<><span className="a" onClick={()=>{ navigator.clipboard?.writeText(buyer.email).catch(()=>{}); setCopiedEmail(true); setTimeout(()=>setCopiedEmail(false),1500); }}>{copiedEmail?"Copied ✓":"Copy"}</span><a className="a o" href={`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(buyer.email)}`} onClick={e=>openEmail(e,buyer.email)} target="_blank" rel="noreferrer">Email</a></>}</div>
             </>}
             {callOpen&&<div className="rec-callbox">
               <div style={{fontSize:12.5,fontWeight:800,color:BROWN,marginBottom:8}}>Log call with {first}</div>
