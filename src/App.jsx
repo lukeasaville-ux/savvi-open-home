@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v68-genenq-sms-note-and-hide-sendcard";
+const BUILD = "v68-genenq-sms-note-and-hide-sendcard+campaign-update";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2623,6 +2623,127 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed}){
 }
 
 /* ════════════════════════════════════════════
+   CAMPAIGN UPDATE SHEET — a per-property vendor campaign update as EDITABLE text
+   that Luke copies into WhatsApp or email. Built entirely client-side (no AI /
+   backend call): it categorises the property's buyers (hot / watching /
+   cooled-off-but-engaged), tallies inspections · active buyers · contracts,
+   pulls recurring feedback from the notes, and leaves the summary, marketing
+   reach and recommendation as editable placeholders. FIRST NAMES ONLY (privacy).
+════════════════════════════════════════════ */
+const campFirst = n => String(n || "").trim().split(/\s+/)[0] || "They";
+// System / automation notes the app writes itself — never surface these to a
+// vendor. Only the agent's own human comments about a buyer feed the update.
+const CAMPAIGN_SYS_PATTERNS = [
+  /^Inspected\b.*\bopen\b/i, /^Text sent:/i, /^Emailed /i, /^Sent (the )?contract/i,
+  /^Contract (sent|texted|emailed|auto-sent|requested)/i, /^Checked in\b/i,
+  /^Registered\b/i, /^Added to the /i, /^Private inspection\b/i, /^Transferred\b/i,
+  /\[contract-auto-sent\]/i, /(REA|Domain|Portal)\s+enquiry/i, /^Enquiry via (text|sms|email|phone|dm)/i,
+];
+const campIsSysNote = t => CAMPAIGN_SYS_PATTERNS.some(re => re.test(t));
+// A buyer's human notes, cleaned to plain text (system notes dropped, offer/bid
+// bracket tags stripped but their substance kept).
+function campCleanNotes(buyer) {
+  const out = [];
+  (buyer?.notes || []).forEach(n => {
+    let t = String(n.text || "").replace(/\s+/g, " ").trim();
+    if (!t || campIsSysNote(t)) return;
+    t = t.replace(/^\s*\[(Offer|Bid registration)\]\s*/i, "").trim();
+    if (t) out.push(t);
+  });
+  return out;
+}
+function buildCampaignUpdate({ openHome, buyers, agentName }) {
+  const bl = buyers || [];
+  const addr = openHome?.address || streetLine(openHome?.address || "", openHome?.suburb || "") || "the property";
+  const agent = campFirst(agentName) || "Luke";
+
+  // Categorise across the whole property's buyers (campaign-wide, like the open screen's stats).
+  const hot = bl.filter(b => b.interest === "hot");
+  const watching = bl.filter(b => b.interest === "watching");
+  const engaged = b => (!b.isEnquiry) || !!b.contractSent; // inspected at least once OR sent a contract
+  const cooled = bl.filter(b => b.interest === "cool" && engaged(b));
+
+  // Counts.
+  const real = bl.filter(b => !b.isEnquiry);
+  const inspections = real.reduce((s, b) => s + (b.visits || 1), 0);
+  const active = hot.length + watching.length;
+  const contracts = bl.filter(b => b.contractSent).length;
+
+  // Days on market — only when the property carries a usable campaign-start date.
+  let domToken = "";
+  const cs = openHome?.campaignStart;
+  if (cs) { const d = daysSince(String(cs).length <= 10 ? cs + "T00:00:00" : cs); if (d != null && d >= 0) domToken = `${d} day${d === 1 ? "" : "s"} on market`; }
+  const numbers = [domToken, `${inspections} inspection${inspections === 1 ? "" : "s"}`,
+    `${active} active buyer${active === 1 ? "" : "s"}`, `${contracts} contract${contracts === 1 ? "" : "s"} issued`].filter(Boolean).join(" · ");
+
+  const block = b => {
+    const n = b.visits || 1;
+    let head = `${campFirst(b.name)} — ${n} inspection${n === 1 ? "" : "s"}`;
+    if (b.contractSent) head += ", contract issued";
+    const notes = campCleanNotes(b).join("; ");
+    return notes ? `${head}\n${notes}` : head;
+  };
+  const section = (title, blocks) => `${title}\n${blocks.length ? blocks.join("\n\n") : "None yet."}`;
+  const hotSec = section("Hot", hot.map(block));
+  const watchSec = section("Watching", watching.map(block));
+  const cooledSec = section("Cooled off", cooled.map(b => {
+    const note = campCleanNotes(b).join("; ") || "went quiet after showing interest";
+    return `${campFirst(b.name)} (was interested) — ${note}`;
+  }));
+
+  // Recurring feedback — distinct note snippets, no counts / no "2+ buyers" phrasing.
+  const snippets = [], seen = new Set();
+  real.forEach(b => campCleanNotes(b).forEach(t => {
+    t.split(/[.;\n]+/).map(s => s.trim()).filter(s => s.length >= 4).forEach(s => {
+      const k = s.toLowerCase(); if (!seen.has(k)) { seen.add(k); snippets.push(s); }
+    });
+  }));
+  const feedback = snippets.length ? snippets.slice(0, 6).map(s => `- ${s}`).join("\n") : "[add buyer feedback]";
+
+  return [
+    `Campaign update — ${addr}`, ``,
+    `Hi [vendor name], here's where things are at.`, ``,
+    `The numbers so far`, numbers, ``,
+    `Where it's at`, `[add your summary]`, ``,
+    hotSec, ``, watchSec, ``, cooledSec, ``,
+    `What buyers keep telling us`, feedback, ``,
+    `Marketing reach`,
+    `realestate.com.au: ___ views, ___ enquiries`,
+    `Domain: ___ views, ___ enquiries`,
+    `Walkthrough video: ___ views, ___ enquiries`, ``,
+    `[your closing recommendation goes here]`, ``,
+    agent,
+  ].join("\n");
+}
+function CampaignSheet({ open, onClose, openHome, buyers, agentName }) {
+  const [text, setText] = useState("");
+  const [copied, setCopied] = useState(false);
+  const drag = useSheetDrag(onClose);
+  // Rebuild the draft each time the sheet opens (reads the current buyer set).
+  useEffect(() => { if (open) { setCopied(false); setText(buildCampaignUpdate({ openHome, buyers, agentName })); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
+  const copy = () => { navigator.clipboard?.writeText(text).catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 2000); };
+  return <div className={`ov ${open ? "s" : "h"}`} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="sh" onClick={e => e.stopPropagation()} style={{ position: "relative", ...drag.style }} {...drag.handlers}>
+      <div className="hndl" onClick={onClose} style={{ cursor: "pointer" }}/>
+      <button onClick={onClose} aria-label="Close" style={{ position: "absolute", top: 12, right: 14, width: 34, height: 34, borderRadius: "50%", border: "none", background: SAND, color: BROWN, fontSize: 16, lineHeight: 1, cursor: "pointer", zIndex: 5, fontFamily: "'Neue Haas Unica Pro',sans-serif" }}>✕</button>
+      <div className="sh-ttl" style={{ paddingRight: 44 }}>Campaign update</div>
+      <div className="sh-sub">{[openHome?.address, openHome?.suburb].filter(Boolean).join(" · ")}</div>
+      <div className="sum-body">
+        <div className="sum-box">
+          <div className="sum-lbl">Per-property update · edit it, then copy into WhatsApp or email</div>
+          <textarea className="sum-edit" value={text} onChange={e => setText(e.target.value)} onTouchStart={e => e.stopPropagation()} onTouchMove={e => e.stopPropagation()} spellCheck={true}/>
+        </div>
+        <div className="cpy-row">
+          <button className="btn-cream" style={{ flex: "0 0 auto", width: "auto", padding: "13px 16px", fontSize: 13, whiteSpace: "nowrap" }} onClick={copy}>{copied ? "✓ Copied" : "Copy"}</button>
+          <button className="btn-outline" style={{ flex: "1 1 0", minWidth: 0 }} onClick={onClose}>Close</button>
+        </div>
+        <div style={{ height: 8 }}/>
+      </div>
+    </div>
+  </div>;
+}
+
+/* ════════════════════════════════════════════
    QUICK CONTRACT SHEET (from listings section)
 ════════════════════════════════════════════ */
 /* ════════════════════════════════════════════
@@ -3833,6 +3954,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
           <button className="crm-btn" disabled={!propAll.some(b=>b.email)} onClick={()=>emailBuyers(propReal)}>Email buyers</button>
           {oh.contractUrl?<button className="crm-btn" onClick={()=>crm.openQuickContract(oh)}>Send contract</button>:<ContractUpload compact label="Add contract PDF" propertyId={oh.propertyId} onUploaded={crm.applyContractUrl}/>}
           <button className="crm-btn" onClick={()=>{ crm.setShowSum(true); if(crm.refreshBuyers) crm.refreshBuyers(); }}>Vendor update</button>
+          {(oh.propertyId||oh._listing)&&<button className="crm-btn" onClick={()=>{ crm.setShowCampaign&&crm.setShowCampaign(true); if(crm.refreshBuyers) crm.refreshBuyers(); }}>Campaign update</button>}
           <button className="crm-btn" onClick={()=>crm.setShowMatch(true)}>Matching buyers</button>
           <button className="crm-btn" onClick={()=>crm.setShowAssistant(true)}>AI assistant</button>
           <button className="crm-btn" onClick={()=>setShowInfo(v=>!v)}>Listing info {showInfo?"▴":"▾"}</button>
@@ -4151,6 +4273,7 @@ export default function App(){
   // Synthetic open context for the searched contact (their most-recent inspection's property),
   // so contract/interest actions target the right inspection.
   const[showSum,setShowSum]=useState(false);
+  const[showCampaign,setShowCampaign]=useState(false);
   const[showOk,setShowOk]=useState(false);
   const[lastAdded,setLastAdded]=useState(null);
   const[showCtr,setShowCtr]=useState(false);
@@ -4880,7 +5003,7 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
+  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setShowCampaign, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
@@ -5056,6 +5179,9 @@ export default function App(){
         <button className="btn-outline" style={{flex:1}} onClick={()=>{ setShowSum(true); refreshBuyers(); }}>Vendor update</button>
         {listingHasInfo(openHome)&&<button className="btn-outline" style={{flex:1}} onClick={()=>setShowInfo(s=>!s)}>Listing info {showInfo?"▲":"▼"}</button>}
       </div>
+      {!isDemo&&(openHome.propertyId||openHome._listing)&&<div className="acts" style={{paddingTop:8}}>
+        <button className="btn-outline" style={{flex:1}} onClick={()=>{ setShowCampaign(true); refreshBuyers(); }}>Campaign update</button>
+      </div>}
       <div className="acts" style={{paddingTop:8}}>
         <button className="btn-outline" style={{flex:1}} onClick={()=>setShowMatch(true)}>Matching buyers</button>
       </div>
@@ -5172,6 +5298,7 @@ export default function App(){
       onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}} onOpenContact={openContact}
       onSendLink={(kind,channel,b)=>{ if(!b?._attioInspectionId) return false; const url=formLinkUrl(kind,b._attioInspectionId,agentName); const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const logSearch=(text)=>{ const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:AGENT_FULL[agentName]||agentName||""}; setSearchProfile(a=>{ if(!a) return a; const notes=[...(a.notes||[]),note]; if(!isDemo&&a._attioInspectionId){ const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; Attio.updateInspection(a._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); } return {...a,notes}; }); }; if(channel==="text"){ if(!b.mobile) return false; const msg=formLinkMsg(kind,first,addr,url,smsSig(agentName)); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:msg}).catch(()=>{}); logSearch(formSentNote(kind,"text")); return true; } if(channel==="email"){ if(!b.email) return false; Resend.sendFormLink({toEmail:b.email,toName:b.name,agentName,address:searchOpenHome?.address||addr,url,kind}).catch(()=>{}); logSearch(formSentNote(kind,"email")); return true; } return false; }}/>
     <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll} precomputed={openHome?vendorReport.current[openHome.id]:null}/>
+    <CampaignSheet open={showCampaign} onClose={()=>setShowCampaign(false)} openHome={openHome} buyers={propAll} agentName={agentName}/>
     <MatchSheet open={showMatch} onClose={()=>setShowMatch(false)} openHome={openHome} excludeIds={propAll.map(b=>b.contactId).filter(Boolean)} agentName={agentName} propIndex={propIndex}/>
     <QuickContractSheet
       open={showQuickContract}
