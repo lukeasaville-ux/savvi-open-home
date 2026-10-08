@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v68-genenq-sms-note-and-hide-sendcard+campaign-report-fix";
+const BUILD = "v69-report-timeout-fix+tiered-call-timeouts";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -39,6 +39,18 @@ const _MAX_INFLIGHT = 4;
 let _inflight = 0; const _waitQ = [];
 function _acquireSlot() { return new Promise(res => { if (_inflight < _MAX_INFLIGHT) { _inflight++; res(); } else { _waitQ.push(res); } }); }
 function _releaseSlot() { _inflight = Math.max(0, _inflight - 1); const next = _waitQ.shift(); if (next) { _inflight++; next(); } }
+// Per-action request timeout. Most calls are quick and a 12s cap catches a dead
+// network fast. A few are LEGITIMATELY slow and must not be killed early: the AI
+// report/profile (a full campaign report on a busy listing takes ~30s) and the
+// heavy index/buyer loads. A flat 10s cap was aborting all of these mid-flight,
+// which is why the campaign report fell back to "no groups" and the contact index
+// struggled to load. (Proper load speed-up is the slim cached index; this just
+// stops the premature abort.)
+function _timeoutFor(action) {
+  if (action === "aiVendorSummary" || action === "aiBuyerProfile" || action === "aiListingAsk" || action === "aiAddressLookup") return 120000;
+  if (action === "listRecords" || action === "getBuyersFor") return 45000;
+  return 12000;
+}
 async function call(action, params = {}) {
   await _acquireSlot();
   try {
@@ -47,7 +59,7 @@ async function call(action, params = {}) {
   let lastErr = "network";
   for (let i = 0; i < attempts; i++) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 10000);
+    const timer = setTimeout(() => ctrl.abort(), _timeoutFor(action));
     try {
       const r = await fetch(API_BASE, { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: ctrl.signal });
       clearTimeout(timer);
@@ -841,8 +853,16 @@ async function aiVendorSummary(openHome, buyers, mode) {
   const isCampaign = mode === "campaign";
   // The campaign report names only buyers who INSPECTED — online enquiries are counted,
   // not named. (Post-open wrap keeps everyone who came through.)
-  const named = isCampaign ? buyers.filter(b => !b.isEnquiry) : buyers;
+  let named = isCampaign ? buyers.filter(b => !b.isEnquiry) : buyers;
   const enquiryCount = isCampaign ? buyers.filter(b => b.isEnquiry).length : 0;
+  // Cap the campaign report to the buyers who matter (a busy listing can have 60+
+  // and every note of every one of them times the AI out). Keep the most serious:
+  // hot, then watching, then contract-takers, then by repeat visits. A vendor report
+  // reads on the real contenders, not the whole database.
+  if (isCampaign && named.length > 35) {
+    const rank = b => (b.interest === "hot" ? 0 : b.interest === "watching" ? 1 : b.contractSent ? 2 : 3);
+    named = [...named].sort((a, b) => rank(a) - rank(b) || ((b.visits || 1) - (a.visits || 1))).slice(0, 35);
+  }
   // NOTE: cross-property "background" was removed — it was leaking one property's feedback
   // into another's report (Luke's bug). The vendor update now uses ONLY this property's own
   // notes for each buyer, so nothing from any other listing can bleed in.
@@ -861,7 +881,10 @@ async function aiVendorSummary(openHome, buyers, mode) {
       // and strip any email address or phone number. This protects PII (nothing private ever
       // reaches the report prompt) AND shrinks the payload, which keeps the heavier campaign
       // report from timing out on note-heavy listings.
-      const noteTexts = campCleanNotes(b).map(stripNotePII).filter(t => t && t.trim());
+      let noteTexts = campCleanNotes(b).map(stripNotePII).filter(t => t && t.trim());
+      // Campaign report: keep the last few real notes per buyer (newest = most relevant),
+      // so a buyer with a dozen logged notes doesn't bloat the prompt.
+      if (isCampaign && noteTexts.length > 5) noteTexts = noteTexts.slice(-5);
       // Only feed the "no chat" line when there's genuinely nothing else to say —
       // a contract-taker's story is the contract, so leave that to the flag.
       const notes = noteTexts.length ? noteTexts : (b.interest === "cool" ? [OUT_NO_NOTE] : (b.contractSent ? [] : (isCampaign ? [] : [VENDOR_NO_NOTE])));
@@ -2527,27 +2550,33 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed}){
   // and is built client-side so it's always detailed and reliable. (An AI-polished
   // version in Luke's exact voice returns once the n8n prompt is updated — #22.)
   const build=useCallback(()=>{
-    if(!openHome||!buyers.length){setSumText(`Hi [Vendor],\n\nNo groups have come through ${openHome?.address||"the open"} just yet — I'll send the wrap-up as soon as we've had some numbers.\n\n— Luke, Savvi`);return;}
+    // Campaign mode summarises the WHOLE campaign (allBuyers); post-open uses today's attendees.
+    // This is the fallback shown only if the AI write-up fails — it must never say "no groups"
+    // when the campaign clearly has buyers, which was the bug behind the empty report.
+    const src=(mode==="campaign"&&allBuyers&&allBuyers.length)?allBuyers:buyers;
+    if(!openHome||!src.length){setSumText(`Hi [Vendor],\n\nNo groups have come through ${openHome?.address||"the open"} just yet. I'll send the wrap-up as soon as we've had some numbers.\n\n— Luke, Savvi`);return;}
     const first=n=>{const p=String(n||"").trim().split(/\s+/);return p[0]||"They";};
     const nw=n=>["","one","two","three","four","five","six","seven","eight","nine","ten"][n]||String(n);
     const joinNat=a=>a.length<=1?(a[0]||""):`${a.slice(0,-1).join(", ")} and ${a[a.length-1]}`;
-    const keen=buyers.filter(b=>b.interest==="hot"||b.interest==="watching");
-    const contracts=buyers.filter(b=>b.contractSent);
-    const repeats=buyers.filter(b=>(b.visits||1)>1);
+    const keen=src.filter(b=>b.interest==="hot"||b.interest==="watching");
+    const contracts=src.filter(b=>b.contractSent);
+    const repeats=src.filter(b=>(b.visits||1)>1);
     // Natural-language recap that weaves in the counts, like a quick note to the vendor.
     const extra=[];
     if(keen.length) extra.push(`${nw(keen.length)} ${keen.length===1?"is":"are"} keen`);
     if(contracts.length) extra.push(`${nw(contracts.length)} asked for a contract`);
     if(repeats.length) extra.push(`${nw(repeats.length)} came back for a repeat look`);
-    const recap=`We had ${buyers.length} ${buyers.length===1?"group":"groups"} through${extra.length?`, ${joinNat(extra)}`:""}.`;
-    // A line per buyer, their notes as the detail (falls back to a light default).
-    const lines=buyers.map(b=>{
-      const notes=(b.notes||[]).map(n=>n.text).join(" ").replace(/\s+/g," ").trim();
-      const detail=notes||(b.contractSent?"took a contract — I'll follow them up early next week":(b.interest==="cool"?OUT_NO_NOTE:VENDOR_NO_NOTE));
+    const recap=`We had ${src.length} ${src.length===1?"group":"groups"} through${extra.length?`, ${joinNat(extra)}`:""}.`;
+    // A line per buyer: their notes CLEANED of system entries + PII (never leak emails/phones),
+    // capped to the last few, with a light default when there's nothing to say.
+    const lines=src.map(b=>{
+      const notes=campCleanNotes(b).map(stripNotePII).filter(Boolean).slice(-3).join(" ").replace(/\s+/g," ").trim();
+      const detail=notes||(b.contractSent?"took a contract, we'll follow them up early next week":(b.interest==="cool"?OUT_NO_NOTE:VENDOR_NO_NOTE));
       return `${first(b.name)} — ${detail}`;
     });
-    setSumText(`Hi [Vendor],\n\nQuick wrap from today's open at ${openHome?.address||"the property"}. ${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow these buyers up and be in touch early next week.\n\n— Luke, Savvi`);
-  },[openHome,buyers]);
+    const opener=mode==="campaign"?`Quick campaign update on ${openHome?.address||"the property"}.`:`Quick wrap from today's open at ${openHome?.address||"the property"}.`;
+    setSumText(`Hi [Vendor],\n\n${opener} ${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow these buyers up and be in touch early next week.\n\n— Luke, Savvi`);
+  },[openHome,buyers,allBuyers,mode]);
 
   // Try the AI vendor summary (backend now writes it in Luke's voice: greeting →
   // prose recap → a line per buyer → sign-off). Fall back to the detailed
