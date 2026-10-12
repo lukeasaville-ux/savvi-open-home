@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v69-report-timeout-fix+tiered-call-timeouts";
+const BUILD = "v70-contract-opened-pill";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -189,6 +189,14 @@ function parseContractOpens(str){
     const i=l.indexOf(" ");
     return i<0 ? {kind:"opened",at:l} : {kind:l.slice(0,i),at:l.slice(i+1)};
   });
+}
+// Genuine contract opens = the buyer CLICKED the contract link ("clicked", logged by Resend
+// when they click through the contract link in the email). Email auto-open pixels ("opened")
+// are IGNORED everywhere — Apple Mail / Gmail prefetch auto-open mail and massively inflate
+// that count. Clicks only, used across the whole app so every view is consistent (Luke, 12 Oct).
+// Returns the click times as ascending ISO strings (count = length, most recent = last).
+function contractClicks(co){
+  return parseContractOpens(co).filter(o=>o&&o.kind==="clicked").map(o=>o.at).filter(Boolean).sort((a,b)=>new Date(a)-new Date(b));
 }
 
 /* An inspection note that marks a real open-home attendance / check-in.
@@ -994,7 +1002,7 @@ function buyerHeat(b){
   const notesTxt=(Array.isArray(b.notes)?b.notes.map(n=>n&&n.text||"").join(" "):String(b.notes||"")).toLowerCase();
   if(b.contractSent){ s+=25; why.push("contract sent"); }
   else if(/contract requested/.test(notesTxt)){ s+=18; why.push("requested contract"); }
-  const opens=(b.contractOpens||[]).filter(o=>o&&(o.kind==="opened"||o.kind==="clicked")).length;
+  const opens=contractClicks(b.contractOpens).length;
   if(opens>0){ s+=Math.min(opens*8,24); why.push("opened contract"+(opens>1?" ×"+opens:"")); }
   if(/\b(bid|bidding|offer|offered|settlement|auction|deposit|pre.?approv|finance approved|ready to (buy|go)|second inspection|coming back)\b/.test(notesTxt)){ s+=18; why.push("buying signals in notes"); }
   if(b.interest==="hot"){ s+=20; why.push("hot"); } else if(b.interest==="watching"){ s+=8; } else if(b.interest==="cool"){ s-=12; }
@@ -2028,7 +2036,7 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract, hasContrac
   }, [buyer?.resendId, buyer?.contractSent]);
 
   const statusIcon  = s => ({ delivered:"✅", opened:"👁", clicked:"🔗", bounced:"❌" }[s] || "📨");
-  const statusLabel = s => ({ delivered:"Delivered", opened:"Opened", clicked:"Contract link clicked", bounced:"Bounced" }[s] || "Sent");
+  const statusLabel = s => ({ delivered:"Delivered", opened:"Delivered", clicked:"Contract link clicked", bounced:"Bounced" }[s] || "Sent");
   const fmtTime = ts => { try { return new Date(ts).toLocaleString("en-AU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",hour12:true}); } catch { return ts; } };
 
   // No contract uploaded to this listing yet → don't send an empty text. Offer to log a
@@ -2065,19 +2073,14 @@ function ContractBox({ buyer, propId, onSendContract, onTextContract, hasContrac
     );
   }
 
-  // Open-tracking now works for BOTH channels: emailed contracts via the Resend webhook
-  // ("clicked" = viewed the contract), and TEXTED contracts via the Savvi tracking link
-  // ("opened" = each tap that redirected them to the PDF).
   const emailed = !!buyer.resendId;
-  // Count EVERY view event (a texted tap-through logs "opened"; an emailed contract-link
-  // click logs "clicked", an email open logs "opened") — the agent just wants how many
-  // times they opened it and when last, regardless of channel.
-  const views = (buyer.contractOpens || []).filter(o => o.kind === "opened" || o.kind === "clicked")
-    .slice().sort((a, b) => new Date(a.at) - new Date(b.at));
+  // GENUINE CONTRACT OPENS ONLY: counts contract-link CLICKS ("clicked"). Email auto-open
+  // pixels ("opened") are ignored — Apple Mail / Gmail prefetch inflate them (Luke, 12 Oct).
+  const views = contractClicks(buyer.contractOpens);
   // Fall back to Resend's live last-event if the per-event list hasn't synced yet.
   const trackingClicked = tracking && tracking.status === "clicked";
   const viewed = views.length > 0 || (emailed && trackingClicked);
-  const lastViewedAt = views.length > 0 ? views[views.length - 1].at : (trackingClicked ? tracking.updatedAt : null);
+  const lastViewedAt = views.length > 0 ? views[views.length - 1] : (trackingClicked ? tracking.updatedAt : null);
   const viewCount = views.length;
   const viewedLine = viewCount > 1
     ? `Opened ${viewCount}× · last ${fmtDateTime(lastViewedAt).replace(", ", " at ")}`
@@ -2167,12 +2170,12 @@ function SendCard({ buyer, propId, hasContract, onSendContract, onTextContract, 
     pendRef.current[k]={iv,fn};
   };
   useEffect(()=>()=>{ Object.values(pendRef.current).forEach(e=>{ clearInterval(e.iv); try{ e.fn(); }catch(err){} }); pendRef.current={}; },[]);
-  // Contract status line (opened/clicked events from either channel, else Resend's last event)
-  const views=(buyer.contractOpens||[]).filter(o=>o.kind==="opened"||o.kind==="clicked").slice().sort((a,b)=>new Date(a.at)-new Date(b.at));
+  // Contract status line: GENUINE contract-link CLICKS only (email auto-open pixels ignored).
+  const views=contractClicks(buyer.contractOpens);
   const emailed=!!buyer.resendId;
   const clicked=!!(tracking&&tracking.status==="clicked");
   const viewed=views.length>0||(emailed&&clicked);
-  const lastAt=views.length?views[views.length-1].at:(clicked?tracking.updatedAt:null);
+  const lastAt=views.length?views[views.length-1]:(clicked?tracking.updatedAt:null);
   const requested=(buyer.notes||[]).some(n=>/contract requested/i.test(n.text||""));
   let cSub="", cOk=false;
   if(!hasContract) cSub=requested?"Requested · sends automatically once uploaded":"No contract uploaded yet";
@@ -2180,7 +2183,7 @@ function SendCard({ buyer, propId, hasContract, onSendContract, onTextContract, 
   else {
     cOk=true;
     if(viewed) cSub=`Opened${views.length>1?` ${views.length}×`:""} · ${fmtDateTime(lastAt).replace(", "," at ")}`;
-    else cSub=`Sent ${buyer.contractSentTime||""}`.trim()+(emailed?(loadingTrack?" · checking":tracking?` · ${({delivered:"Delivered",opened:"Opened",clicked:"Link clicked",bounced:"Bounced"})[tracking.status]||"Sent"}`:""):" · by text");
+    else cSub=`Sent ${buyer.contractSentTime||""}`.trim()+(emailed?(loadingTrack?" · checking":tracking?` · ${({delivered:"Delivered",opened:"Delivered",clicked:"Link clicked",bounced:"Bounced"})[tracking.status]||"Sent"}`:""):" · by text");
   }
   const row=(key,label,sub,ok,onT,onE,extra)=>{
     const kt=`${buyer.id}:${key}t`, ke=`${buyer.id}:${key}e`;
@@ -3621,8 +3624,8 @@ function crmBuildFeed(index, auctionByProp){
       const notes=i.notes||[];
       const human=notes.filter(n=>!isAutoNote(n.text));
       const lastHuman=human.length?human[human.length-1].ts:null;
-      // 1) Contract opened / clicked, and nobody has spoken to them since.
-      const opens=(i.contractOpens||[]).filter(o=>o.kind==="opened"||o.kind==="clicked").map(o=>o.at).sort();
+      // 1) Contract opened (genuine link clicks only), and nobody has spoken to them since.
+      const opens=contractClicks(i.contractOpens);
       if(opens.length){ const last=opens[opens.length-1]; if(now-new Date(last)<14*day && !notes.some(n=>after(n.ts,last)&&/^(Called|Spoke|Call)/i.test(n.text||""))) out.push({k:"contract",c,i,when:last,reason:`Opened the contract${opens.length>1?` ${opens.length}×`:""}, no call logged since`}); }
       // 2) Offer / bid form opened but never submitted.
       ["offer","bid"].forEach(kind=>{ const fo=(i.contractOpens||[]).filter(o=>o.kind===kind+"-opened").map(o=>o.at).sort(); if(!fo.length) return; const last=fo[fo.length-1]; const done=notes.some(n=>after(n.ts,last)&&(kind==="offer"?/^\s*\[Offer\]/i:/^\s*\[Bid registration\]/i).test(n.text||"")); if(!done&&now-new Date(last)<14*day) out.push({k:"form",c,i,when:last,reason:`Opened the ${kind==="offer"?"offer form":"bid registration"} but hasn't submitted it`}); });
@@ -3661,7 +3664,7 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
   // Timeline = notes (minus internal markers) + contract/form events, newest first.
   const items=[];
   (buyer.notes||[]).forEach(n=>{ if(/^\s*\[[a-z0-9_-]+\]\s*$/i.test(n.text||"")) return; const ev=isAutoNote(n.text); items.push({id:n.id,ts:n.ts,text:n.text,agent:n.agent,ev,note:n}); });
-  (buyer.contractOpens||[]).forEach((o,i)=>{ const lbl=o.kind==="opened"?"Opened the contract email":o.kind==="clicked"?"Opened the contract":o.kind==="offer-opened"?"Opened the offer form":o.kind==="bid-opened"?"Opened the bid registration form":o.kind; items.push({id:"ev"+i,ts:o.at,text:lbl,ev:true,ok:true}); });
+  (buyer.contractOpens||[]).forEach((o,i)=>{ if(o.kind==="opened") return; /* email auto-open pixel, not a genuine contract view */ const lbl=o.kind==="clicked"?"Opened the contract":o.kind==="offer-opened"?"Opened the offer form":o.kind==="bid-opened"?"Opened the bid registration form":o.kind; items.push({id:"ev"+i,ts:o.at,text:lbl,ev:true,ok:true}); });
   items.sort((a,b)=>new Date(b.ts||0)-new Date(a.ts||0));
   const atThisOpen=!openHome||openHome._listing||!onCheckIn;
   const others=Array.isArray(buyer.otherProps)?buyer.otherProps.map(o=>({...o,addr:o.address||(propIndex&&propIndex[o.ref])||""})):[];
@@ -3929,7 +3932,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
             <th className="ns" style={{width:34}}><span className={`crm-ck${wAllOn?" on":""}`} onClick={()=>{ const s={}; if(!wAllOn) tRows.forEach(b=>{ s[b.id]=true; }); setWsel(s); }}>{wAllOn?"✓":""}</span></th>
             <th className="ns">Buyer</th><th className="ns">Mobile</th><th className="ns">Interest</th><th className="ns">Heat</th><th className="ns">Contract</th><th className="ns">Offer / bid</th><th className="ns">Visits</th><th className="ns">Last note</th>
           </tr></thead>
-          <tbody>{tRows.map(b=>{ const ln=crmHumanNote(b); const fs=formStatus(b); const co=(b.contractOpens||[]).filter(o=>o.kind==="opened"||o.kind==="clicked").length; return <tr key={b.id} className="r" onClick={()=>openBuyer(b)}>
+          <tbody>{tRows.map(b=>{ const ln=crmHumanNote(b); const fs=formStatus(b); const co=contractClicks(b.contractOpens).length; return <tr key={b.id} className="r" onClick={()=>openBuyer(b)}>
             <td onClick={e=>{ e.stopPropagation(); setWsel(s=>({...s,[b.id]:!s[b.id]})); }}><span className={`crm-ck${wsel[b.id]?" on":""}`}>{wsel[b.id]?"✓":""}</span></td>
             <td><div style={{display:"flex",alignItems:"center",gap:10}}><div className="av" style={{background:b.col||crmColor(b.name),width:30,height:30,fontSize:11}}>{b.initials||crmInitials(b.name)}</div><div><div className="nm">{b.name}</div><div className="mut">{b.email||""}</div></div></div></td>
             <td className="num">{b.mobile||<span className="mut">—</span>}</td>
@@ -4301,7 +4304,16 @@ export default function App(){
             {b.isEnquiry&&<span className="sms-badge" style={{background:"#E8EEFB",color:"#5A7FBF"}}>Online enquiry</span>}
             {b._error&&<span className="sms-badge" style={{background:"#FDECEA",color:"#C0392B"}}>⚠ Not saved — re-add</span>}
             {b._pending&&!b._error&&<span className="sms-badge" style={{background:LINEN,color:BROWN_L}}>Saving…</span>}
-            {b.contractSent&&<span className="ctr-badge">Contract sent{b.contractSentTime?` ${b.contractSentTime}`:""}</span>}
+            {b.contractSent&&(()=>{
+              // Once the buyer clicks through to VIEW the contract, the green pill shows the
+              // MOST RECENT view (date + time) and how many times, instead of the send date
+              // (Luke, 12 Oct). GENUINE CLICKS ONLY — email "opened" pixels are ignored because
+              // Apple Mail / Gmail auto-open mail and inflate the count. Falls back to the send
+              // date until the first real click. Covers every listing (shared buyer card).
+              const views=contractClicks(b.contractOpens);
+              if(views.length){ const last=fmtDateTime(views[views.length-1]).replace(", "," at "); return <span className="ctr-badge">Contract opened {last}{views.length>1?` · ${views.length}×`:""}</span>; }
+              return <span className="ctr-badge">Contract sent{b.contractSentTime?` ${b.contractSentTime}`:""}</span>;
+            })()}
             {b.smsSent&&<span className="sms-badge">SMS sent</span>}
             {(b.visits||1)>1&&<span className="sms-badge">{b.visits}× inspected</span>}
           </div>
