@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v79-itemise-strike";
+const BUILD = "v80-auction-multisigner";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4186,19 +4186,43 @@ function MoneyInput({ value, onChange, placeholder, style }){
   const disp=digits?("$"+Number(digits).toLocaleString("en-AU")):"";
   return <input className="fi" type="text" inputMode="numeric" placeholder={placeholder} value={disp} onChange={e=>onChange(String(e.target.value).replace(/[^0-9]/g,""))} style={style}/>;
 }
-// DocuSeal signature fields. areas are page RATIOS (top-left); page is 1-indexed.
+// Execution rows for additional vendors (owners 2+): drawn on the signature page below
+// the AGENT/VENDOR boxes. Shared by the PDF (drawExtraVendors) and DocuSeal (signFields).
+function extraVendorRows(nExtra){ const r=[]; for(let i=0;i<nExtra;i++){ const nameY=245+i*48; r.push({nameY,lineY:nameY+22}); } return r; }
+// DocuSeal signature fields. areas are page RATIOS (top-left); page is 1-indexed. One signature
+// per vendor (Vendor 1 uses the VENDOR box; Vendor 2+ use the drawn rows). Agent signs too.
 // Authority pages are 595.92x841.92; the appended schedule page is 595.5x842.25.
-function signFields(hasSchedule){
+function signFields(hasSchedule, nVendors, authType){
   const AW=595.92,AH=841.92,SW=595.5,SH=842.25;
   const a=(x,y,w,h,page,W,H)=>({x:x/W,y:y/H,w:w/W,h:h/H,page});
+  const schedPage = authType==="auction" ? 8 : 7;   // schedule = (authority pages + 1): sale 6→7, auction 7→8
   const f=[
     {name:"Agent Signature",role:"Agent",type:"signature",required:true,areas:[a(76,130,185,22,2,AW,AH)]},
     {name:"Agent Date",role:"Agent",type:"date",required:true,areas:[a(55,180,120,14,2,AW,AH)]},
-    {name:"Vendor Signature",role:"Vendor",type:"signature",required:true,areas:[a(343,130,185,22,2,AW,AH)]},
-    {name:"Vendor Date",role:"Vendor",type:"date",required:true,areas:[a(324,180,120,14,2,AW,AH)]},
+    {name:"Vendor 1 Signature",role:"Vendor 1",type:"signature",required:true,areas:[a(343,130,185,22,2,AW,AH)]},
+    {name:"Vendor 1 Date",role:"Vendor 1",type:"date",required:true,areas:[a(324,180,120,14,2,AW,AH)]},
   ];
-  if(hasSchedule) f.push({name:"Vendor Schedule Signature",role:"Vendor",type:"signature",required:true,areas:[a(95,724,185,18,7,SW,SH)]});
+  extraVendorRows(Math.max(0,(nVendors||1)-1)).forEach((r,i)=>{ const role="Vendor "+(i+2);
+    f.push({name:role+" Signature",role,type:"signature",required:true,areas:[a(95,r.lineY-14,205,18,2,AW,AH)]});
+    f.push({name:role+" Date",role,type:"date",required:true,areas:[a(350,r.lineY-14,110,14,2,AW,AH)]});
+  });
+  if(hasSchedule) f.push({name:"Vendor 1 Schedule Signature",role:"Vendor 1",type:"signature",required:true,areas:[a(95,724,185,18,schedPage,SW,SH)]});
   return f;
+}
+// Draw the additional-vendor signature blocks on the authority's signature page (index 1).
+function drawExtraVendors(doc, font, bold, rgb, vendors){
+  const extra=(vendors||[]).slice(1).filter(v=>(v.name||"").trim());
+  if(!extra.length) return;
+  const p=doc.getPages()[1]; const H=p.getHeight();
+  p.drawText("Additional Vendor(s):",{x:36,y:H-228,size:9,font:bold,color:rgb(0,0,0)});
+  extra.forEach((v,i)=>{ const nameY=245+i*48, lineY=nameY+22;
+    p.drawText("Name",{x:36,y:H-nameY,size:9,font:bold,color:rgb(0,0,0)});
+    p.drawText(String(v.name||""),{x:72,y:H-nameY,size:9,font,color:rgb(0,0,0)});
+    p.drawText("Signature",{x:36,y:H-lineY,size:9,font,color:rgb(0,0,0)});
+    p.drawLine({start:{x:95,y:H-lineY-1},end:{x:300,y:H-lineY-1},thickness:0.6,color:rgb(0.55,0.5,0.45)});
+    p.drawText("Date",{x:320,y:H-lineY,size:9,font,color:rgb(0,0,0)});
+    p.drawLine({start:{x:350,y:H-lineY-1},end:{x:460,y:H-lineY-1},thickness:0.6,color:rgb(0.55,0.5,0.45)});
+  });
 }
 const AGENT_EMAIL={ "Luke Saville":"lukesaville@getsavvi.com.au","Sam Robinson":"samrobinson@getsavvi.com.au","Madeline Evans":"madelineevans@getsavvi.com.au" };
 
@@ -4243,6 +4267,53 @@ async function fillSaleAuthority(d){
     put(75,651.5,tot); put(286,651.5,"NIL"); put(415,651.5,tot); put(213,689,"NIL");
     await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
   }
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  drawExtraVendors(doc, font, bold, rgb, d.vendors);
+  return await doc.save();
+}
+
+// Exclusive AUCTION Authority (REIV Code 003). Same structure as the sale fill but with the
+// auction form's coordinates + auction fields (period after auction, auction date/time, reserve).
+async function fillAuctionAuthority(d){
+  const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+  const bytes = await fetch("/authority-auction-base.pdf").then(r=>r.arrayBuffer());
+  const doc = await PDFDocument.load(bytes);
+  const page = doc.getPages()[0];
+  const H = page.getHeight();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const put=(x,fy,t,sz=9)=>{ if(t==null||t==="")return; page.drawText(String(t),{x,y:H-fy,size:sz,font,color:rgb(0,0,0)}); };
+  const names=(d.vendors||[]).map(v=>(v.name||"").trim()).filter(Boolean).join(" & ");
+  const mobiles=(d.vendors||[]).map(v=>(v.mobile||"").trim()).filter(Boolean).join(", ");
+  const emails=(d.vendors||[]).map(v=>(v.email||"").trim()).filter(Boolean).join(", ");
+  put(72,231.8,names);
+  put(104,242.0,d.vendorAddr);
+  put(104,279.5,mobiles,8);
+  put(104,298.2,emails,8);
+  put(104,317.3,d.propertyAddr);
+  put(100,336.0,AUTH_GOODS,8);
+  put(152,353.7,d.period||"30");                 // exclusive authority period = N days after the auction date
+  if(d.auctionDate){ const m=String(d.auctionDate).match(/(\d{4})-(\d{2})-(\d{2})/); if(m){ put(73,372.5,m[3]); put(102,372.5,m[2]); put(142,372.5,m[1].slice(2)); } }
+  put(400,372.5,(d.auctionTime||"").trim()||"To be advised");
+  if(d.possession==="tenancy") put(253,393.5,"X",11); else put(126.5,393.5,"X",11);
+  const rv=String(d.reserve||"").replace(/[^0-9]/g,"");
+  if(rv) put(110,424.2,Number(rv).toLocaleString("en-AU"));
+  else   put(377,425.0,"X",11);                  // ☑ Vendor's reserve price to be advised (default)
+  const from=authMoney(d.priceFrom), to=authMoney(d.priceTo);
+  if(from) put(179,467.7,from,8);
+  if(to)   put(247,467.7,to,8);
+  const comm=(String(d.commission||"2.75").replace(/[^0-9.]/g,""))||"2.75";
+  put(31,529,comm+"% of the sale price");
+  const top=Number(String(d.priceTo||d.priceFrom||"").replace(/[^0-9]/g,""));
+  if(top){ const est=Math.round(top*parseFloat(comm)/100), gst=Math.round(est/11);
+    put(37,573.5,est.toLocaleString("en-AU")); put(481,573.5,gst.toLocaleString("en-AU")); put(404,589.2,top.toLocaleString("en-AU")); }
+  page.drawLine({ start:{x:19,y:H-691.5}, end:{x:134,y:H-691.5}, thickness:1, color:rgb(0,0,0) }); // strike "the signing of this Authority"
+  if(d.schedule && d.schedule.total){
+    const tot=Number(d.schedule.total).toLocaleString("en-AU");
+    put(75,668.7,tot); put(286,668.7,"NIL"); put(415,668.7,tot); put(213,717.5,"NIL");
+    await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
+  }
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  drawExtraVendors(doc, font, bold, rgb, d.vendors);
   return await doc.save();
 }
 
@@ -4402,6 +4473,10 @@ function AuthoritySheet({ open, onClose, agentName }){
   const [period,setPeriod]=useState("90");
   const [possession,setPossession]=useState("vacant");
   const [commission,setCommission]=useState("2.75");
+  const [authType,setAuthType]=useState("sale");           // sale (Code 002, incl. EOI) | auction (Code 003)
+  const [auctionDate,setAuctionDate]=useState("");         // yyyy-mm-dd
+  const [auctionTime,setAuctionTime]=useState("");         // blank → "To be advised"
+  const [reserve,setReserve]=useState("");                 // blank → reserve "to be advised"
   // advertising schedule stage
   const [campaign,setCampaign]=useState("hidc");            // hidc | noboard | nodomain | off | custom
   const [sched,setSched]=useState(null);                   // {internet,boards,photos,misc} of {k,name,amt,on,needs?}
@@ -4435,11 +4510,11 @@ function AuthoritySheet({ open, onClose, agentName }){
 
   const canCustom = /luke|madeline/i.test(agentName||"");
   function collect(){ return { id:draftId||("d"+Date.now()), savedAt:Date.now(), label:(propertyAddr||vendors[0]?.name||"Untitled authority"),
-    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, campaign, sched, itemised }; }
+    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, campaign, sched, itemised, authType, auctionDate, auctionTime, reserve }; }
   function saveDraft(silent){ const f=collect(); setDraftId(f.id); const arr=loadAuthDrafts().filter(d=>d.id!==f.id); arr.unshift(f); saveAuthDrafts(arr); setDrafts(arr); if(!silent){ setSavedMsg("Draft saved"); setTimeout(()=>setSavedMsg(""),1600);} }
-  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setItemised(!!d.itemised); setStage(d.stage||"details"); }
+  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setItemised(!!d.itemised); setAuthType(d.authType||"sale"); setAuctionDate(d.auctionDate||""); setAuctionTime(d.auctionTime||""); setReserve(d.reserve||""); setStage(d.stage||"details"); }
   function deleteDraft(id){ const arr=loadAuthDrafts().filter(d=>d.id!==id); saveAuthDrafts(arr); setDrafts(arr); if(draftId===id) setDraftId(null); }
-  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCampaign("hidc"); setSched(null); setShowEdit(false); setItemised(false); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
+  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCampaign("hidc"); setSched(null); setShowEdit(false); setItemised(false); setAuthType("sale"); setAuctionDate(""); setAuctionTime(""); setReserve(""); setPeriod("90"); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
   function handleClose(){ if(!pdfUrl && hasData) saveDraft(true); onClose(); }
 
   function goSchedule(){ setSched(defaultSched(postcode, band, campaign==="custom"?"hidc":campaign)); setShowEdit(false); setStage("schedule"); }
@@ -4461,7 +4536,10 @@ function AuthoritySheet({ open, onClose, agentName }){
       const _cmp=SCHED_CAMPAIGNS.find(c=>c.id===campaign)||{};
       const campName=_cmp.quote||_cmp.name||"High Impact Digital Campaign";
       const schedule = (campaign==="off"||!sched) ? null : { campaignName:campName, sched, total:schedTot, itemised };
-      const bytes=await fillSaleAuthority({ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, vendorPrice, settlement, schedule });
+      const common={ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, schedule };
+      const bytes = authType==="auction"
+        ? await fillAuctionAuthority({ ...common, auctionDate, auctionTime, reserve })
+        : await fillSaleAuthority({ ...common, vendorPrice, settlement });
       const blob=new Blob([bytes],{type:"application/pdf"});
       if(pdfUrl) URL.revokeObjectURL(pdfUrl);
       setPdfUrl(URL.createObjectURL(blob)); setPdfBytes(bytes); setSendState("idle");
@@ -4469,17 +4547,17 @@ function AuthoritySheet({ open, onClose, agentName }){
     setBusy(false);
   }
   async function sendToSign(){
-    const vendor=(vendors||[])[0]||{};
-    if(!(vendor.email||"").trim()){ setErr("Add the owner's email first so they can be sent the document to sign."); return; }
+    const named=(vendors||[]).filter(v=>(v.name||"").trim());
+    const missing=named.filter(v=>!(v.email||"").trim());
+    if(!named.length || missing.length){ setErr(named.length?"Add an email for every owner so each can be sent the document to sign.":"Add the owner's details first."); return; }
     setErr(""); setSendState("sending");
     try{
       const b64=u8ToB64(pdfBytes);
-      const fields=signFields(campaign!=="off");
-      const submitters=[
-        { role:"Vendor", name:(vendor.name||"Vendor"), email:vendor.email.trim() },
-        { role:"Agent", name:(agentName||"Savvi"), email:AGENT_EMAIL[agentName]||"hello@getsavvi.com.au" },
-      ];
-      const r=await call("sendToSign",{ name:`Exclusive Sale Authority - ${(propertyAddr||"property").replace(/[\\/:*?"<>|]/g,"")}`, pdfBase64:b64, fields, submitters });
+      const fields=signFields(campaign!=="off", named.length, authType);
+      const submitters=named.map((v,i)=>({ role:"Vendor "+(i+1), name:v.name.trim(), email:v.email.trim() }));
+      submitters.push({ role:"Agent", name:(agentName||"Savvi"), email:AGENT_EMAIL[agentName]||"hello@getsavvi.com.au" });
+      const typeName = authType==="auction" ? "Exclusive Auction Authority" : "Exclusive Sale Authority";
+      const r=await call("sendToSign",{ name:`${typeName} - ${(propertyAddr||"property").replace(/[\\/:*?"<>|]/g,"")}`, pdfBase64:b64, fields, submitters });
       if(r&&r.ok){ setSendState("sent"); }
       else { setSendState("idle"); setErr("Could not send to sign. "+(r?.error||"please try again")); }
     }catch(e){ setSendState("idle"); setErr("Could not send to sign. "+(e?.message||"")); }
@@ -4494,7 +4572,7 @@ function AuthoritySheet({ open, onClose, agentName }){
         {Xclose}
         <div className="hndl"/>
         <div className="sh-ttl">{pdfUrl?"Authority ready":stage==="schedule"?"Advertising schedule":"New authority"}</div>
-        <div className="sh-sub">{pdfUrl?"Preview, then send to the vendor to sign":stage==="schedule"?"Signed together with the authority":"Exclusive Sale Authority — the quick details"}</div>
+        <div className="sh-sub">{pdfUrl?"Preview, then send to the owner(s) to sign":stage==="schedule"?"Signed together with the authority":(authType==="auction"?"Exclusive Auction Authority (Code 003)":"Exclusive Sale Authority (Code 002)")+" — the quick details"}</div>
 
         {pdfUrl ? (
           <div style={{padding:"4px 16px 16px"}}>
@@ -4502,10 +4580,10 @@ function AuthoritySheet({ open, onClose, agentName }){
               <iframe title="Authority preview" src={pdfUrl} style={{width:"100%",height:"100%",border:"none"}}/>
             </div>
             <a href={pdfUrl} target="_blank" rel="noreferrer" className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px"}}>Open full screen</a>
-            <a href={pdfUrl} download={`Exclusive Sale Authority - ${(propertyAddr||"property").replace(/[\\/:*?"<>|]/g,"")}.pdf`} className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px",background:BLUE_D}}>Download PDF</a>
+            <a href={pdfUrl} download={`${authType==="auction"?"Exclusive Auction Authority":"Exclusive Sale Authority"} - ${(propertyAddr||"property").replace(/[\\/:*?"<>|]/g,"")}.pdf`} className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px",background:BLUE_D}}>Download PDF</a>
             {sendState==="sent" ? (
               <div style={{margin:"0 0 10px",background:"#E8F5E9",color:"#2E7D32",borderRadius:12,padding:"13px 14px",fontSize:13,fontWeight:600,textAlign:"center"}}>
-                ✓ Sent to {(vendors[0]?.name||"the owner")} to sign{campaign!=="off"?" (authority + schedule)":""}. They'll receive an email from Savvi.
+                ✓ Sent to {vendors.filter(v=>(v.name||"").trim()).length>1?"all owners":(vendors[0]?.name||"the owner")} to sign{campaign!=="off"?" (authority + schedule)":""}. Each receives an email from Savvi.
               </div>
             ) : (
               <button className="btn-dark" style={{width:"100%",margin:"0 0 10px"}} onClick={sendToSign} disabled={sendState==="sending"}>{sendState==="sending"?<><span className="sp-sm"/>Sending…</>:"Send to owner to sign →"}</button>
@@ -4600,6 +4678,14 @@ function AuthoritySheet({ open, onClose, agentName }){
               ))}
             </div>
           )}
+          <div style={{padding:"0 16px 12px"}}>
+            <label className="fl">Authority type</label>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              {[["sale","Private sale / EOI"],["auction","Auction"]].map(([t,lbl])=>(
+                <button key={t} onClick={()=>{ setAuthType(t); setPeriod(t==="auction"?"30":"90"); }} style={{padding:"11px",borderRadius:11,border:`1.5px solid ${authType===t?BROWN:SAND_D}`,background:authType===t?BROWN:WHITE,color:authType===t?"#fff":BROWN,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>{lbl}</button>
+              ))}
+            </div>
+          </div>
           <div className="fg"><label className="fl">Listing property address</label>
             <AddressInput value={propertyAddr} onChange={setPropertyAddr} placeholder="Start typing — e.g. 12/5 Berkeley St Hawthorn"/></div>
           <label style={{display:"flex",alignItems:"center",gap:9,padding:"0 16px 10px",fontSize:13,color:BROWN,cursor:"pointer"}}>
@@ -4627,20 +4713,31 @@ function AuthoritySheet({ open, onClose, agentName }){
             <div style={{flex:1,fontSize:11.5,color:"#C0392B",lineHeight:1.35}}>{rangeMsg}</div>
             {maxTo>0 && ptN>maxTo && <button onClick={()=>setPriceTo(String(maxTo))} style={{flex:"0 0 auto",background:"transparent",border:`1px solid #C0392B`,borderRadius:8,color:"#C0392B",fontWeight:600,fontSize:11.5,padding:"5px 9px",cursor:"pointer",fontFamily:"inherit"}}>Use ${maxTo.toLocaleString("en-AU")}</button>}
           </div>}</div>
-          <div style={{padding:"0 16px 10px"}}><div style={fieldRow}>
-            <div><label className="fl">Vendor's price (optional)</label><MoneyInput value={vendorPrice} onChange={setVendorPrice} placeholder="To be advised"/></div>
-            <div><label className="fl">Settlement (days)</label>
-              {settleCustom
-                ? <input className="fi" type="text" placeholder="e.g. 90 or at auction" value={settlement} onChange={e=>setSettlement(e.target.value)} autoFocus/>
-                : <select className="fi" value={settlement} onChange={e=>{ if(e.target.value==="__c"){ setSettleCustom(true); setSettlement(""); } else setSettlement(e.target.value); }}>
-                    <option value="30 / 60">30 / 60</option><option value="30">30</option><option value="45">45</option><option value="60">60</option><option value="90">90</option><option value="120">120</option><option value="__c">Other…</option>
-                  </select>}
-            </div>
-          </div><div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Leave vendor's price blank to tick "price to be advised".</div></div>
+          {authType==="auction" ? (
+            <>
+              <div style={{padding:"0 16px 10px"}}><div style={fieldRow}>
+                <div><label className="fl">Auction date</label><input className="fi" type="date" value={auctionDate} onChange={e=>setAuctionDate(e.target.value)}/></div>
+                <div><label className="fl">Auction time</label><input className="fi" type="text" placeholder="To be advised" value={auctionTime} onChange={e=>setAuctionTime(e.target.value)}/></div>
+              </div><div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Leave the time blank for "to be advised".</div></div>
+              <div style={{padding:"0 16px 10px"}}><label className="fl">Vendor's reserve (optional)</label><MoneyInput value={reserve} onChange={setReserve} placeholder="To be advised"/>
+                <div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Leave blank to tick "reserve to be advised". The reserve must be published 7 days before the auction.</div></div>
+            </>
+          ) : (
+            <div style={{padding:"0 16px 10px"}}><div style={fieldRow}>
+              <div><label className="fl">Vendor's price (optional)</label><MoneyInput value={vendorPrice} onChange={setVendorPrice} placeholder="To be advised"/></div>
+              <div><label className="fl">Settlement (days)</label>
+                {settleCustom
+                  ? <input className="fi" type="text" placeholder="e.g. 90 or at auction" value={settlement} onChange={e=>setSettlement(e.target.value)} autoFocus/>
+                  : <select className="fi" value={settlement} onChange={e=>{ if(e.target.value==="__c"){ setSettleCustom(true); setSettlement(""); } else setSettlement(e.target.value); }}>
+                      <option value="30 / 60">30 / 60</option><option value="30">30</option><option value="45">45</option><option value="60">60</option><option value="90">90</option><option value="120">120</option><option value="__c">Other…</option>
+                    </select>}
+              </div>
+            </div><div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Leave vendor's price blank to tick "price to be advised".</div></div>
+          )}
           <div style={{padding:"6px 16px 10px",borderTop:`1px solid #EFE8DC`}}>
             <div style={{fontSize:11.5,color:BROWN_L,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase",marginBottom:8}}>Defaults (change if needed)</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-              <div><label className="fl">Period (days)</label><input className="fi" type="text" inputMode="numeric" value={period} onChange={e=>setPeriod(e.target.value)} style={{textAlign:"center"}}/></div>
+              <div><label className="fl">{authType==="auction"?"Days after auction":"Exclusive (days)"}</label><input className="fi" type="text" inputMode="numeric" value={period} onChange={e=>setPeriod(e.target.value)} style={{textAlign:"center"}}/></div>
               <div><label className="fl">Commission %</label><input className="fi" type="text" inputMode="decimal" value={commission} onChange={e=>setCommission(e.target.value)} style={{textAlign:"center"}}/></div>
               <div><label className="fl">Possession</label><select className="fi" value={possession} onChange={e=>setPossession(e.target.value)}><option value="vacant">Vacant</option><option value="tenancy">Tenanted</option></select></div>
             </div>
