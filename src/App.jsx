@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v76-schedule-templates";
+const BUILD = "v77-price-rules";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4180,6 +4180,12 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
 const AUTH_GOODS = "All fixtures and fittings of a permanent nature including window furnishings and floor coverings as inspected";
 function authMoney(v){ const n=String(v==null?"":v).replace(/[^0-9]/g,""); return n?Number(n).toLocaleString("en-AU"):""; }
 function u8ToB64(u8){ let s=""; const CH=0x8000; for(let i=0;i<u8.length;i+=CH){ s+=String.fromCharCode.apply(null,u8.subarray(i,i+CH)); } return btoa(s); }
+// Price input that shows "$900,000" live while storing raw digits.
+function MoneyInput({ value, onChange, placeholder, style }){
+  const digits=String(value==null?"":value).replace(/[^0-9]/g,"");
+  const disp=digits?("$"+Number(digits).toLocaleString("en-AU")):"";
+  return <input className="fi" type="text" inputMode="numeric" placeholder={placeholder} value={disp} onChange={e=>onChange(String(e.target.value).replace(/[^0-9]/g,""))} style={style}/>;
+}
 // DocuSeal signature fields. areas are page RATIOS (top-left); page is 1-indexed.
 // Authority pages are 595.92x841.92; the appended schedule page is 595.5x842.25.
 function signFields(hasSchedule){
@@ -4252,14 +4258,14 @@ const REA_DEFAULT=4419;
 const DOMAIN_PLATINUM={ b1:1300, b2:3300, b3:null };
 const DOMAIN_OVERRIDE={ "3121":{ b2:3040 } }; // Richmond $1m–$2.249m is cheaper than standard $3,300
 const SOCIAL_FEE=495;
-// Per-item amounts (GST incl). Confirmed: REA by suburb (FY27 rate card), Domain by band,
-// Signboard $539 (Briner inv 204922), Booklet $179 (Neo inv 737220), Campaign Mgmt $595 (Luke).
-// Photos split + AML/Digital split are estimates summing to the real subtotals ($715 / $130) —
-// editable in the custom builder (Luke/Madeline only).
+// Per-item amounts (GST incl), all confirmed by Luke / invoices (17 Oct):
+// REA by suburb (FY27 rate card), Domain by band, Signboard $539 (Briner inv 204922),
+// Booklet $179 (Neo inv 737220), Social $495, Day Photography $495, Copywriting $0 (free),
+// Floorplan & Siteplan $220 ($110 each), AML/CTF $130, Campaign Mgmt $595, Digital Contract $0.
 const SCHED_BASE={
   boards:[{k:"board",name:"8x6 Photo Signboard (Landscape)",amt:539},{k:"booklet",name:"100 x Booklet - A5",amt:179}],
-  photos:[{k:"photo",name:"Day Photography",amt:395},{k:"copy",name:"Copywriting",amt:140},{k:"floor",name:"Floorplan & Siteplan",amt:180}],
-  misc:[{k:"aml",name:"AML/CTF Compliance Fee",amt:55},{k:"camp",name:"Campaign Management",amt:595},{k:"digital",name:"Digital Contract Fee",amt:75}],
+  photos:[{k:"photo",name:"Day Photography",amt:495},{k:"copy",name:"Copywriting",amt:0},{k:"floor",name:"Floorplan & Siteplan",amt:220}],
+  misc:[{k:"aml",name:"AML/CTF Compliance Fee",amt:130},{k:"camp",name:"Campaign Management",amt:595},{k:"digital",name:"Digital Contract Fee",amt:0}],
 };
 const SCHED_CAMPAIGNS=[
   {id:"hidc",name:"High Impact Digital Campaign",omit:[]},
@@ -4412,7 +4418,13 @@ function AuthoritySheet({ open, onClose, agentName }){
   const addV=()=>setVendors(vs=>[...vs,{name:"",mobile:"",email:""}]);
   const rmV=(i)=>setVendors(vs=>vs.length>1?vs.filter((_,j)=>j!==i):vs);
   const effVendorAddr = sameAddr ? propertyAddr : vendorAddr;
-  const ready = (vendors[0]?.name||"").trim() && propertyAddr.trim();
+  // s47A Estate Agents Act: the top of the advertised range cannot exceed the bottom by more than 10%.
+  const pfN=Number(String(priceFrom).replace(/[^0-9]/g,""))||0;
+  const ptN=Number(String(priceTo).replace(/[^0-9]/g,""))||0;
+  const maxTo=pfN?Math.floor(pfN*1.1):0;
+  const rangeBad = pfN>0 && ptN>0 && (ptN<pfN || ptN>maxTo);
+  const rangeMsg = (pfN>0&&ptN>0&&ptN<pfN) ? "The top of the range can't be below the bottom." : (rangeBad ? `By law the top can't be more than 10% above the bottom (max $${maxTo.toLocaleString("en-AU")}).` : "");
+  const ready = (vendors[0]?.name||"").trim() && propertyAddr.trim() && !rangeBad;
   const hasData = (vendors[0]?.name||"").trim() || propertyAddr.trim() || priceFrom || priceTo || vendors.some(v=>v.mobile||v.email);
   const postcode = authPostcode(propertyAddr);
   const band = domainBand(priceFrom||priceTo||vendorPrice);
@@ -4595,11 +4607,15 @@ function AuthoritySheet({ open, onClose, agentName }){
           {!sameAddr&&<div className="fg"><label className="fl">Owner's current address</label>
             <AddressInput value={vendorAddr} onChange={setVendorAddr} placeholder="Where the owner lives now"/></div>}
           <div style={{padding:"0 16px 10px"}}><label className="fl">Price guide (advertised range)</label><div style={fieldRow}>
-            <input className="fi" type="text" inputMode="numeric" placeholder="From  $" value={priceFrom} onChange={e=>setPriceFrom(e.target.value)}/>
-            <input className="fi" type="text" inputMode="numeric" placeholder="To  $" value={priceTo} onChange={e=>setPriceTo(e.target.value)}/>
-          </div></div>
+            <MoneyInput value={priceFrom} onChange={setPriceFrom} placeholder="From"/>
+            <MoneyInput value={priceTo} onChange={setPriceTo} placeholder="To"/>
+          </div>
+          {rangeMsg && <div style={{display:"flex",gap:8,alignItems:"center",marginTop:6}}>
+            <div style={{flex:1,fontSize:11.5,color:"#C0392B",lineHeight:1.35}}>{rangeMsg}</div>
+            {maxTo>0 && ptN>maxTo && <button onClick={()=>setPriceTo(String(maxTo))} style={{flex:"0 0 auto",background:"transparent",border:`1px solid #C0392B`,borderRadius:8,color:"#C0392B",fontWeight:600,fontSize:11.5,padding:"5px 9px",cursor:"pointer",fontFamily:"inherit"}}>Use ${maxTo.toLocaleString("en-AU")}</button>}
+          </div>}</div>
           <div style={{padding:"0 16px 10px"}}><div style={fieldRow}>
-            <div><label className="fl">Vendor's price (optional)</label><input className="fi" type="text" inputMode="numeric" placeholder="To be advised" value={vendorPrice} onChange={e=>setVendorPrice(e.target.value)}/></div>
+            <div><label className="fl">Vendor's price (optional)</label><MoneyInput value={vendorPrice} onChange={setVendorPrice} placeholder="To be advised"/></div>
             <div><label className="fl">Settlement (days)</label>
               {settleCustom
                 ? <input className="fi" type="text" placeholder="e.g. 90 or at auction" value={settlement} onChange={e=>setSettlement(e.target.value)} autoFocus/>
