@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v80-auction-multisigner";
+const BUILD = "v81-entity-execution";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4187,42 +4187,69 @@ function MoneyInput({ value, onChange, placeholder, style }){
   return <input className="fi" type="text" inputMode="numeric" placeholder={placeholder} value={disp} onChange={e=>onChange(String(e.target.value).replace(/[^0-9]/g,""))} style={style}/>;
 }
 // Execution rows for additional vendors (owners 2+): drawn on the signature page below
-// the AGENT/VENDOR boxes. Shared by the PDF (drawExtraVendors) and DocuSeal (signFields).
+// the AGENT/VENDOR boxes. Shared by the PDF (drawVendorExecution) and DocuSeal (signFields).
 function extraVendorRows(nExtra){ const r=[]; for(let i=0;i<nExtra;i++){ const nameY=245+i*48; r.push({nameY,lineY:nameY+22}); } return r; }
+function companyRows(n){ const r=[]; for(let i=0;i<n;i++){ const nameY=262+i*50; r.push({nameY,lineY:nameY+22}); } return r; }
+// The legal vendor name shown in the Particulars, by ownership type.
+function vendorPartyName(d){
+  const names=(d.vendors||[]).map(v=>(v.name||"").trim()).filter(Boolean).join(" & ");
+  const t=d.vendorType||"individual";
+  if(t==="company") return (d.entityName||"").trim()+(String(d.entityAcn||"").trim()?(" ACN "+String(d.entityAcn).trim()):"");
+  if(t==="trust")   return names+(String(d.entityName||"").trim()?(" as trustee for "+String(d.entityName).trim()):"");
+  if(t==="estate")  return names+(String(d.deceasedName||"").trim()?(" as executor of the estate of the late "+String(d.deceasedName).trim()):"");
+  return names;
+}
 // DocuSeal signature fields. areas are page RATIOS (top-left); page is 1-indexed. One signature
 // per vendor (Vendor 1 uses the VENDOR box; Vendor 2+ use the drawn rows). Agent signs too.
 // Authority pages are 595.92x841.92; the appended schedule page is 595.5x842.25.
-function signFields(hasSchedule, nVendors, authType){
+function signFields(hasSchedule, nVendors, authType, vendorType){
   const AW=595.92,AH=841.92,SW=595.5,SH=842.25;
   const a=(x,y,w,h,page,W,H)=>({x:x/W,y:y/H,w:w/W,h:h/H,page});
   const schedPage = authType==="auction" ? 8 : 7;   // schedule = (authority pages + 1): sale 6→7, auction 7→8
   const f=[
     {name:"Agent Signature",role:"Agent",type:"signature",required:true,areas:[a(76,130,185,22,2,AW,AH)]},
     {name:"Agent Date",role:"Agent",type:"date",required:true,areas:[a(55,180,120,14,2,AW,AH)]},
-    {name:"Vendor 1 Signature",role:"Vendor 1",type:"signature",required:true,areas:[a(343,130,185,22,2,AW,AH)]},
-    {name:"Vendor 1 Date",role:"Vendor 1",type:"date",required:true,areas:[a(324,180,120,14,2,AW,AH)]},
   ];
-  extraVendorRows(Math.max(0,(nVendors||1)-1)).forEach((r,i)=>{ const role="Vendor "+(i+2);
-    f.push({name:role+" Signature",role,type:"signature",required:true,areas:[a(95,r.lineY-14,205,18,2,AW,AH)]});
-    f.push({name:role+" Date",role,type:"date",required:true,areas:[a(350,r.lineY-14,110,14,2,AW,AH)]});
-  });
+  if(vendorType==="company"){
+    // All signatories (directors) sign in the drawn s127 execution block; VENDOR box unused.
+    companyRows(nVendors||1).forEach((r,i)=>{ const role="Vendor "+(i+1);
+      f.push({name:role+" Signature",role,type:"signature",required:true,areas:[a(95,r.lineY-14,205,18,2,AW,AH)]});
+      f.push({name:role+" Date",role,type:"date",required:true,areas:[a(350,r.lineY-14,110,14,2,AW,AH)]});
+    });
+  } else {
+    f.push({name:"Vendor 1 Signature",role:"Vendor 1",type:"signature",required:true,areas:[a(343,130,185,22,2,AW,AH)]});
+    f.push({name:"Vendor 1 Date",role:"Vendor 1",type:"date",required:true,areas:[a(324,180,120,14,2,AW,AH)]});
+    extraVendorRows(Math.max(0,(nVendors||1)-1)).forEach((r,i)=>{ const role="Vendor "+(i+2);
+      f.push({name:role+" Signature",role,type:"signature",required:true,areas:[a(95,r.lineY-14,205,18,2,AW,AH)]});
+      f.push({name:role+" Date",role,type:"date",required:true,areas:[a(350,r.lineY-14,110,14,2,AW,AH)]});
+    });
+  }
   if(hasSchedule) f.push({name:"Vendor 1 Schedule Signature",role:"Vendor 1",type:"signature",required:true,areas:[a(95,724,185,18,schedPage,SW,SH)]});
   return f;
 }
-// Draw the additional-vendor signature blocks on the authority's signature page (index 1).
-function drawExtraVendors(doc, font, bold, rgb, vendors){
-  const extra=(vendors||[]).slice(1).filter(v=>(v.name||"").trim());
-  if(!extra.length) return;
+// Draw the vendor execution blocks on the signature page (index 1), by ownership type.
+function drawVendorExecution(doc, font, bold, rgb, d){
+  const vt=d.vendorType||"individual";
+  const sigs=(d.vendors||[]).filter(v=>(v.name||"").trim());
   const p=doc.getPages()[1]; const H=p.getHeight();
-  p.drawText("Additional Vendor(s):",{x:36,y:H-228,size:9,font:bold,color:rgb(0,0,0)});
-  extra.forEach((v,i)=>{ const nameY=245+i*48, lineY=nameY+22;
-    p.drawText("Name",{x:36,y:H-nameY,size:9,font:bold,color:rgb(0,0,0)});
-    p.drawText(String(v.name||""),{x:72,y:H-nameY,size:9,font,color:rgb(0,0,0)});
+  const row=(nameY,label,name)=>{ const lineY=nameY+22;
+    p.drawText(label,{x:36,y:H-nameY,size:9,font:bold,color:rgb(0,0,0)});
+    p.drawText(String(name||""),{x:36+bold.widthOfTextAtSize(label+" ",9),y:H-nameY,size:9,font,color:rgb(0,0,0)});
     p.drawText("Signature",{x:36,y:H-lineY,size:9,font,color:rgb(0,0,0)});
     p.drawLine({start:{x:95,y:H-lineY-1},end:{x:300,y:H-lineY-1},thickness:0.6,color:rgb(0.55,0.5,0.45)});
     p.drawText("Date",{x:320,y:H-lineY,size:9,font,color:rgb(0,0,0)});
     p.drawLine({start:{x:350,y:H-lineY-1},end:{x:460,y:H-lineY-1},thickness:0.6,color:rgb(0.55,0.5,0.45)});
-  });
+  };
+  if(vt==="company"){
+    p.drawText("Executed by "+(d.entityName||"").trim(),{x:36,y:H-216,size:9,font:bold,color:rgb(0,0,0)});
+    p.drawText((String(d.entityAcn||"").trim()?("ACN "+String(d.entityAcn).trim()+" "):"")+"in accordance with section 127 of the Corporations Act 2001 by:",{x:36,y:H-229,size:9,font,color:rgb(0,0,0)});
+    sigs.forEach((v,i)=>{ const role=sigs.length>1?(i===0?"Director:":"Director / Company Secretary:"):"Sole Director and Company Secretary:"; row(262+i*50,role,v.name); });
+    return;
+  }
+  const extra=sigs.slice(1); if(!extra.length) return;
+  const word=vt==="trust"?"Trustee":vt==="estate"?"Executor":"Vendor";
+  p.drawText("Additional "+word+"(s):",{x:36,y:H-228,size:9,font:bold,color:rgb(0,0,0)});
+  extra.forEach((v,i)=>row(245+i*48,"Name",v.name));
 }
 const AGENT_EMAIL={ "Luke Saville":"lukesaville@getsavvi.com.au","Sam Robinson":"samrobinson@getsavvi.com.au","Madeline Evans":"madelineevans@getsavvi.com.au" };
 
@@ -4237,7 +4264,7 @@ async function fillSaleAuthority(d){
   const names=(d.vendors||[]).map(v=>(v.name||"").trim()).filter(Boolean).join(" & ");
   const mobiles=(d.vendors||[]).map(v=>(v.mobile||"").trim()).filter(Boolean).join(", ");
   const emails=(d.vendors||[]).map(v=>(v.email||"").trim()).filter(Boolean).join(", ");
-  put(72,222.8,names);
+  put(72,222.8,vendorPartyName(d));
   put(104,235.8,d.vendorAddr);
   put(104,273.3,mobiles,8);   // all vendors' mobiles, comma-separated (Phone field)
   put(104,292.1,emails,8);    // all vendors' emails, comma-separated
@@ -4268,7 +4295,7 @@ async function fillSaleAuthority(d){
     await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
   }
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-  drawExtraVendors(doc, font, bold, rgb, d.vendors);
+  drawVendorExecution(doc, font, bold, rgb, d);
   return await doc.save();
 }
 
@@ -4285,7 +4312,7 @@ async function fillAuctionAuthority(d){
   const names=(d.vendors||[]).map(v=>(v.name||"").trim()).filter(Boolean).join(" & ");
   const mobiles=(d.vendors||[]).map(v=>(v.mobile||"").trim()).filter(Boolean).join(", ");
   const emails=(d.vendors||[]).map(v=>(v.email||"").trim()).filter(Boolean).join(", ");
-  put(72,231.8,names);
+  put(72,231.8,vendorPartyName(d));
   put(104,242.0,d.vendorAddr);
   put(104,279.5,mobiles,8);
   put(104,298.2,emails,8);
@@ -4313,7 +4340,7 @@ async function fillAuctionAuthority(d){
     await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
   }
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-  drawExtraVendors(doc, font, bold, rgb, d.vendors);
+  drawVendorExecution(doc, font, bold, rgb, d);
   return await doc.save();
 }
 
@@ -4477,6 +4504,10 @@ function AuthoritySheet({ open, onClose, agentName }){
   const [auctionDate,setAuctionDate]=useState("");         // yyyy-mm-dd
   const [auctionTime,setAuctionTime]=useState("");         // blank → "To be advised"
   const [reserve,setReserve]=useState("");                 // blank → reserve "to be advised"
+  const [vendorType,setVendorType]=useState("individual"); // individual | company | trust | estate
+  const [entityName,setEntityName]=useState("");           // company / trust name
+  const [entityAcn,setEntityAcn]=useState("");             // company ACN
+  const [deceasedName,setDeceasedName]=useState("");       // estate: the late ...
   // advertising schedule stage
   const [campaign,setCampaign]=useState("hidc");            // hidc | noboard | nodomain | off | custom
   const [sched,setSched]=useState(null);                   // {internet,boards,photos,misc} of {k,name,amt,on,needs?}
@@ -4495,7 +4526,7 @@ function AuthoritySheet({ open, onClose, agentName }){
   const setV=(i,k,val)=>setVendors(vs=>vs.map((v,j)=>j===i?{...v,[k]:val}:v));
   const addV=()=>setVendors(vs=>[...vs,{name:"",mobile:"",email:""}]);
   const rmV=(i)=>setVendors(vs=>vs.length>1?vs.filter((_,j)=>j!==i):vs);
-  const effVendorAddr = sameAddr ? propertyAddr : vendorAddr;
+  const effVendorAddr = (vendorType==="individual" && sameAddr) ? propertyAddr : vendorAddr;
   // s47A Estate Agents Act: the top of the advertised range cannot exceed the bottom by more than 10%.
   const pfN=Number(String(priceFrom).replace(/[^0-9]/g,""))||0;
   const ptN=Number(String(priceTo).replace(/[^0-9]/g,""))||0;
@@ -4510,11 +4541,11 @@ function AuthoritySheet({ open, onClose, agentName }){
 
   const canCustom = /luke|madeline/i.test(agentName||"");
   function collect(){ return { id:draftId||("d"+Date.now()), savedAt:Date.now(), label:(propertyAddr||vendors[0]?.name||"Untitled authority"),
-    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, campaign, sched, itemised, authType, auctionDate, auctionTime, reserve }; }
+    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, campaign, sched, itemised, authType, auctionDate, auctionTime, reserve, vendorType, entityName, entityAcn, deceasedName }; }
   function saveDraft(silent){ const f=collect(); setDraftId(f.id); const arr=loadAuthDrafts().filter(d=>d.id!==f.id); arr.unshift(f); saveAuthDrafts(arr); setDrafts(arr); if(!silent){ setSavedMsg("Draft saved"); setTimeout(()=>setSavedMsg(""),1600);} }
-  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setItemised(!!d.itemised); setAuthType(d.authType||"sale"); setAuctionDate(d.auctionDate||""); setAuctionTime(d.auctionTime||""); setReserve(d.reserve||""); setStage(d.stage||"details"); }
+  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setItemised(!!d.itemised); setAuthType(d.authType||"sale"); setAuctionDate(d.auctionDate||""); setAuctionTime(d.auctionTime||""); setReserve(d.reserve||""); setVendorType(d.vendorType||"individual"); setEntityName(d.entityName||""); setEntityAcn(d.entityAcn||""); setDeceasedName(d.deceasedName||""); setStage(d.stage||"details"); }
   function deleteDraft(id){ const arr=loadAuthDrafts().filter(d=>d.id!==id); saveAuthDrafts(arr); setDrafts(arr); if(draftId===id) setDraftId(null); }
-  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCampaign("hidc"); setSched(null); setShowEdit(false); setItemised(false); setAuthType("sale"); setAuctionDate(""); setAuctionTime(""); setReserve(""); setPeriod("90"); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
+  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCampaign("hidc"); setSched(null); setShowEdit(false); setItemised(false); setAuthType("sale"); setAuctionDate(""); setAuctionTime(""); setReserve(""); setVendorType("individual"); setEntityName(""); setEntityAcn(""); setDeceasedName(""); setPeriod("90"); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
   function handleClose(){ if(!pdfUrl && hasData) saveDraft(true); onClose(); }
 
   function goSchedule(){ setSched(defaultSched(postcode, band, campaign==="custom"?"hidc":campaign)); setShowEdit(false); setStage("schedule"); }
@@ -4536,7 +4567,7 @@ function AuthoritySheet({ open, onClose, agentName }){
       const _cmp=SCHED_CAMPAIGNS.find(c=>c.id===campaign)||{};
       const campName=_cmp.quote||_cmp.name||"High Impact Digital Campaign";
       const schedule = (campaign==="off"||!sched) ? null : { campaignName:campName, sched, total:schedTot, itemised };
-      const common={ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, schedule };
+      const common={ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, schedule, vendorType, entityName, entityAcn, deceasedName };
       const bytes = authType==="auction"
         ? await fillAuctionAuthority({ ...common, auctionDate, auctionTime, reserve })
         : await fillSaleAuthority({ ...common, vendorPrice, settlement });
@@ -4553,7 +4584,7 @@ function AuthoritySheet({ open, onClose, agentName }){
     setErr(""); setSendState("sending");
     try{
       const b64=u8ToB64(pdfBytes);
-      const fields=signFields(campaign!=="off", named.length, authType);
+      const fields=signFields(campaign!=="off", named.length, authType, vendorType);
       const submitters=named.map((v,i)=>({ role:"Vendor "+(i+1), name:v.name.trim(), email:v.email.trim() }));
       submitters.push({ role:"Agent", name:(agentName||"Savvi"), email:AGENT_EMAIL[agentName]||"hello@getsavvi.com.au" });
       const typeName = authType==="auction" ? "Exclusive Auction Authority" : "Exclusive Sale Authority";
@@ -4688,23 +4719,40 @@ function AuthoritySheet({ open, onClose, agentName }){
           </div>
           <div className="fg"><label className="fl">Listing property address</label>
             <AddressInput value={propertyAddr} onChange={setPropertyAddr} placeholder="Start typing — e.g. 12/5 Berkeley St Hawthorn"/></div>
-          <label style={{display:"flex",alignItems:"center",gap:9,padding:"0 16px 10px",fontSize:13,color:BROWN,cursor:"pointer"}}>
+          {vendorType==="individual" && <label style={{display:"flex",alignItems:"center",gap:9,padding:"0 16px 10px",fontSize:13,color:BROWN,cursor:"pointer"}}>
             <input type="checkbox" checked={sameAddr} onChange={e=>setSameAddr(e.target.checked)} style={{width:18,height:18,accentColor:BLUE_D}}/>
             Owner currently lives at this property
-          </label>
-          {vendors.map((v,i)=>(
+          </label>}
+          <div style={{padding:"0 16px 12px"}}><label className="fl">Who is the vendor?</label>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:6}}>
+              {[["individual","Individual"],["company","Company"],["trust","Trust"],["estate","Estate"]].map(([t,lbl])=>(
+                <button key={t} onClick={()=>setVendorType(t)} style={{padding:"9px 3px",borderRadius:10,border:`1.5px solid ${vendorType===t?BROWN:SAND_D}`,background:vendorType===t?BROWN:WHITE,color:vendorType===t?"#fff":BROWN,fontWeight:600,fontSize:11.5,cursor:"pointer",fontFamily:"inherit"}}>{lbl}</button>
+              ))}
+            </div>
+          </div>
+          {vendorType==="company" && <div style={{padding:"0 16px 10px"}}><div style={fieldRow}>
+            <div><label className="fl">Company name</label><input className="fi" type="text" placeholder="ABC Pty Ltd" value={entityName} onChange={e=>setEntityName(e.target.value)}/></div>
+            <div><label className="fl">ACN</label><input className="fi" type="text" inputMode="numeric" placeholder="123 456 789" value={entityAcn} onChange={e=>setEntityAcn(e.target.value)}/></div>
+          </div><div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Below, add the director(s) who sign for the company (s127 Corporations Act).</div></div>}
+          {vendorType==="trust" && <div className="fg"><label className="fl">Trust name</label>
+            <input className="fi" type="text" placeholder="e.g. The Smith Family Trust" value={entityName} onChange={e=>setEntityName(e.target.value)}/>
+            <div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Below, add the trustee(s) who sign.</div></div>}
+          {vendorType==="estate" && <div className="fg"><label className="fl">Estate of the late</label>
+            <input className="fi" type="text" placeholder="deceased's full name, e.g. Mary Smith" value={deceasedName} onChange={e=>setDeceasedName(e.target.value)}/>
+            <div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Below, add the executor(s) who sign.</div></div>}
+          {vendors.map((v,i)=>{ const W={individual:"Owner",company:"Director",trust:"Trustee",estate:"Executor"}[vendorType]||"Owner"; return (
             <div key={i} style={{borderTop:i?`1px solid #EFE8DC`:"none",paddingTop:i?8:0}}>
-              <div className="fg" style={{paddingBottom:8}}><label className="fl">{i===0?"Owner full name":`Owner ${i+1} full name`}{i>0&&<span onClick={()=>rmV(i)} style={{float:"right",color:BROWN_L,cursor:"pointer",fontWeight:400}}>remove</span>}</label>
+              <div className="fg" style={{paddingBottom:8}}><label className="fl">{i===0?`${W} full name`:`${W} ${i+1} full name`}{i>0&&<span onClick={()=>rmV(i)} style={{float:"right",color:BROWN_L,cursor:"pointer",fontWeight:400}}>remove</span>}</label>
                 <input className="fi" type="text" placeholder="e.g. Michael Chen" value={v.name} onChange={e=>setV(i,"name",e.target.value)}/></div>
               <div style={{padding:"0 16px 8px"}}><div style={fieldRow}>
                 <div><label className="fl">Mobile</label><input className="fi" type="tel" placeholder="0412 345 678" value={v.mobile} onChange={e=>setV(i,"mobile",e.target.value)}/></div>
                 <div><label className="fl">Email</label><input className="fi" type="email" placeholder="name@email.com" value={v.email} onChange={e=>setV(i,"email",e.target.value)}/></div>
               </div></div>
             </div>
-          ))}
-          <div style={{padding:"0 16px 10px"}}><button onClick={addV} style={{background:"transparent",border:`1px dashed #CDBFA6`,borderRadius:9,width:"100%",padding:"9px",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",fontSize:12.5}}>+ Add another owner</button></div>
-          {!sameAddr&&<div className="fg"><label className="fl">Owner's current address</label>
-            <AddressInput value={vendorAddr} onChange={setVendorAddr} placeholder="Where the owner lives now"/></div>}
+          );})}
+          <div style={{padding:"0 16px 10px"}}><button onClick={addV} style={{background:"transparent",border:`1px dashed #CDBFA6`,borderRadius:9,width:"100%",padding:"9px",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",fontSize:12.5}}>+ Add another {({individual:"owner",company:"director",trust:"trustee",estate:"executor"}[vendorType]||"owner")}</button></div>
+          {(vendorType!=="individual"||!sameAddr)&&<div className="fg"><label className="fl">{vendorType==="company"?"Registered office":vendorType==="trust"?"Trustee's address":vendorType==="estate"?"Executor's address":"Owner's current address"}</label>
+            <AddressInput value={vendorAddr} onChange={setVendorAddr} placeholder="Address for the authority"/></div>}
           <div style={{padding:"0 16px 10px"}}><label className="fl">Price guide (advertised range)</label><div style={fieldRow}>
             <MoneyInput value={priceFrom} onChange={setPriceFrom} placeholder="From"/>
             <MoneyInput value={priceTo} onChange={setPriceTo} placeholder="To"/>
