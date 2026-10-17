@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v77-price-rules";
+const BUILD = "v78-custom-quote-name";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4272,7 +4272,7 @@ const SCHED_CAMPAIGNS=[
   {id:"noboard",name:"High Impact Digital Campaign (No Board)",omit:["board"]},
   {id:"nodomain",name:"High Impact Digital Campaign (No Domain)",omit:["domain"]},
   {id:"off",name:"Off-market — no advertising ($0)",off:true},
-  {id:"custom",name:"Custom schedule",custom:true},
+  {id:"custom",name:"Custom schedule",custom:true,quote:"High Impact Digital & Social Campaign"},
 ];
 function authPostcode(addr){ const m=String(addr||"").match(/\b(3\d{3})\b/g); return m?m[m.length-1]:""; }
 function domainBand(bottom){ const n=Number(String(bottom||"").replace(/[^0-9]/g,"")); if(!n||n<=999999)return"b1"; if(n<=2249999)return"b2"; return"b3"; }
@@ -4455,7 +4455,8 @@ function AuthoritySheet({ open, onClose, agentName }){
   async function generate(){
     setErr(""); setBusy(true);
     try{
-      const campName=(SCHED_CAMPAIGNS.find(c=>c.id===campaign)||{}).name||"High Impact Digital Campaign";
+      const _cmp=SCHED_CAMPAIGNS.find(c=>c.id===campaign)||{};
+      const campName=_cmp.quote||_cmp.name||"High Impact Digital Campaign";
       const schedule = (campaign==="off"||!sched) ? null : { campaignName:campName, sched, total:schedTot };
       const bytes=await fillSaleAuthority({ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, vendorPrice, settlement, schedule });
       const blob=new Blob([bytes],{type:"application/pdf"});
