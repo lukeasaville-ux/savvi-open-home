@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v74-branded-schedule";
+const BUILD = "v75-esign-wired";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -49,6 +49,7 @@ function _releaseSlot() { _inflight = Math.max(0, _inflight - 1); const next = _
 function _timeoutFor(action) {
   if (action === "aiVendorSummary" || action === "aiBuyerProfile" || action === "aiListingAsk" || action === "aiAddressLookup") return 120000;
   if (action === "listRecords" || action === "getBuyersFor") return 45000;
+  if (action === "sendToSign") return 60000;
   return 12000;
 }
 async function call(action, params = {}) {
@@ -4178,6 +4179,22 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
 // is wired separately through the backend so the API token stays server-side.
 const AUTH_GOODS = "All fixtures and fittings of a permanent nature including window furnishings and floor coverings as inspected";
 function authMoney(v){ const n=String(v==null?"":v).replace(/[^0-9]/g,""); return n?Number(n).toLocaleString("en-AU"):""; }
+function u8ToB64(u8){ let s=""; const CH=0x8000; for(let i=0;i<u8.length;i+=CH){ s+=String.fromCharCode.apply(null,u8.subarray(i,i+CH)); } return btoa(s); }
+// DocuSeal signature fields. areas are page RATIOS (top-left); page is 1-indexed.
+// Authority pages are 595.92x841.92; the appended schedule page is 595.5x842.25.
+function signFields(hasSchedule){
+  const AW=595.92,AH=841.92,SW=595.5,SH=842.25;
+  const a=(x,y,w,h,page,W,H)=>({x:x/W,y:y/H,w:w/W,h:h/H,page});
+  const f=[
+    {name:"Agent Signature",role:"Agent",type:"signature",required:true,areas:[a(76,130,185,22,2,AW,AH)]},
+    {name:"Agent Date",role:"Agent",type:"date",required:true,areas:[a(55,180,120,14,2,AW,AH)]},
+    {name:"Vendor Signature",role:"Vendor",type:"signature",required:true,areas:[a(343,130,185,22,2,AW,AH)]},
+    {name:"Vendor Date",role:"Vendor",type:"date",required:true,areas:[a(324,180,120,14,2,AW,AH)]},
+  ];
+  if(hasSchedule) f.push({name:"Vendor Schedule Signature",role:"Vendor",type:"signature",required:true,areas:[a(95,724,185,18,7,SW,SH)]});
+  return f;
+}
+const AGENT_EMAIL={ "Luke Saville":"lukesaville@getsavvi.com.au","Sam Robinson":"samrobinson@getsavvi.com.au","Madeline Evans":"madelineevans@getsavvi.com.au" };
 
 async function fillSaleAuthority(d){
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
@@ -4335,7 +4352,7 @@ const AUTH_DRAFT_KEY="savvi_authority_drafts";
 function loadAuthDrafts(){ try{ return JSON.parse(localStorage.getItem(AUTH_DRAFT_KEY)||"[]"); }catch(e){ return []; } }
 function saveAuthDrafts(a){ try{ localStorage.setItem(AUTH_DRAFT_KEY,JSON.stringify(a)); }catch(e){} }
 
-function AuthoritySheet({ open, onClose }){
+function AuthoritySheet({ open, onClose, agentName }){
   const [stage,setStage]=useState("details"); // details | schedule
   const [vendors,setVendors]=useState([{name:"",mobile:"",email:""}]);
   const [vendorAddr,setVendorAddr]=useState("");
@@ -4356,6 +4373,8 @@ function AuthoritySheet({ open, onClose }){
   const [busy,setBusy]=useState(false);
   const [err,setErr]=useState("");
   const [pdfUrl,setPdfUrl]=useState(null);
+  const [pdfBytes,setPdfBytes]=useState(null);
+  const [sendState,setSendState]=useState("idle"); // idle | sending | sent
   const [drafts,setDrafts]=useState([]);
   const [draftId,setDraftId]=useState(null);
   const [savedMsg,setSavedMsg]=useState("");
@@ -4398,9 +4417,25 @@ function AuthoritySheet({ open, onClose }){
       const bytes=await fillSaleAuthority({ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, vendorPrice, settlement, schedule });
       const blob=new Blob([bytes],{type:"application/pdf"});
       if(pdfUrl) URL.revokeObjectURL(pdfUrl);
-      setPdfUrl(URL.createObjectURL(blob));
+      setPdfUrl(URL.createObjectURL(blob)); setPdfBytes(bytes); setSendState("idle");
     }catch(e){ setErr("Could not generate. "+(e?.message||"")); }
     setBusy(false);
+  }
+  async function sendToSign(){
+    const vendor=(vendors||[])[0]||{};
+    if(!(vendor.email||"").trim()){ setErr("Add the owner's email first so they can be sent the document to sign."); return; }
+    setErr(""); setSendState("sending");
+    try{
+      const b64=u8ToB64(pdfBytes);
+      const fields=signFields(campaign!=="off");
+      const submitters=[
+        { role:"Vendor", name:(vendor.name||"Vendor"), email:vendor.email.trim() },
+        { role:"Agent", name:(agentName||"Savvi"), email:AGENT_EMAIL[agentName]||"hello@getsavvi.com.au" },
+      ];
+      const r=await call("sendToSign",{ name:`Exclusive Sale Authority - ${(propertyAddr||"property").replace(/[\\/:*?"<>|]/g,"")}`, pdfBase64:b64, fields, submitters });
+      if(r&&r.ok){ setSendState("sent"); }
+      else { setSendState("idle"); setErr("Could not send to sign. "+(r?.error||"please try again")); }
+    }catch(e){ setSendState("idle"); setErr("Could not send to sign. "+(e?.message||"")); }
   }
   const money=v=>"$"+Number(v||0).toLocaleString("en-AU");
   const Xclose=(
@@ -4421,8 +4456,15 @@ function AuthoritySheet({ open, onClose }){
             </div>
             <a href={pdfUrl} target="_blank" rel="noreferrer" className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px"}}>Open full screen</a>
             <a href={pdfUrl} download={`Exclusive Sale Authority - ${(propertyAddr||"property").replace(/[\\/:*?"<>|]/g,"")}.pdf`} className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px",background:BLUE_D}}>Download PDF</a>
-            <button className="btn-dark" style={{width:"100%",margin:"0 0 10px",opacity:.55}} disabled>Send to vendor to sign (coming next)</button>
-            <button onClick={()=>{ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); setStage(campaign==="off"?"details":"schedule"); }} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Edit details</button>
+            {sendState==="sent" ? (
+              <div style={{margin:"0 0 10px",background:"#E8F5E9",color:"#2E7D32",borderRadius:12,padding:"13px 14px",fontSize:13,fontWeight:600,textAlign:"center"}}>
+                ✓ Sent to {(vendors[0]?.name||"the owner")} to sign{campaign!=="off"?" (authority + schedule)":""}. They'll receive an email from Savvi.
+              </div>
+            ) : (
+              <button className="btn-dark" style={{width:"100%",margin:"0 0 10px"}} onClick={sendToSign} disabled={sendState==="sending"}>{sendState==="sending"?<><span className="sp-sm"/>Sending…</>:"Send to owner to sign →"}</button>
+            )}
+            {err&&<div style={{margin:"0 0 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
+            <button onClick={()=>{ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); setSendState("idle"); setStage(campaign==="off"?"details":"schedule"); }} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Edit details</button>
           </div>
         ) : stage==="schedule" ? (
           <div style={{paddingBottom:4}}>
@@ -5641,7 +5683,7 @@ export default function App(){
         if(lr.ok) setAllListings(lr.data);
       }}
     />
-    <AuthoritySheet open={showAuthority} onClose={()=>setShowAuthority(false)}/>
+    <AuthoritySheet open={showAuthority} onClose={()=>setShowAuthority(false)} agentName={agentName}/>
 
     {/* ── SUCCESS: BUYER ADDED ── */}
     <div className={`sov ${showOk?"on":""}`}><div className="sc">
