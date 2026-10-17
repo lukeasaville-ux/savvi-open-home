@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v78-custom-quote-name";
+const BUILD = "v79-itemise-strike";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4226,6 +4226,8 @@ async function fillSaleAuthority(d){
   if(vp) put(85,424.5,Number(vp).toLocaleString("en-AU"));
   else   put(430,425.5,"X",11);                 // ☑ Vendor's price to be advised (default)
   put(268,424.5,String(d.settlement||"30 / 60"));
+  // Marketing Expenses payable line: strike out "*the signing of this Authority", keep "*written request".
+  page.drawLine({ start:{x:157,y:H-666.8}, end:{x:270,y:H-666.8}, thickness:1, color:rgb(0,0,0) });
   const from=authMoney(d.priceFrom), to=authMoney(d.priceTo);
   if(from) put(179,471.0,from,8);
   if(to)   put(247,471.0,to,8);
@@ -4239,7 +4241,7 @@ async function fillSaleAuthority(d){
   if(d.schedule && d.schedule.total){
     const tot=Number(d.schedule.total).toLocaleString("en-AU");
     put(75,651.5,tot); put(286,651.5,"NIL"); put(415,651.5,tot); put(213,689,"NIL");
-    await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched });
+    await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
   }
   return await doc.save();
 }
@@ -4300,7 +4302,7 @@ function schedTotal(sched){ return SCHED_SECS.reduce((a,s)=>a+schedSubtotal(sche
 // doc with item rows + values blanked) and DRAW the items / subtotals / total dynamically in
 // the brand font (Neue Haas Unica Pro, 9pt, Savvi brown) at the form's exact positions — so
 // any item set (3 templates + custom add/remove) stays pixel-on-brand.
-async function appendSchedulePage(doc,rgb,{ propertyAddr, campaignName, sched }){
+async function appendSchedulePage(doc,rgb,{ propertyAddr, campaignName, sched, itemised }){
   const { PDFDocument }=await import("pdf-lib");
   const fontkit=(await import("@pdf-lib/fontkit")).default;
   try{ doc.registerFontkit(fontkit); }catch(e){}
@@ -4311,7 +4313,7 @@ async function appendSchedulePage(doc,rgb,{ propertyAddr, campaignName, sched })
   const [pg]=await doc.copyPages(schedDoc,[0]); doc.addPage(pg);
   const H=pg.getHeight(); const BR=rgb(0.188,0.118,0.059);
   const money=v=>"$"+Number(v||0).toLocaleString("en-AU",{minimumFractionDigits:2,maximumFractionDigits:2});
-  const draw=(x,fy,t,center)=>{ t=String(t==null?"":t); if(!t)return; let xx=x; if(center) xx=x-nh.widthOfTextAtSize(t,9)/2; pg.drawText(t,{x:xx,y:H-fy,size:9,font:nh,color:BR}); };
+  const draw=(x,fy,t,align)=>{ t=String(t==null?"":t); if(!t)return; let xx=x; const w=nh.widthOfTextAtSize(t,9); if(align==="c"||align===true) xx=x-w/2; else if(align==="r") xx=x-w; pg.drawText(t,{x:xx,y:H-fy,size:9,font:nh,color:BR}); };
   draw(180.2,164.8,new Date().toLocaleDateString("en-AU"));   // DATE
   draw(180.2,179.4,campaignName||"");                          // QUOTE (campaign name)
   draw(180.2,193.9,propertyAddr||"");                          // PROPERTY
@@ -4325,7 +4327,7 @@ async function appendSchedulePage(doc,rgb,{ propertyAddr, campaignName, sched })
   for(const s of secs){
     const on=(s.items||[]).filter(it=>it.on!==false);
     let fy=s.start;
-    for(const it of on){ draw(177.5,fy,it.name); fy+=18; }
+    for(const it of on){ draw(177.5,fy,it.name); if(itemised) draw(565,fy,(Number(it.amt)>0?money(it.amt):"Included"),"r"); fy+=18; }
     const sub=on.reduce((a,it)=>a+(Number(it.amt)||0),0);
     draw(548.8,s.subFy,money(sub),true); total+=sub;
   }
@@ -4404,6 +4406,7 @@ function AuthoritySheet({ open, onClose, agentName }){
   const [campaign,setCampaign]=useState("hidc");            // hidc | noboard | nodomain | off | custom
   const [sched,setSched]=useState(null);                   // {internet,boards,photos,misc} of {k,name,amt,on,needs?}
   const [showEdit,setShowEdit]=useState(false);            // custom item editor (Luke / Madeline only)
+  const [itemised,setItemised]=useState(false);            // show each line's price to the client
   const [busy,setBusy]=useState(false);
   const [err,setErr]=useState("");
   const [pdfUrl,setPdfUrl]=useState(null);
@@ -4432,11 +4435,11 @@ function AuthoritySheet({ open, onClose, agentName }){
 
   const canCustom = /luke|madeline/i.test(agentName||"");
   function collect(){ return { id:draftId||("d"+Date.now()), savedAt:Date.now(), label:(propertyAddr||vendors[0]?.name||"Untitled authority"),
-    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, campaign, sched }; }
+    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, campaign, sched, itemised }; }
   function saveDraft(silent){ const f=collect(); setDraftId(f.id); const arr=loadAuthDrafts().filter(d=>d.id!==f.id); arr.unshift(f); saveAuthDrafts(arr); setDrafts(arr); if(!silent){ setSavedMsg("Draft saved"); setTimeout(()=>setSavedMsg(""),1600);} }
-  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setStage(d.stage||"details"); }
+  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setItemised(!!d.itemised); setStage(d.stage||"details"); }
   function deleteDraft(id){ const arr=loadAuthDrafts().filter(d=>d.id!==id); saveAuthDrafts(arr); setDrafts(arr); if(draftId===id) setDraftId(null); }
-  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCampaign("hidc"); setSched(null); setShowEdit(false); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
+  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCampaign("hidc"); setSched(null); setShowEdit(false); setItemised(false); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
   function handleClose(){ if(!pdfUrl && hasData) saveDraft(true); onClose(); }
 
   function goSchedule(){ setSched(defaultSched(postcode, band, campaign==="custom"?"hidc":campaign)); setShowEdit(false); setStage("schedule"); }
@@ -4457,7 +4460,7 @@ function AuthoritySheet({ open, onClose, agentName }){
     try{
       const _cmp=SCHED_CAMPAIGNS.find(c=>c.id===campaign)||{};
       const campName=_cmp.quote||_cmp.name||"High Impact Digital Campaign";
-      const schedule = (campaign==="off"||!sched) ? null : { campaignName:campName, sched, total:schedTot };
+      const schedule = (campaign==="off"||!sched) ? null : { campaignName:campName, sched, total:schedTot, itemised };
       const bytes=await fillSaleAuthority({ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, vendorPrice, settlement, schedule });
       const blob=new Blob([bytes],{type:"application/pdf"});
       if(pdfUrl) URL.revokeObjectURL(pdfUrl);
@@ -4535,7 +4538,12 @@ function AuthoritySheet({ open, onClose, agentName }){
                         <span style={{fontWeight:700,fontSize:13,color:BROWN}}>{title}</span>
                         <span style={{fontWeight:700,fontSize:13,color:BROWN}}>{money(schedSubtotal(sched[sec]))}</span>
                       </div>
-                      <div style={{marginTop:3}}>{items.map((it,i)=><div key={i} style={{fontSize:12,color:BROWN_L,lineHeight:1.55}}>{it.name||"(unnamed item)"}</div>)}</div>
+                      <div style={{marginTop:3}}>{items.map((it,i)=>(
+                        <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12,color:BROWN_L,lineHeight:1.55}}>
+                          <span>{it.name||"(unnamed item)"}</span>
+                          {itemised && <span>{Number(it.amt)>0?money(it.amt):"Included"}</span>}
+                        </div>
+                      ))}</div>
                     </div>
                   );
                 })}
@@ -4544,6 +4552,10 @@ function AuthoritySheet({ open, onClose, agentName }){
                   <span style={{color:"#fff",fontWeight:800,fontSize:18}}>{money(schedTot)}</span>
                 </div>
               </div>
+              <label style={{display:"flex",alignItems:"center",gap:9,padding:"0 16px 10px",fontSize:13,color:BROWN,cursor:"pointer"}}>
+                <input type="checkbox" checked={itemised} onChange={e=>setItemised(e.target.checked)} style={{width:18,height:18,accentColor:BLUE_D}}/>
+                Show each line's price to the client
+              </label>
               {canCustom && <div style={{padding:"0 16px 10px"}}>
                 <button onClick={()=>{ if(campaign!=="custom") setCampaign("custom"); setShowEdit(x=>!x); }} style={{background:"transparent",border:`1px dashed #CDBFA6`,borderRadius:9,width:"100%",padding:"9px",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",fontSize:12.5}}>{showEdit?"Done editing":"Edit items / build custom"}</button>
               </div>}
