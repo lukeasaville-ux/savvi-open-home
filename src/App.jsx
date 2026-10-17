@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v83-auth-align-email-link";
+const BUILD = "v84-contract-signing";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4803,6 +4803,165 @@ function AuthoritySheet({ open, onClose, agentName }){
   );
 }
 
+// ---- Contract of Sale → detect signing fields → send to sign ------------------
+// Reads a Contract of Sale PDF (a listing's hosted contract, or an uploaded one),
+// finds the standard REIV signing blocks client-side (contractDetect.js), and
+// sends it through the same DocuSeal pipeline as the authority. Large contracts
+// go to DocuSeal by URL (no payload limit); small uploads go as base64.
+function ContractSheet({ open, onClose, agentName, listings }){
+  const [pdfBytes,setPdfBytes]=useState(null);
+  const [fileUrl,setFileUrl]=useState("");
+  const [docName,setDocName]=useState("");
+  const [propertyAddr,setPropertyAddr]=useState("");
+  const [detecting,setDetecting]=useState(false);
+  const [detected,setDetected]=useState(null);           // {numPages, fields, roles}
+  const [purchaser,setPurchaser]=useState({name:"",email:""});
+  const [vendor,setVendor]=useState({name:"",email:""});
+  const [err,setErr]=useState("");
+  const [sendState,setSendState]=useState("idle");       // idle | sending | sent
+  const [previews,setPreviews]=useState([]);             // [{page,url,w,h}] rendered pages with field boxes
+  const fileRef=useRef(null);
+
+  const withContracts=(listings||[]).filter(l=>l && l.contractUrl && !l._demo)
+    .filter((l,i,a)=>a.findIndex(x=>x.contractUrl===l.contractUrl)===i);
+
+  function reset(){ setPdfBytes(null); setFileUrl(""); setDocName(""); setPropertyAddr(""); setDetected(null); setErr(""); setSendState("idle"); setPurchaser({name:"",email:""}); setVendor({name:"",email:""}); setPreviews([]); }
+  function handleClose(){ reset(); onClose(); }
+
+  async function runDetect(buf){
+    setErr(""); setDetecting(true); setDetected(null); setPreviews([]);
+    try{
+      const mod = await import("./contractDetect.js");
+      const res = await mod.detectContractFields(buf.slice(0));
+      if(!res.fields.length){ setErr("No standard signing blocks were found in that PDF. It may be a scanned contract or an unusual format — tell Luke and we'll add it."); }
+      setDetected(res);
+      if(res.fields.length && res._doc){
+        try{ setPreviews(await mod.renderPreviews(res._doc, res.fields)); }catch(e){}
+      }
+    }catch(e){ setErr("Couldn't read that contract. "+(e?.message||"")); }
+    setDetecting(false);
+  }
+  async function pickListing(l){
+    setErr(""); setDetecting(true); setDetected(null); setPdfBytes(null);
+    try{
+      const resp=await fetch(l.contractUrl,{cache:"no-store"});
+      if(!resp.ok) throw new Error("HTTP "+resp.status);
+      const buf=new Uint8Array(await resp.arrayBuffer());
+      setPdfBytes(buf); setFileUrl(l.contractUrl); setDocName("Contract of Sale.pdf"); setPropertyAddr(streetLine(l.address,l.suburb)||l.address||"");
+      await runDetect(buf);
+    }catch(e){ setDetecting(false); setErr("Couldn't open that listing's contract. "+(e?.message||"")); }
+  }
+  async function onUpload(e){
+    const f=e.target.files&&e.target.files[0]; if(!f) return;
+    e.target.value="";
+    if(f.size > 9*1024*1024){ setErr(`That PDF is ${Math.round(f.size/1048576)}MB — too large to upload. Add it to the listing and send it from there.`); return; }
+    setErr(""); setDetecting(true); setDetected(null);
+    try{
+      const buf=new Uint8Array(await f.arrayBuffer());
+      setPdfBytes(buf); setFileUrl(""); setDocName(f.name||"Contract of Sale.pdf"); setPropertyAddr(f.name?.replace(/\.pdf$/i,"")||"");
+      await runDetect(buf);
+    }catch(e){ setDetecting(false); setErr("Couldn't read that PDF. "+(e?.message||"")); }
+  }
+
+  const roleCount = (r)=> detected ? detected.fields.filter(f=>f.role===r).length : 0;
+  async function send(){
+    const subs=[];
+    if(purchaser.email.trim()) subs.push({ role:"Purchaser", name:purchaser.name.trim()||"Purchaser", email:purchaser.email.trim() });
+    if(vendor.email.trim())    subs.push({ role:"Vendor",    name:vendor.name.trim()||"Vendor",       email:vendor.email.trim() });
+    if(!subs.length){ setErr("Add an email for the purchaser and/or the vendor."); return; }
+    const roles=subs.map(s=>s.role);
+    const flds=detected.fields.filter(f=>roles.includes(f.role)).map((f,i)=>({ name:`${f.role} ${f.type} ${i+1}`, role:f.role, type:f.type, required:true, readonly:f.type==="date", areas:[f.area] }));
+    if(!flds.length){ setErr("No signing fields for those parties were found in this contract."); return; }
+    setErr(""); setSendState("sending");
+    try{
+      const payload={ name:`Contract of Sale - ${propertyAddr||"property"}`, typeName:"Contract of Sale", propertyAddr, docName, fields:flds, submitters:subs };
+      if(fileUrl) payload.fileUrl=fileUrl; else payload.pdfBase64=u8ToB64(pdfBytes);
+      const r=await call("sendToSign", payload);
+      if(r&&r.ok) setSendState("sent");
+      else { setSendState("idle"); setErr("Could not send to sign. "+(r?.error||"please try again")); }
+    }catch(e){ setSendState("idle"); setErr("Could not send to sign. "+(e?.message||"")); }
+  }
+
+  const Xclose=(<button onClick={handleClose} aria-label="Close" style={{position:"absolute",top:10,right:12,width:32,height:32,borderRadius:16,border:"none",background:SAND,color:BROWN,fontSize:17,fontWeight:700,cursor:"pointer",lineHeight:"32px",zIndex:5}}>×</button>);
+  const label={fontSize:12,fontWeight:700,color:BROWN_L,margin:"0 0 5px 2px"};
+  return (
+    <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) handleClose(); }}>
+      <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
+        {Xclose}
+        <div className="hndl"/>
+        <div className="sh-ttl">{sendState==="sent"?"Sent to sign":"Sign a contract"}</div>
+        <div className="sh-sub">{sendState==="sent"?"The parties will receive it from Savvi to e-sign":"Pick the contract, we find the signing spots, then send it to the parties"}</div>
+
+        {sendState==="sent" ? (
+          <div style={{padding:"8px 2px 14px"}}>
+            <div style={{background:"#EAF7EE",border:"1px solid #A9DFBF",borderRadius:12,padding:"14px 15px",color:"#1E6B3A",fontSize:14,fontWeight:600,lineHeight:1.5}}>
+              ✓ Contract of Sale for {propertyAddr||"the property"} sent to {[purchaser.email&&"the purchaser",vendor.email&&"the vendor"].filter(Boolean).join(" and ")} to e-sign. Each receives an email from Savvi with the signing link.
+            </div>
+            <button className="btn-cream" style={{marginTop:14}} onClick={()=>{ reset(); }}>Send another contract</button>
+          </div>
+        ) : (<>
+          {!detected && !detecting && <>
+            <div style={label}>Choose the contract</div>
+            {withContracts.length>0 ? (
+              <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
+                {withContracts.map(l=>(
+                  <button key={l.contractUrl} onClick={()=>pickListing(l)} style={{textAlign:"left",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:11,padding:"12px 14px",cursor:"pointer",fontFamily:"inherit"}}>
+                    <div style={{fontSize:14,fontWeight:700,color:ESPRESSO}}>{streetLine(l.address,l.suburb)||l.address}</div>
+                    <div style={{fontSize:12,color:BROWN_L,marginTop:2}}>Contract on file · tap to use</div>
+                  </button>
+                ))}
+              </div>
+            ) : <div style={{fontSize:13,color:BROWN_L,marginBottom:12}}>No listings have a contract on file yet.</div>}
+            <div style={{fontSize:12,color:BROWN_L,textAlign:"center",margin:"2px 0 10px"}}>or</div>
+            <input ref={fileRef} type="file" accept="application/pdf" onChange={onUpload} style={{display:"none"}}/>
+            <button className="btn-outline" style={{width:"100%"}} onClick={()=>fileRef.current&&fileRef.current.click()}>Upload a contract PDF</button>
+          </>}
+
+          {detecting && <div style={{padding:"26px 0",textAlign:"center",color:BROWN_L,fontSize:14}}><span className="sp-sm"/> Reading the contract and finding the signing spots…</div>}
+
+          {detected && !detecting && <>
+            <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+              <div style={{fontSize:14,fontWeight:700,color:ESPRESSO}}>{propertyAddr||docName}</div>
+              <div style={{fontSize:12.5,color:BROWN_L,marginTop:4,lineHeight:1.5}}>
+                {detected.numPages} pages · found {detected.fields.length} signing {detected.fields.length===1?"spot":"spots"}
+                {detected.fields.length>0 && <> — purchaser {roleCount("Purchaser")}, vendor {roleCount("Vendor")}</>}
+              </div>
+              <button onClick={reset} style={{marginTop:8,background:"none",border:"none",color:BLUE_D,fontSize:12.5,fontWeight:700,cursor:"pointer",padding:0,fontFamily:"inherit"}}>Choose a different contract</button>
+            </div>
+            {detected.fields.length>0 && <>
+              {previews.length>0 && <div style={{marginBottom:14}}>
+                <div style={label}>We found these signing spots — check they look right before sending</div>
+                <div style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:4}}>
+                  {previews.map(pv=><div key={pv.page} style={{flex:"0 0 auto"}}>
+                    <img src={pv.url} alt={"Page "+pv.page} style={{width:Math.min(pv.w,250),borderRadius:8,border:`1px solid ${SAND_D}`,display:"block"}}/>
+                    <div style={{fontSize:11,color:BROWN_L,textAlign:"center",marginTop:3}}>Page {pv.page}</div>
+                  </div>)}
+                </div>
+                <div style={{fontSize:11,color:BROWN_L,marginTop:5}}><span style={{color:"#2563eb",fontWeight:700}}>Blue</span> = signature · <span style={{color:"#dc2626",fontWeight:700}}>red</span> = date. Each party only signs their own.</div>
+              </div>}
+              <div style={label}>Purchaser</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                <input className="fi" placeholder="Name" value={purchaser.name} onChange={e=>setPurchaser(p=>({...p,name:e.target.value}))}/>
+                <input className="fi" placeholder="Email" inputMode="email" value={purchaser.email} onChange={e=>setPurchaser(p=>({...p,email:e.target.value}))}/>
+              </div>
+              <div style={label}>Vendor</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:6}}>
+                <input className="fi" placeholder="Name" value={vendor.name} onChange={e=>setVendor(p=>({...p,name:e.target.value}))}/>
+                <input className="fi" placeholder="Email" inputMode="email" value={vendor.email} onChange={e=>setVendor(p=>({...p,email:e.target.value}))}/>
+              </div>
+              <div style={{fontSize:11.5,color:BROWN_L,margin:"0 0 12px 2px"}}>Leave a party blank to send to the other only. Each party e-signs only their own spots.</div>
+              <button className="btn-dark" style={{width:"100%",margin:0}} disabled={sendState==="sending"} onClick={send}>{sendState==="sending"?<><span className="sp-sm"/>Sending…</>:"Send for signing →"}</button>
+            </>}
+          </>}
+
+          {err && <div style={{marginTop:12,background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{err}</div>}
+          <div style={{height:20}}/>
+        </>)}
+      </div>
+    </div>
+  );
+}
+
 
 export default function App(){
   const[agentName,setAgentName]=useState(()=>{ try { return SESSION_TOKEN ? (sessionStorage.getItem("savvi_who")||"") : ""; } catch(e){ return ""; } });
@@ -4879,6 +5038,7 @@ export default function App(){
   const[showQuickContract,setShowQuickContract]=useState(false);
   const[showAddListing,setShowAddListing]=useState(false);
   const[showAuthority,setShowAuthority]=useState(false);
+  const[showContract,setShowContract]=useState(false);
   const[showAssistant,setShowAssistant]=useState(false);
   const[showGeneral,setShowGeneral]=useState(false);
   const[showInfo,setShowInfo]=useState(false);
@@ -5745,7 +5905,10 @@ export default function App(){
 
       {!loading&&homeTab==="match"&&<BuyerMatch propIndex={propIndex} agentName={agentName}/>}
       {!loading&&<div style={{padding:"24px 20px 6px",textAlign:"center"}}>
-        <button onClick={()=>setShowAuthority(true)} style={{background:BROWN,border:"none",color:"#fff",fontSize:13.5,fontWeight:700,cursor:"pointer",fontFamily:"inherit",borderRadius:11,padding:"12px 24px",boxShadow:"0 4px 12px rgba(49,30,16,.18)"}}>+ New authority</button>
+        <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+          <button onClick={()=>setShowAuthority(true)} style={{background:BROWN,border:"none",color:"#fff",fontSize:13.5,fontWeight:700,cursor:"pointer",fontFamily:"inherit",borderRadius:11,padding:"12px 24px",boxShadow:"0 4px 12px rgba(49,30,16,.18)"}}>+ New authority</button>
+          <button onClick={()=>setShowContract(true)} style={{background:BLUE_D,border:"none",color:"#fff",fontSize:13.5,fontWeight:700,cursor:"pointer",fontFamily:"inherit",borderRadius:11,padding:"12px 24px",boxShadow:"0 4px 12px rgba(138,172,227,.3)"}}>+ Sign a contract</button>
+        </div>
         <div style={{marginTop:12}}><button onClick={()=>setShowAddListing(true)} style={{background:"transparent",border:"none",color:BROWN_L,fontSize:12.5,fontWeight:600,cursor:"pointer",textDecoration:"underline",fontFamily:"inherit",opacity:.8}}>+ Add a listing</button></div>
       </div>}
       <div style={{height:40}}/>
@@ -5913,6 +6076,7 @@ export default function App(){
       }}
     />
     <AuthoritySheet open={showAuthority} onClose={()=>setShowAuthority(false)} agentName={agentName}/>
+    <ContractSheet open={showContract} onClose={()=>setShowContract(false)} agentName={agentName} listings={allListings}/>
 
     {/* ── SUCCESS: BUYER ADDED ── */}
     <div className={`sov ${showOk?"on":""}`}><div className="sc">
