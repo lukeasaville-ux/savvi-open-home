@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v81-entity-execution";
+const BUILD = "v82-align-autodate-parallel";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4206,23 +4206,23 @@ function signFields(hasSchedule, nVendors, authType, vendorType){
   const AW=595.92,AH=841.92,SW=595.5,SH=842.25;
   const a=(x,y,w,h,page,W,H)=>({x:x/W,y:y/H,w:w/W,h:h/H,page});
   const schedPage = authType==="auction" ? 8 : 7;   // schedule = (authority pages + 1): sale 6→7, auction 7→8
-  const f=[
-    {name:"Agent Signature",role:"Agent",type:"signature",required:true,areas:[a(76,130,185,22,2,AW,AH)]},
-    {name:"Agent Date",role:"Agent",type:"date",required:true,areas:[a(55,180,120,14,2,AW,AH)]},
-  ];
+  const sig=(name,role,x,y,w,h)=>({name,role,type:"signature",required:true,areas:[a(x,y,w,h,2,AW,AH)]});
+  const dte=(name,role,x,y,w,h)=>({name,role,type:"date",required:true,readonly:true,areas:[a(x,y,w,h,2,AW,AH)]}); // readonly → DocuSeal auto-fills the signing date
+  const f=[ sig("Agent Signature","Agent",76,130,185,22), dte("Agent Date","Agent",55,180,120,14) ];
+  const n=Math.max(1,nVendors||1);
   if(vendorType==="company"){
-    // All signatories (directors) sign in the drawn s127 execution block; VENDOR box unused.
-    companyRows(nVendors||1).forEach((r,i)=>{ const role="Vendor "+(i+1);
-      f.push({name:role+" Signature",role,type:"signature",required:true,areas:[a(95,r.lineY-14,205,18,2,AW,AH)]});
-      f.push({name:role+" Date",role,type:"date",required:true,areas:[a(350,r.lineY-14,110,14,2,AW,AH)]});
-    });
+    companyRows(n).forEach((r,i)=>{ const role="Vendor "+(i+1);
+      f.push(sig(role+" Signature",role,95,r.lineY-14,205,18)); f.push(dte(role+" Date",role,350,r.lineY-14,110,14)); });
   } else {
-    f.push({name:"Vendor 1 Signature",role:"Vendor 1",type:"signature",required:true,areas:[a(343,130,185,22,2,AW,AH)]});
-    f.push({name:"Vendor 1 Date",role:"Vendor 1",type:"date",required:true,areas:[a(324,180,120,14,2,AW,AH)]});
-    extraVendorRows(Math.max(0,(nVendors||1)-1)).forEach((r,i)=>{ const role="Vendor "+(i+2);
-      f.push({name:role+" Signature",role,type:"signature",required:true,areas:[a(95,r.lineY-14,205,18,2,AW,AH)]});
-      f.push({name:role+" Date",role,type:"date",required:true,areas:[a(350,r.lineY-14,110,14,2,AW,AH)]});
-    });
+    // 1–2 vendors sign in the VENDOR box (split when 2); 3rd+ go to the drawn rows
+    if(n>=2){
+      f.push(sig("Vendor 1 Signature","Vendor 1",343,130,90,20)); f.push(dte("Vendor 1 Date","Vendor 1",324,180,55,14));
+      f.push(sig("Vendor 2 Signature","Vendor 2",438,130,90,20)); f.push(dte("Vendor 2 Date","Vendor 2",383,180,55,14));
+    } else {
+      f.push(sig("Vendor 1 Signature","Vendor 1",343,130,185,22)); f.push(dte("Vendor 1 Date","Vendor 1",324,180,120,14));
+    }
+    extraVendorRows(Math.max(0,n-2)).forEach((r,i)=>{ const role="Vendor "+(i+3);
+      f.push(sig(role+" Signature",role,95,r.lineY-14,205,18)); f.push(dte(role+" Date",role,350,r.lineY-14,110,14)); });
   }
   if(hasSchedule) f.push({name:"Vendor 1 Schedule Signature",role:"Vendor 1",type:"signature",required:true,areas:[a(95,724,185,18,schedPage,SW,SH)]});
   return f;
@@ -4246,7 +4246,7 @@ function drawVendorExecution(doc, font, bold, rgb, d){
     sigs.forEach((v,i)=>{ const role=sigs.length>1?(i===0?"Director:":"Director / Company Secretary:"):"Sole Director and Company Secretary:"; row(262+i*50,role,v.name); });
     return;
   }
-  const extra=sigs.slice(1); if(!extra.length) return;
+  const extra=sigs.slice(2); if(!extra.length) return;   // vendors 1-2 use the box; 3rd+ drawn here
   const word=vt==="trust"?"Trustee":vt==="estate"?"Executor":"Vendor";
   p.drawText("Additional "+word+"(s):",{x:36,y:H-228,size:9,font:bold,color:rgb(0,0,0)});
   extra.forEach((v,i)=>row(245+i*48,"Name",v.name));
@@ -4264,7 +4264,7 @@ async function fillSaleAuthority(d){
   const names=(d.vendors||[]).map(v=>(v.name||"").trim()).filter(Boolean).join(" & ");
   const mobiles=(d.vendors||[]).map(v=>(v.mobile||"").trim()).filter(Boolean).join(", ");
   const emails=(d.vendors||[]).map(v=>(v.email||"").trim()).filter(Boolean).join(", ");
-  put(72,222.8,vendorPartyName(d));
+  put(104,222.8,vendorPartyName(d));
   put(104,235.8,d.vendorAddr);
   put(104,273.3,mobiles,8);   // all vendors' mobiles, comma-separated (Phone field)
   put(104,292.1,emails,8);    // all vendors' emails, comma-separated
@@ -4312,31 +4312,31 @@ async function fillAuctionAuthority(d){
   const names=(d.vendors||[]).map(v=>(v.name||"").trim()).filter(Boolean).join(" & ");
   const mobiles=(d.vendors||[]).map(v=>(v.mobile||"").trim()).filter(Boolean).join(", ");
   const emails=(d.vendors||[]).map(v=>(v.email||"").trim()).filter(Boolean).join(", ");
-  put(72,231.8,vendorPartyName(d));
-  put(104,242.0,d.vendorAddr);
-  put(104,279.5,mobiles,8);
-  put(104,298.2,emails,8);
-  put(104,317.3,d.propertyAddr);
-  put(100,336.0,AUTH_GOODS,8);
-  put(152,353.7,d.period||"30");                 // exclusive authority period = N days after the auction date
-  if(d.auctionDate){ const m=String(d.auctionDate).match(/(\d{4})-(\d{2})-(\d{2})/); if(m){ put(73,372.5,m[3]); put(102,372.5,m[2]); put(142,372.5,m[1].slice(2)); } }
-  put(400,372.5,(d.auctionTime||"").trim()||"To be advised");
-  if(d.possession==="tenancy") put(253,393.5,"X",11); else put(126.5,393.5,"X",11);
+  put(104,232.5,vendorPartyName(d));
+  put(104,243.7,d.vendorAddr);
+  put(104,281.2,mobiles,8);
+  put(104,300.0,emails,8);
+  put(104,318.0,d.propertyAddr);
+  put(100,336.7,AUTH_GOODS,8);
+  put(152,355.5,d.period||"30");                 // exclusive authority period = N days after the auction date
+  if(d.auctionDate){ const m=String(d.auctionDate).match(/(\d{4})-(\d{2})-(\d{2})/); if(m){ put(73,374.2,m[3]); put(102,374.2,m[2]); put(142,374.2,m[1].slice(2)); } }
+  put(400,374.2,(d.auctionTime||"").trim()||"To be advised");
+  if(d.possession==="tenancy") put(254,396.2,"X",11); else put(126,396.2,"X",11);
   const rv=String(d.reserve||"").replace(/[^0-9]/g,"");
-  if(rv) put(110,424.2,Number(rv).toLocaleString("en-AU"));
-  else   put(377,425.0,"X",11);                  // ☑ Vendor's reserve price to be advised (default)
+  if(rv) put(110,426.0,Number(rv).toLocaleString("en-AU"));
+  else   put(378,427.0,"X",11);                  // ☑ Vendor's reserve price to be advised (default)
   const from=authMoney(d.priceFrom), to=authMoney(d.priceTo);
-  if(from) put(179,467.7,from,8);
-  if(to)   put(247,467.7,to,8);
+  if(from) put(179,469.5,from,8);
+  if(to)   put(247,469.5,to,8);
   const comm=(String(d.commission||"2.75").replace(/[^0-9.]/g,""))||"2.75";
   put(31,529,comm+"% of the sale price");
   const top=Number(String(d.priceTo||d.priceFrom||"").replace(/[^0-9]/g,""));
   if(top){ const est=Math.round(top*parseFloat(comm)/100), gst=Math.round(est/11);
-    put(37,573.5,est.toLocaleString("en-AU")); put(481,573.5,gst.toLocaleString("en-AU")); put(404,589.2,top.toLocaleString("en-AU")); }
-  page.drawLine({ start:{x:19,y:H-691.5}, end:{x:134,y:H-691.5}, thickness:1, color:rgb(0,0,0) }); // strike "the signing of this Authority"
+    put(37,575.2,est.toLocaleString("en-AU")); put(481,575.2,gst.toLocaleString("en-AU")); put(404,591.0,top.toLocaleString("en-AU")); }
+  page.drawLine({ start:{x:19,y:H-686}, end:{x:134,y:H-686}, thickness:1, color:rgb(0,0,0) }); // strike "the signing of this Authority"
   if(d.schedule && d.schedule.total){
     const tot=Number(d.schedule.total).toLocaleString("en-AU");
-    put(75,668.7,tot); put(286,668.7,"NIL"); put(415,668.7,tot); put(213,717.5,"NIL");
+    put(75,670.5,tot); put(286,670.5,"NIL"); put(415,670.5,tot); put(213,719.2,"NIL");
     await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
   }
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
@@ -4785,7 +4785,7 @@ function AuthoritySheet({ open, onClose, agentName }){
           <div style={{padding:"6px 16px 10px",borderTop:`1px solid #EFE8DC`}}>
             <div style={{fontSize:11.5,color:BROWN_L,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase",marginBottom:8}}>Defaults (change if needed)</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-              <div><label className="fl">{authType==="auction"?"Days after auction":"Exclusive (days)"}</label><input className="fi" type="text" inputMode="numeric" value={period} onChange={e=>setPeriod(e.target.value)} style={{textAlign:"center"}}/></div>
+              <div><label className="fl" style={{whiteSpace:"nowrap"}}>{authType==="auction"?"After auction":"Exclusive"}</label><input className="fi" type="text" inputMode="numeric" value={period} onChange={e=>setPeriod(e.target.value)} style={{textAlign:"center"}}/></div>
               <div><label className="fl">Commission %</label><input className="fi" type="text" inputMode="decimal" value={commission} onChange={e=>setCommission(e.target.value)} style={{textAlign:"center"}}/></div>
               <div><label className="fl">Possession</label><select className="fi" value={possession} onChange={e=>setPossession(e.target.value)}><option value="vacant">Vacant</option><option value="tenancy">Tenanted</option></select></div>
             </div>
