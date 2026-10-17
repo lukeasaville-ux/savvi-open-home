@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v72-authority-schedule";
+const BUILD = "v73-domain-guard";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4232,8 +4232,9 @@ const REA_DEFAULT=4419;
 // Domain "Platinum Edge listing & Platinum eBrochure" (one line) by price band, GST incl.
 // Band on the BOTTOM of the price range: ≤999,999 → b1; ≤2,249,999 → b2; else b3.
 // b3 + Richmond $1m+ are editable in the UI (Domain confirms rates per listing). TBC exacts.
-const DOMAIN_PLATINUM={ b1:1300, b2:3300, b3:3300 };
-const DOMAIN_OVERRIDE={ /* "3121":{b2:..,b3:..} once Luke confirms Richmond $1m+ */ };
+// b3 (>$2.25m) is intentionally null → NOT auto-priced; agent must phone Domain and enter it.
+const DOMAIN_PLATINUM={ b1:1300, b2:3300, b3:null };
+const DOMAIN_OVERRIDE={ "3121":{ b2:3040 } }; // Richmond $1m–$2.249m is cheaper than standard $3,300
 const SCHED_FIXED={ photos:715, boards:725, misc:718 }; // fixed section subtotals (incl. Campaign Mgmt $595, Social is separate)
 const SOCIAL_FEE=495, EBROCHURE_FEE=0;
 function authPostcode(addr){ const m=String(addr||"").match(/\b(3\d{3})\b/g); return m?m[m.length-1]:""; }
@@ -4388,7 +4389,7 @@ function AuthoritySheet({ open, onClose }){
     // seed schedule lines from suburb + price band, only where not already edited
     const pc=authPostcode(propertyAddr), bd=domainBand(priceFrom||priceTo||vendorPrice);
     if(!rea) setRea(String(reaPremiere(pc)));
-    if(!domain) setDomain(String(domainPlatinum(pc,bd)));
+    const dv=domainPlatinum(pc,bd); if(!domain && dv!=null) setDomain(String(dv)); // b3 → leave blank, agent phones Domain
     if(!social) setSocial(String(SOCIAL_FEE));
     if(!photos) setPhotos(String(SCHED_FIXED.photos));
     if(!boards) setBoards(String(SCHED_FIXED.boards));
@@ -4441,6 +4442,9 @@ function AuthoritySheet({ open, onClose }){
                 <option value="off">Off-market — no advertising ($0)</option>
               </select></div>
             {campaign!=="off" && <>
+              {band==="b3" && <div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12.5,lineHeight:1.4}}>
+                This property is over $2.25m. Domain isn't auto-priced at this level — phone Domain for the correct Platinum Edge price, enter it below, then you can continue.
+              </div>}
               <div style={{padding:"4px 16px 2px",fontSize:11.5,color:BROWN_L,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase"}}>Internet & Digital</div>
               <div style={{padding:"0 16px 8px"}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                 <div><label className="fl">realestate.com.au Premiere</label><input className="fi" type="text" inputMode="numeric" value={rea} onChange={e=>setRea(e.target.value)}/></div>
@@ -4460,7 +4464,7 @@ function AuthoritySheet({ open, onClose }){
               </div>
             </>}
             {err&&<div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
-            <div className="fg" style={{paddingBottom:6}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={generate} disabled={busy}>{busy?<><span className="sp-sm"/>Generating…</>:campaign==="off"?"Generate authority →":"Generate authority + schedule →"}</button></div>
+            <div className="fg" style={{paddingBottom:6}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={generate} disabled={busy||(campaign!=="off"&&!(Number(domain)>0))}>{busy?<><span className="sp-sm"/>Generating…</>:campaign==="off"?"Generate authority →":"Generate authority + schedule →"}</button></div>
             <div style={{display:"flex",gap:12,padding:"0 16px"}}>
               <button onClick={()=>setStage("details")} style={{flex:1,background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Back</button>
               <button onClick={()=>saveDraft(false)} style={{flex:1,background:"transparent",border:"none",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>{savedMsg||"Save as draft"}</button>
