@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v82-align-autodate-parallel";
+const BUILD = "v83-auth-align-email-link";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4264,34 +4264,34 @@ async function fillSaleAuthority(d){
   const names=(d.vendors||[]).map(v=>(v.name||"").trim()).filter(Boolean).join(" & ");
   const mobiles=(d.vendors||[]).map(v=>(v.mobile||"").trim()).filter(Boolean).join(", ");
   const emails=(d.vendors||[]).map(v=>(v.email||"").trim()).filter(Boolean).join(", ");
-  put(104,222.8,vendorPartyName(d));
-  put(104,235.8,d.vendorAddr);
-  put(104,273.3,mobiles,8);   // all vendors' mobiles, comma-separated (Phone field)
-  put(104,292.1,emails,8);    // all vendors' emails, comma-separated
-  put(104,311.3,d.propertyAddr);
-  put(100,332.3,AUTH_GOODS,8);
-  put(152,352.8,d.period||"90");
+  put(104,222.2,vendorPartyName(d));
+  put(104,235.7,d.vendorAddr);
+  put(104,273.2,mobiles,8);   // all vendors' mobiles, comma-separated (Phone field)
+  put(104,292.0,emails,8);    // all vendors' emails, comma-separated
+  put(104,314.5,d.propertyAddr);
+  put(100,335.2,AUTH_GOODS,8);
+  put(140,355.0,d.period||"90");
   if(d.possession==="tenancy") put(254,378.4,"X",11); else put(126.5,378.4,"X",11);
   // Vendor's price (optional) + settlement "payable in __ days"; else tick "to be advised"
   const vp=String(d.vendorPrice||"").replace(/[^0-9]/g,"");
-  if(vp) put(85,424.5,Number(vp).toLocaleString("en-AU"));
+  if(vp) put(85,424.7,Number(vp).toLocaleString("en-AU"));
   else   put(430,425.5,"X",11);                 // ☑ Vendor's price to be advised (default)
-  put(268,424.5,String(d.settlement||"30 / 60"));
+  put(268,424.7,String(d.settlement||"30 / 60"));
   // Marketing Expenses payable line: strike out "*the signing of this Authority", keep "*written request".
-  page.drawLine({ start:{x:157,y:H-666.8}, end:{x:270,y:H-666.8}, thickness:1, color:rgb(0,0,0) });
+  page.drawLine({ start:{x:157,y:H-668.0}, end:{x:269,y:H-668.0}, thickness:1, color:rgb(0,0,0) });
   const from=authMoney(d.priceFrom), to=authMoney(d.priceTo);
-  if(from) put(179,471.0,from,8);
-  if(to)   put(247,471.0,to,8);
+  if(from) put(181,472.7,from,8);
+  if(to)   put(245,472.7,to,8);
   const comm=(String(d.commission||"2.75").replace(/[^0-9.]/g,""))||"2.75";
-  put(31,543,comm+"% of the sale price");
+  put(31,545.5,comm+"% of the sale price");
   const top=Number(String(d.priceTo||d.priceFrom||"").replace(/[^0-9]/g,""));
   if(top){ const est=Math.round(top*parseFloat(comm)/100), gst=Math.round(est/11);
-    put(197,560.6,est.toLocaleString("en-AU")); put(404,560.6,gst.toLocaleString("en-AU")); put(316,579.3,top.toLocaleString("en-AU")); }
+    put(197,562.0,est.toLocaleString("en-AU")); put(404,562.0,gst.toLocaleString("en-AU")); put(316,580.7,top.toLocaleString("en-AU")); }
   // Marketing Expenses block (page 0): the advertising-schedule total flows into
   // Advertising + TOTAL; "Other" lines are never used → NIL. (coords from the base PDF)
   if(d.schedule && d.schedule.total){
     const tot=Number(d.schedule.total).toLocaleString("en-AU");
-    put(75,651.5,tot); put(286,651.5,"NIL"); put(415,651.5,tot); put(213,689,"NIL");
+    put(75,651.2,tot); put(286,651.2,"NIL"); put(418,651.2,tot); put(213,689.5,"NIL");
     await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
   }
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
@@ -4312,31 +4312,31 @@ async function fillAuctionAuthority(d){
   const names=(d.vendors||[]).map(v=>(v.name||"").trim()).filter(Boolean).join(" & ");
   const mobiles=(d.vendors||[]).map(v=>(v.mobile||"").trim()).filter(Boolean).join(", ");
   const emails=(d.vendors||[]).map(v=>(v.email||"").trim()).filter(Boolean).join(", ");
-  put(104,232.5,vendorPartyName(d));
-  put(104,243.7,d.vendorAddr);
-  put(104,281.2,mobiles,8);
-  put(104,300.0,emails,8);
-  put(104,318.0,d.propertyAddr);
-  put(100,336.7,AUTH_GOODS,8);
-  put(152,355.5,d.period||"30");                 // exclusive authority period = N days after the auction date
-  if(d.auctionDate){ const m=String(d.auctionDate).match(/(\d{4})-(\d{2})-(\d{2})/); if(m){ put(73,374.2,m[3]); put(102,374.2,m[2]); put(142,374.2,m[1].slice(2)); } }
-  put(400,374.2,(d.auctionTime||"").trim()||"To be advised");
+  put(104,229.7,vendorPartyName(d));
+  put(104,240.2,d.vendorAddr);
+  put(104,277.7,mobiles,8);
+  put(104,296.5,emails,8);
+  put(104,319.4,d.propertyAddr);
+  put(100,339.7,AUTH_GOODS,8);
+  put(150,352.7,d.period||"30");                 // exclusive authority period = N days after the auction date
+  if(d.auctionDate){ const m=String(d.auctionDate).match(/(\d{4})-(\d{2})-(\d{2})/); if(m){ put(73,371.5,m[3]); put(102,371.5,m[2]); put(145,371.5,m[1].slice(2)); } }
+  put(390,371.5,(d.auctionTime||"").trim()||"To be advised");
   if(d.possession==="tenancy") put(254,396.2,"X",11); else put(126,396.2,"X",11);
   const rv=String(d.reserve||"").replace(/[^0-9]/g,"");
-  if(rv) put(110,426.0,Number(rv).toLocaleString("en-AU"));
+  if(rv) put(110,423.2,Number(rv).toLocaleString("en-AU"));
   else   put(378,427.0,"X",11);                  // ☑ Vendor's reserve price to be advised (default)
   const from=authMoney(d.priceFrom), to=authMoney(d.priceTo);
-  if(from) put(179,469.5,from,8);
-  if(to)   put(247,469.5,to,8);
+  if(from) put(181,466.7,from,8);
+  if(to)   put(245,466.7,to,8);
   const comm=(String(d.commission||"2.75").replace(/[^0-9.]/g,""))||"2.75";
-  put(31,529,comm+"% of the sale price");
+  put(31,537.2,comm+"% of the sale price");
   const top=Number(String(d.priceTo||d.priceFrom||"").replace(/[^0-9]/g,""));
   if(top){ const est=Math.round(top*parseFloat(comm)/100), gst=Math.round(est/11);
-    put(37,575.2,est.toLocaleString("en-AU")); put(481,575.2,gst.toLocaleString("en-AU")); put(404,591.0,top.toLocaleString("en-AU")); }
-  page.drawLine({ start:{x:19,y:H-686}, end:{x:134,y:H-686}, thickness:1, color:rgb(0,0,0) }); // strike "the signing of this Authority"
+    put(37,572.5,est.toLocaleString("en-AU")); put(481,572.5,gst.toLocaleString("en-AU")); put(404,588.2,top.toLocaleString("en-AU")); }
+  page.drawLine({ start:{x:19.6,y:H-698.0}, end:{x:133.3,y:H-698.0}, thickness:1, color:rgb(0,0,0) }); // strike "*the signing of this Authority"
   if(d.schedule && d.schedule.total){
     const tot=Number(d.schedule.total).toLocaleString("en-AU");
-    put(75,670.5,tot); put(286,670.5,"NIL"); put(415,670.5,tot); put(213,719.2,"NIL");
+    put(75,667.7,tot); put(286,667.7,"NIL"); put(418,667.7,tot); put(213,716.5,"NIL");
     await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
   }
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
@@ -4588,7 +4588,7 @@ function AuthoritySheet({ open, onClose, agentName }){
       const submitters=named.map((v,i)=>({ role:"Vendor "+(i+1), name:v.name.trim(), email:v.email.trim() }));
       submitters.push({ role:"Agent", name:(agentName||"Savvi"), email:AGENT_EMAIL[agentName]||"hello@getsavvi.com.au" });
       const typeName = authType==="auction" ? "Exclusive Auction Authority" : "Exclusive Sale Authority";
-      const r=await call("sendToSign",{ name:`${typeName} - ${(propertyAddr||"property").replace(/[\\/:*?"<>|]/g,"")}`, pdfBase64:b64, fields, submitters });
+      const r=await call("sendToSign",{ name:`${typeName} - ${propertyAddr||"property"}`, typeName, propertyAddr:propertyAddr||"", pdfBase64:b64, fields, submitters });
       if(r&&r.ok){ setSendState("sent"); }
       else { setSendState("idle"); setErr("Could not send to sign. "+(r?.error||"please try again")); }
     }catch(e){ setSendState("idle"); setErr("Could not send to sign. "+(e?.message||"")); }
