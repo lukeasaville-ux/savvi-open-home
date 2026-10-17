@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v71-authority-generator";
+const BUILD = "v72-authority-schedule";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4188,15 +4188,21 @@ async function fillSaleAuthority(d){
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const put=(x,fy,t,sz=9)=>{ if(t==null||t==="")return; page.drawText(String(t),{x,y:H-fy,size:sz,font,color:rgb(0,0,0)}); };
   const names=(d.vendors||[]).map(v=>(v.name||"").trim()).filter(Boolean).join(" & ");
-  const v0=(d.vendors||[])[0]||{};
+  const mobiles=(d.vendors||[]).map(v=>(v.mobile||"").trim()).filter(Boolean).join(", ");
+  const emails=(d.vendors||[]).map(v=>(v.email||"").trim()).filter(Boolean).join(", ");
   put(72,222.8,names);
   put(104,235.8,d.vendorAddr);
-  put(104,273.3,v0.mobile);
-  put(104,292.1,v0.email);
+  put(104,273.3,mobiles,8);   // all vendors' mobiles, comma-separated (Phone field)
+  put(104,292.1,emails,8);    // all vendors' emails, comma-separated
   put(104,311.3,d.propertyAddr);
   put(100,332.3,AUTH_GOODS,8);
   put(152,352.8,d.period||"90");
   if(d.possession==="tenancy") put(254,378.4,"X",11); else put(126.5,378.4,"X",11);
+  // Vendor's price (optional) + settlement "payable in __ days"; else tick "to be advised"
+  const vp=String(d.vendorPrice||"").replace(/[^0-9]/g,"");
+  if(vp) put(85,424.5,Number(vp).toLocaleString("en-AU"));
+  else   put(430,425.5,"X",11);                 // ☑ Vendor's price to be advised (default)
+  put(268,424.5,String(d.settlement||"30 / 60"));
   const from=authMoney(d.priceFrom), to=authMoney(d.priceTo);
   if(from) put(179,471.0,from,8);
   if(to)   put(247,471.0,to,8);
@@ -4205,44 +4211,215 @@ async function fillSaleAuthority(d){
   const top=Number(String(d.priceTo||d.priceFrom||"").replace(/[^0-9]/g,""));
   if(top){ const est=Math.round(top*parseFloat(comm)/100), gst=Math.round(est/11);
     put(197,560.6,est.toLocaleString("en-AU")); put(404,560.6,gst.toLocaleString("en-AU")); put(316,579.3,top.toLocaleString("en-AU")); }
+  // Marketing Expenses block (page 0): the advertising-schedule total flows into
+  // Advertising + TOTAL; "Other" lines are never used → NIL. (coords from the base PDF)
+  if(d.schedule && d.schedule.total){
+    const tot=Number(d.schedule.total).toLocaleString("en-AU");
+    put(75,651.5,tot); put(286,651.5,"NIL"); put(415,651.5,tot); put(213,689,"NIL");
+    const bold=await doc.embedFont(StandardFonts.HelveticaBold);
+    buildSchedulePage(doc,font,bold,rgb,{ propertyAddr:d.propertyAddr, schedule:d.schedule });
+  }
   return await doc.save();
 }
 
+// ---- Advertising / marketing schedule pricing engine ---------------------------
+// Reverse-engineered from Savvi's Realtair "High Impact Digital Campaign" schedules
+// (17 Oct 2026). The vendor schedule shows SECTION SUBTOTALS only; the grand total
+// flows into the authority's Marketing Expenses > Advertising + TOTAL. See the
+// advertising-schedule memory for the full derivation.
+const REA_PREMIERE={ "3122":4419,"3123":4419,"3101":4419,"3102":4419,"3126":4419,"3124":4419,"3143":4419,"3144":4419,"3146":4419,"3141":3819,"3121":3819,"3181":3819,"3078":3789 };
+const REA_DEFAULT=4419;
+// Domain "Platinum Edge listing & Platinum eBrochure" (one line) by price band, GST incl.
+// Band on the BOTTOM of the price range: ≤999,999 → b1; ≤2,249,999 → b2; else b3.
+// b3 + Richmond $1m+ are editable in the UI (Domain confirms rates per listing). TBC exacts.
+const DOMAIN_PLATINUM={ b1:1300, b2:3300, b3:3300 };
+const DOMAIN_OVERRIDE={ /* "3121":{b2:..,b3:..} once Luke confirms Richmond $1m+ */ };
+const SCHED_FIXED={ photos:715, boards:725, misc:718 }; // fixed section subtotals (incl. Campaign Mgmt $595, Social is separate)
+const SOCIAL_FEE=495, EBROCHURE_FEE=0;
+function authPostcode(addr){ const m=String(addr||"").match(/\b(3\d{3})\b/g); return m?m[m.length-1]:""; }
+function domainBand(bottom){ const n=Number(String(bottom||"").replace(/[^0-9]/g,"")); if(!n||n<=999999)return"b1"; if(n<=2249999)return"b2"; return"b3"; }
+function reaPremiere(postcode){ return REA_PREMIERE[postcode]!=null?REA_PREMIERE[postcode]:REA_DEFAULT; }
+function domainPlatinum(postcode,band){ const o=DOMAIN_OVERRIDE[postcode]; return (o&&o[band]!=null)?o[band]:DOMAIN_PLATINUM[band]; }
+function bandLabel(b){ return b==="b1"?"≤ $999k":b==="b2"?"$1m – $2.249m":"$2.25m +"; }
+// Build the schedule object the PDF + authority consume from the (possibly edited) line amounts.
+function buildScheduleObj({ rea, domain, social, photos, boards, misc }){
+  const n=v=>Math.max(0,Math.round(Number(String(v).replace(/[^0-9.]/g,""))||0));
+  rea=n(rea); domain=n(domain); social=n(social); photos=n(photos); boards=n(boards); misc=n(misc);
+  const internet=rea+EBROCHURE_FEE+domain+social;
+  const total=photos+boards+internet+misc;
+  return { rea, domain, social, photos, boards, misc, internet, total,
+    sections:[
+      { title:"Photos, Plans & Copy", items:["Day Photography","Copywriting","Floorplan & Siteplan"], subtotal:photos },
+      { title:"Boards & Brochures", items:["8x6 Photo Signboard (Landscape)","100 x Booklet - A5"], subtotal:boards },
+      { title:"Internet & Digital", items:["realestate.com.au | Premiere","realestate.com.au e-Brochure","Domain | Platinum Edge","Targeted Social Media Campaign"], subtotal:internet },
+      { title:"Miscellaneous", items:["AML/CTF Compliance Fee","Campaign Management","Digital Contract Fee"], subtotal:misc },
+    ] };
+}
+// Render a clean Savvi marketing schedule as an extra page on the authority doc.
+function buildSchedulePage(doc,font,bold,rgb,{ propertyAddr, schedule }){
+  const W=595.92,H=841.92;
+  const page=doc.addPage([W,H]);
+  const INK=rgb(0.19,0.12,0.06), MUT=rgb(0.46,0.41,0.37), LINE=rgb(0.84,0.80,0.72);
+  const money=v=>"$"+Number(v||0).toLocaleString("en-AU",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const txt=(x,fy,t,{s=10,f=font,c=INK,right=false}={})=>{ t=String(t==null?"":t); const w=f.widthOfTextAtSize(t,s); page.drawText(t,{x:right?x-w:x,y:H-fy,size:s,font:f,color:c}); };
+  const rule=(fy,x0=48,x1=W-48,c=LINE,th=0.8)=>page.drawLine({start:{x:x0,y:H-fy},end:{x:x1,y:H-fy},thickness:th,color:c});
+  let y=70;
+  txt(48,y,"MARKETING SCHEDULE",{s:17,f:bold}); y+=18;
+  txt(48,y,"Savvi Real Estate Pty Ltd  ·  High Impact Digital Campaign",{s:9.5,c:MUT}); y+=14;
+  txt(48,y,String(propertyAddr||""),{s:11,f:bold}); y+=20;
+  rule(y); y+=22;
+  for(const sec of schedule.sections){
+    txt(48,y,sec.title,{s:11,f:bold});
+    txt(W-48,y,money(sec.subtotal),{s:11,f:bold,right:true}); y+=15;
+    for(const it of sec.items){ txt(60,y,"•  "+it,{s:9.5,c:MUT}); y+=13.5; }
+    y+=6; rule(y); y+=18;
+  }
+  y+=4;
+  txt(48,y,"Total (incl. GST)",{s:13,f:bold});
+  txt(W-48,y,money(schedule.total),{s:13,f:bold,right:true}); y+=26;
+  txt(48,y,"*Prices subject to change at any time and include GST.",{s:8,c:MUT}); y+=11;
+  txt(48,y,"Marketing expenses are payable on the signing of this Authority.",{s:8,c:MUT});
+  // vendor acknowledgement line near the foot (mirrors the authority — signed together)
+  const sigY=770; // fitz fy from top
+  page.drawLine({start:{x:48,y:H-sigY},end:{x:250,y:H-sigY},thickness:0.8,color:INK});
+  page.drawLine({start:{x:330,y:H-sigY},end:{x:W-48,y:H-sigY},thickness:0.8,color:INK});
+  txt(48,sigY+13,"Vendor signature",{s:8,c:MUT});
+  txt(330,sigY+13,"Date",{s:8,c:MUT});
+}
+
+// Address autocomplete (OpenStreetMap Nominatim — keyless, CORS-enabled). Fills in
+// suburb + state + postcode so the authority address is complete and the schedule's
+// REA/Domain lookup can read the postcode. Preserves a typed unit prefix like "2/".
+const AU_STATES={ "Victoria":"VIC","New South Wales":"NSW","Queensland":"QLD","South Australia":"SA","Western Australia":"WA","Tasmania":"TAS","Northern Territory":"NT","Australian Capital Territory":"ACT" };
+function formatAUAddress(item){
+  const a=item.address||{};
+  const num=a.house_number?a.house_number+" ":"";
+  const road=a.road||a.pedestrian||a.footway||a.residential||"";
+  const sub=a.suburb||a.city||a.town||a.village||a.municipality||a.city_district||a.neighbourhood||a.county||"";
+  const st=AU_STATES[a.state]||a.state||"";
+  const pc=a.postcode||"";
+  const line=(num+road).trim();
+  const tail=[sub,[st,pc].filter(Boolean).join(" ")].filter(Boolean).join(" ");
+  return [line,tail].filter(Boolean).join(", ") || (item.display_name||"");
+}
+function AddressInput({ value, onChange, placeholder }){
+  const [sugs,setSugs]=useState([]); const [listOpen,setListOpen]=useState(false); const [loading,setLoading]=useState(false);
+  const tRef=useRef(null);
+  const unitPrefix=(()=>{ const m=(value||"").match(/^\s*(\d+[A-Za-z]?)\s*\/\s*/); return m?m[1]+"/":""; })();
+  useEffect(()=>{
+    if(!listOpen){ return; }
+    const q=(value||"").replace(/^\s*\d+[A-Za-z]?\s*\/\s*/,"").trim();
+    if(q.length<5){ setSugs([]); return; }
+    if(tRef.current) clearTimeout(tRef.current);
+    tRef.current=setTimeout(async()=>{
+      try{ setLoading(true);
+        const r=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&countrycodes=au&limit=6&q=${encodeURIComponent(q)}`,{headers:{Accept:"application/json"}});
+        const j=await r.json(); setSugs(Array.isArray(j)?j:[]);
+      }catch(e){ setSugs([]); } finally{ setLoading(false); }
+    },450);
+    return ()=>{ if(tRef.current) clearTimeout(tRef.current); };
+  },[value,listOpen]);
+  function pick(item){ let f=formatAUAddress(item); if(unitPrefix && !/^\s*\d+[A-Za-z]?\s*\//.test(f)) f=unitPrefix+f; onChange(f); setListOpen(false); setSugs([]); }
+  return (
+    <div style={{position:"relative"}}>
+      <input className="fi" type="text" placeholder={placeholder} value={value}
+        onChange={e=>{ onChange(e.target.value); setListOpen(true); }}
+        onFocus={()=>setListOpen(true)} onBlur={()=>setTimeout(()=>setListOpen(false),200)}/>
+      {listOpen && (loading||sugs.length>0) && (
+        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,zIndex:60,background:"#fff",border:`1px solid ${SAND_D}`,borderRadius:10,boxShadow:"0 10px 28px rgba(0,0,0,.14)",maxHeight:232,overflowY:"auto"}}>
+          {loading && sugs.length===0 && <div style={{padding:"10px 12px",fontSize:12.5,color:BROWN_L}}>Searching…</div>}
+          {sugs.map((s,i)=>(
+            <div key={i} onMouseDown={e=>{ e.preventDefault(); pick(s); }} style={{padding:"9px 12px",fontSize:12.5,lineHeight:1.35,color:BROWN,cursor:"pointer",borderTop:i?`1px solid ${LINEN}`:"none"}}>{s.display_name}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const AUTH_DRAFT_KEY="savvi_authority_drafts";
+function loadAuthDrafts(){ try{ return JSON.parse(localStorage.getItem(AUTH_DRAFT_KEY)||"[]"); }catch(e){ return []; } }
+function saveAuthDrafts(a){ try{ localStorage.setItem(AUTH_DRAFT_KEY,JSON.stringify(a)); }catch(e){} }
+
 function AuthoritySheet({ open, onClose }){
+  const [stage,setStage]=useState("details"); // details | schedule
   const [vendors,setVendors]=useState([{name:"",mobile:"",email:""}]);
   const [vendorAddr,setVendorAddr]=useState("");
   const [propertyAddr,setPropertyAddr]=useState("");
   const [sameAddr,setSameAddr]=useState(false);
   const [priceFrom,setPriceFrom]=useState("");
   const [priceTo,setPriceTo]=useState("");
+  const [vendorPrice,setVendorPrice]=useState("");          // optional; blank → "to be advised"
+  const [settlement,setSettlement]=useState("30 / 60");
+  const [settleCustom,setSettleCustom]=useState(false);
   const [period,setPeriod]=useState("90");
   const [possession,setPossession]=useState("vacant");
   const [commission,setCommission]=useState("2.75");
+  // advertising schedule stage
+  const [campaign,setCampaign]=useState("hidc");            // hidc | off
+  const [rea,setRea]=useState(""); const [domain,setDomain]=useState(""); const [social,setSocial]=useState("");
+  const [photos,setPhotos]=useState(""); const [boards,setBoards]=useState(""); const [misc,setMisc]=useState("");
   const [busy,setBusy]=useState(false);
   const [err,setErr]=useState("");
   const [pdfUrl,setPdfUrl]=useState(null);
+  const [drafts,setDrafts]=useState([]);
+  const [draftId,setDraftId]=useState(null);
+  const [savedMsg,setSavedMsg]=useState("");
+  useEffect(()=>{ if(open) setDrafts(loadAuthDrafts()); },[open]);
   const setV=(i,k,val)=>setVendors(vs=>vs.map((v,j)=>j===i?{...v,[k]:val}:v));
   const addV=()=>setVendors(vs=>[...vs,{name:"",mobile:"",email:""}]);
   const rmV=(i)=>setVendors(vs=>vs.length>1?vs.filter((_,j)=>j!==i):vs);
   const effVendorAddr = sameAddr ? propertyAddr : vendorAddr;
   const ready = (vendors[0]?.name||"").trim() && propertyAddr.trim();
+  const hasData = (vendors[0]?.name||"").trim() || propertyAddr.trim() || priceFrom || priceTo || vendors.some(v=>v.mobile||v.email);
+  const postcode = authPostcode(propertyAddr);
+  const band = domainBand(priceFrom||priceTo||vendorPrice);
+  const fieldRow={display:"grid",gridTemplateColumns:"1fr 1fr",gap:8};
+
+  function collect(){ return { id:draftId||("d"+Date.now()), savedAt:Date.now(), label:(propertyAddr||vendors[0]?.name||"Untitled authority"),
+    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, campaign, rea, domain, social, photos, boards, misc }; }
+  function saveDraft(silent){ const f=collect(); setDraftId(f.id); const arr=loadAuthDrafts().filter(d=>d.id!==f.id); arr.unshift(f); saveAuthDrafts(arr); setDrafts(arr); if(!silent){ setSavedMsg("Draft saved"); setTimeout(()=>setSavedMsg(""),1600);} }
+  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCampaign(d.campaign||"hidc"); setRea(d.rea||""); setDomain(d.domain||""); setSocial(d.social||""); setPhotos(d.photos||""); setBoards(d.boards||""); setMisc(d.misc||""); setStage(d.stage||"details"); }
+  function deleteDraft(id){ const arr=loadAuthDrafts().filter(d=>d.id!==id); saveAuthDrafts(arr); setDrafts(arr); if(draftId===id) setDraftId(null); }
+  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCampaign("hidc"); setRea(""); setDomain(""); setSocial(""); setPhotos(""); setBoards(""); setMisc(""); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
+  function handleClose(){ if(!pdfUrl && hasData) saveDraft(true); onClose(); }
+
+  function goSchedule(){
+    // seed schedule lines from suburb + price band, only where not already edited
+    const pc=authPostcode(propertyAddr), bd=domainBand(priceFrom||priceTo||vendorPrice);
+    if(!rea) setRea(String(reaPremiere(pc)));
+    if(!domain) setDomain(String(domainPlatinum(pc,bd)));
+    if(!social) setSocial(String(SOCIAL_FEE));
+    if(!photos) setPhotos(String(SCHED_FIXED.photos));
+    if(!boards) setBoards(String(SCHED_FIXED.boards));
+    if(!misc) setMisc(String(SCHED_FIXED.misc));
+    setStage("schedule");
+  }
+  const schedObj = buildScheduleObj({ rea:rea||0, domain:domain||0, social:social||0, photos:photos||0, boards:boards||0, misc:misc||0 });
+
   async function generate(){
     setErr(""); setBusy(true);
     try{
-      const bytes=await fillSaleAuthority({ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission });
+      const schedule = campaign==="off" ? null : schedObj;
+      const bytes=await fillSaleAuthority({ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, vendorPrice, settlement, schedule });
       const blob=new Blob([bytes],{type:"application/pdf"});
       if(pdfUrl) URL.revokeObjectURL(pdfUrl);
       setPdfUrl(URL.createObjectURL(blob));
     }catch(e){ setErr("Could not generate. "+(e?.message||"")); }
     setBusy(false);
   }
-  const fieldRow={display:"grid",gridTemplateColumns:"1fr 1fr",gap:8};
+  const money=v=>"$"+Number(v||0).toLocaleString("en-AU");
+  const Xclose=(
+    <button onClick={handleClose} aria-label="Close" style={{position:"absolute",top:10,right:12,width:32,height:32,borderRadius:16,border:"none",background:SAND,color:BROWN,fontSize:17,fontWeight:700,cursor:"pointer",lineHeight:"32px",zIndex:5}}>×</button>
+  );
   return (
-    <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
-      <div className="sh" onClick={e=>e.stopPropagation()}>
+    <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) handleClose(); }}>
+      <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
+        {Xclose}
         <div className="hndl"/>
-        <div className="sh-ttl">New authority</div>
-        <div className="sh-sub">Exclusive Sale Authority — the quick details, then preview</div>
+        <div className="sh-ttl">{pdfUrl?"Authority ready":stage==="schedule"?"Advertising schedule":"New authority"}</div>
+        <div className="sh-sub">{pdfUrl?"Preview, then send to the vendor to sign":stage==="schedule"?"Signed together with the authority":"Exclusive Sale Authority — the quick details"}</div>
+
         {pdfUrl ? (
           <div style={{padding:"4px 16px 16px"}}>
             <div style={{border:`1px solid #E7DFD3`,borderRadius:10,overflow:"hidden",height:400,marginBottom:12,background:"#fff"}}>
@@ -4251,11 +4428,61 @@ function AuthoritySheet({ open, onClose }){
             <a href={pdfUrl} target="_blank" rel="noreferrer" className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px"}}>Open full screen</a>
             <a href={pdfUrl} download={`Exclusive Sale Authority - ${(propertyAddr||"property").replace(/[\\/:*?"<>|]/g,"")}.pdf`} className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px",background:BLUE_D}}>Download PDF</a>
             <button className="btn-dark" style={{width:"100%",margin:"0 0 10px",opacity:.55}} disabled>Send to vendor to sign (coming next)</button>
-            <button onClick={()=>{ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); }} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Edit details</button>
+            <button onClick={()=>{ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); setStage(campaign==="off"?"details":"schedule"); }} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Edit details</button>
+          </div>
+        ) : stage==="schedule" ? (
+          <div style={{paddingBottom:4}}>
+            <div style={{margin:"0 16px 12px",background:LINEN,borderRadius:10,padding:"10px 12px",fontSize:12,color:BROWN_M}}>
+              {postcode?`${postcode} · `:""}REA Premiere {money(reaPremiere(postcode))} · Domain band {bandLabel(band)}
+            </div>
+            <div style={{padding:"0 16px 10px"}}><label className="fl">Campaign</label>
+              <select className="fi" value={campaign} onChange={e=>setCampaign(e.target.value)}>
+                <option value="hidc">High Impact Digital Campaign</option>
+                <option value="off">Off-market — no advertising ($0)</option>
+              </select></div>
+            {campaign!=="off" && <>
+              <div style={{padding:"4px 16px 2px",fontSize:11.5,color:BROWN_L,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase"}}>Internet & Digital</div>
+              <div style={{padding:"0 16px 8px"}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <div><label className="fl">realestate.com.au Premiere</label><input className="fi" type="text" inputMode="numeric" value={rea} onChange={e=>setRea(e.target.value)}/></div>
+                <div><label className="fl">Domain Platinum Edge</label><input className="fi" type="text" inputMode="numeric" value={domain} onChange={e=>setDomain(e.target.value)}/></div>
+              </div></div>
+              <div style={{padding:"0 16px 10px"}}><label className="fl">Targeted Social Media Campaign</label><input className="fi" type="text" inputMode="numeric" value={social} onChange={e=>setSocial(e.target.value)}/>
+                <div style={{fontSize:11,color:BROWN_L,marginTop:4}}>e-Brochure is included free with Premiere.</div></div>
+              <div style={{padding:"4px 16px 2px",fontSize:11.5,color:BROWN_L,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase"}}>Other sections</div>
+              <div style={{padding:"0 16px 10px"}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+                <div><label className="fl">Photos/Plans/Copy</label><input className="fi" type="text" inputMode="numeric" value={photos} onChange={e=>setPhotos(e.target.value)} style={{textAlign:"center"}}/></div>
+                <div><label className="fl">Boards/Brochures</label><input className="fi" type="text" inputMode="numeric" value={boards} onChange={e=>setBoards(e.target.value)} style={{textAlign:"center"}}/></div>
+                <div><label className="fl">Miscellaneous</label><input className="fi" type="text" inputMode="numeric" value={misc} onChange={e=>setMisc(e.target.value)} style={{textAlign:"center"}}/></div>
+              </div><div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Miscellaneous includes Campaign Management ($595), AML/CTF & digital contract fees.</div></div>
+              <div style={{margin:"2px 16px 12px",padding:"12px 14px",background:BROWN,borderRadius:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{color:"#fff",fontWeight:700,fontSize:14}}>Advertising total</span>
+                <span style={{color:"#fff",fontWeight:800,fontSize:18}}>{money(schedObj.total)}</span>
+              </div>
+            </>}
+            {err&&<div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
+            <div className="fg" style={{paddingBottom:6}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={generate} disabled={busy}>{busy?<><span className="sp-sm"/>Generating…</>:campaign==="off"?"Generate authority →":"Generate authority + schedule →"}</button></div>
+            <div style={{display:"flex",gap:12,padding:"0 16px"}}>
+              <button onClick={()=>setStage("details")} style={{flex:1,background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Back</button>
+              <button onClick={()=>saveDraft(false)} style={{flex:1,background:"transparent",border:"none",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>{savedMsg||"Save as draft"}</button>
+            </div>
           </div>
         ) : <>
+          {drafts.length>0 && !hasData && (
+            <div style={{margin:"0 16px 10px",border:`1px solid ${SAND_D}`,borderRadius:10,overflow:"hidden"}}>
+              <div style={{padding:"8px 12px",fontSize:11.5,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase",color:BROWN_L,background:LINEN}}>Resume a draft</div>
+              {drafts.slice(0,4).map(d=>(
+                <div key={d.id} style={{display:"flex",alignItems:"center",borderTop:`1px solid ${LINEN}`}}>
+                  <button onClick={()=>loadDraft(d)} style={{flex:1,textAlign:"left",background:"transparent",border:"none",padding:"9px 12px",cursor:"pointer",fontFamily:"inherit"}}>
+                    <div style={{fontSize:13,fontWeight:600,color:BROWN,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.label}</div>
+                    <div style={{fontSize:11,color:BROWN_L}}>{new Date(d.savedAt).toLocaleString("en-AU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
+                  </button>
+                  <button onClick={()=>deleteDraft(d.id)} aria-label="Delete draft" style={{background:"transparent",border:"none",color:BROWN_L,fontSize:16,cursor:"pointer",padding:"0 12px"}}>×</button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="fg"><label className="fl">Listing property address</label>
-            <input className="fi" type="text" placeholder="e.g. 12/5 Berkeley Street, Hawthorn VIC 3122" value={propertyAddr} onChange={e=>setPropertyAddr(e.target.value)}/></div>
+            <AddressInput value={propertyAddr} onChange={setPropertyAddr} placeholder="Start typing — e.g. 12/5 Berkeley St Hawthorn"/></div>
           <label style={{display:"flex",alignItems:"center",gap:9,padding:"0 16px 10px",fontSize:13,color:BROWN,cursor:"pointer"}}>
             <input type="checkbox" checked={sameAddr} onChange={e=>setSameAddr(e.target.checked)} style={{width:18,height:18,accentColor:BLUE_D}}/>
             Owner currently lives at this property
@@ -4272,11 +4499,21 @@ function AuthoritySheet({ open, onClose }){
           ))}
           <div style={{padding:"0 16px 10px"}}><button onClick={addV} style={{background:"transparent",border:`1px dashed #CDBFA6`,borderRadius:9,width:"100%",padding:"9px",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",fontSize:12.5}}>+ Add another owner</button></div>
           {!sameAddr&&<div className="fg"><label className="fl">Owner's current address</label>
-            <input className="fi" type="text" placeholder="Where the owner lives now" value={vendorAddr} onChange={e=>setVendorAddr(e.target.value)}/></div>}
-          <div style={{padding:"0 16px 10px"}}><label className="fl">Price guide</label><div style={fieldRow}>
+            <AddressInput value={vendorAddr} onChange={setVendorAddr} placeholder="Where the owner lives now"/></div>}
+          <div style={{padding:"0 16px 10px"}}><label className="fl">Price guide (advertised range)</label><div style={fieldRow}>
             <input className="fi" type="text" inputMode="numeric" placeholder="From  $" value={priceFrom} onChange={e=>setPriceFrom(e.target.value)}/>
             <input className="fi" type="text" inputMode="numeric" placeholder="To  $" value={priceTo} onChange={e=>setPriceTo(e.target.value)}/>
           </div></div>
+          <div style={{padding:"0 16px 10px"}}><div style={fieldRow}>
+            <div><label className="fl">Vendor's price (optional)</label><input className="fi" type="text" inputMode="numeric" placeholder="To be advised" value={vendorPrice} onChange={e=>setVendorPrice(e.target.value)}/></div>
+            <div><label className="fl">Settlement (days)</label>
+              {settleCustom
+                ? <input className="fi" type="text" placeholder="e.g. 90 or at auction" value={settlement} onChange={e=>setSettlement(e.target.value)} autoFocus/>
+                : <select className="fi" value={settlement} onChange={e=>{ if(e.target.value==="__c"){ setSettleCustom(true); setSettlement(""); } else setSettlement(e.target.value); }}>
+                    <option value="30 / 60">30 / 60</option><option value="30">30</option><option value="45">45</option><option value="60">60</option><option value="90">90</option><option value="120">120</option><option value="__c">Other…</option>
+                  </select>}
+            </div>
+          </div><div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Leave vendor's price blank to tick "price to be advised".</div></div>
           <div style={{padding:"6px 16px 10px",borderTop:`1px solid #EFE8DC`}}>
             <div style={{fontSize:11.5,color:BROWN_L,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase",marginBottom:8}}>Defaults (change if needed)</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
@@ -4286,7 +4523,11 @@ function AuthoritySheet({ open, onClose }){
             </div>
           </div>
           {err&&<div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
-          <div className="fg" style={{paddingBottom:0}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={generate} disabled={busy||!ready}>{busy?<><span className="sp-sm"/>Generating…</>:"Generate authority →"}</button></div>
+          <div className="fg" style={{paddingBottom:6}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={goSchedule} disabled={!ready}>Next: advertising schedule →</button></div>
+          <div style={{display:"flex",gap:12,padding:"0 16px"}}>
+            <button onClick={()=>saveDraft(false)} style={{flex:1,background:"transparent",border:"none",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>{savedMsg||"Save as draft"}</button>
+            {(hasData||draftId)&&<button onClick={resetForm} style={{flex:1,background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>Clear / new</button>}
+          </div>
         </>}
         <div style={{height:24}}/>
       </div>
