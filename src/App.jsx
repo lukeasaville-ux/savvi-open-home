@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v75-esign-wired";
+const BUILD = "v76-schedule-templates";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4233,7 +4233,7 @@ async function fillSaleAuthority(d){
   if(d.schedule && d.schedule.total){
     const tot=Number(d.schedule.total).toLocaleString("en-AU");
     put(75,651.5,tot); put(286,651.5,"NIL"); put(415,651.5,tot); put(213,689,"NIL");
-    await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, schedule:d.schedule });
+    await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched });
   }
   return await doc.save();
 }
@@ -4251,51 +4251,79 @@ const REA_DEFAULT=4419;
 // b3 (>$2.25m) is intentionally null → NOT auto-priced; agent must phone Domain and enter it.
 const DOMAIN_PLATINUM={ b1:1300, b2:3300, b3:null };
 const DOMAIN_OVERRIDE={ "3121":{ b2:3040 } }; // Richmond $1m–$2.249m is cheaper than standard $3,300
-const SCHED_FIXED={ photos:715, boards:718, misc:725 }; // fixed section subtotals (Misc incl. Campaign Mgmt $595; Social is separate)
-const SOCIAL_FEE=495, EBROCHURE_FEE=0;
+const SOCIAL_FEE=495;
+// Per-item amounts (GST incl). Confirmed: REA by suburb (FY27 rate card), Domain by band,
+// Signboard $539 (Briner inv 204922), Booklet $179 (Neo inv 737220), Campaign Mgmt $595 (Luke).
+// Photos split + AML/Digital split are estimates summing to the real subtotals ($715 / $130) —
+// editable in the custom builder (Luke/Madeline only).
+const SCHED_BASE={
+  boards:[{k:"board",name:"8x6 Photo Signboard (Landscape)",amt:539},{k:"booklet",name:"100 x Booklet - A5",amt:179}],
+  photos:[{k:"photo",name:"Day Photography",amt:395},{k:"copy",name:"Copywriting",amt:140},{k:"floor",name:"Floorplan & Siteplan",amt:180}],
+  misc:[{k:"aml",name:"AML/CTF Compliance Fee",amt:55},{k:"camp",name:"Campaign Management",amt:595},{k:"digital",name:"Digital Contract Fee",amt:75}],
+};
+const SCHED_CAMPAIGNS=[
+  {id:"hidc",name:"High Impact Digital Campaign",omit:[]},
+  {id:"noboard",name:"High Impact Digital Campaign (No Board)",omit:["board"]},
+  {id:"nodomain",name:"High Impact Digital Campaign (No Domain)",omit:["domain"]},
+  {id:"off",name:"Off-market — no advertising ($0)",off:true},
+  {id:"custom",name:"Custom schedule",custom:true},
+];
 function authPostcode(addr){ const m=String(addr||"").match(/\b(3\d{3})\b/g); return m?m[m.length-1]:""; }
 function domainBand(bottom){ const n=Number(String(bottom||"").replace(/[^0-9]/g,"")); if(!n||n<=999999)return"b1"; if(n<=2249999)return"b2"; return"b3"; }
 function reaPremiere(postcode){ return REA_PREMIERE[postcode]!=null?REA_PREMIERE[postcode]:REA_DEFAULT; }
 function domainPlatinum(postcode,band){ const o=DOMAIN_OVERRIDE[postcode]; return (o&&o[band]!=null)?o[band]:DOMAIN_PLATINUM[band]; }
 function bandLabel(b){ return b==="b1"?"≤ $999k":b==="b2"?"$1m – $2.249m":"$2.25m +"; }
-// Build the schedule object the PDF + authority consume from the (possibly edited) line amounts.
-function buildScheduleObj({ rea, domain, social, photos, boards, misc }){
-  const n=v=>Math.max(0,Math.round(Number(String(v).replace(/[^0-9.]/g,""))||0));
-  rea=n(rea); domain=n(domain); social=n(social); photos=n(photos); boards=n(boards); misc=n(misc);
-  const internet=rea+EBROCHURE_FEE+domain+social;
-  const total=photos+boards+internet+misc;
-  return { rea, domain, social, photos, boards, misc, internet, total,
-    sections:[
-      { title:"Photos, Plans & Copy", items:["Day Photography","Copywriting","Floorplan & Siteplan"], subtotal:photos },
-      { title:"Boards & Brochures", items:["8x6 Photo Signboard (Landscape)","100 x Booklet - A5"], subtotal:boards },
-      { title:"Internet & Digital", items:["realestate.com.au | Premiere","realestate.com.au e-Brochure","Domain | Platinum Edge","Targeted Social Media Campaign"], subtotal:internet },
-      { title:"Miscellaneous", items:["AML/CTF Compliance Fee","Campaign Management","Digital Contract Fee"], subtotal:misc },
-    ] };
+// Default item set for a campaign at a suburb + price band. omit = line keys switched off.
+function defaultSched(postcode, band, campId){
+  const rea=reaPremiere(postcode), dom=domainPlatinum(postcode,band);
+  const omit=(SCHED_CAMPAIGNS.find(c=>c.id===campId)||{}).omit||[];
+  const internet=[
+    {k:"rea",name:"realestate.com.au | Premiere",amt:rea},
+    {k:"ebrochure",name:"realestate.com.au e-Brochure",amt:0},
+    {k:"domain",name:"Domain | Platinum Edge",amt:dom==null?0:dom,needs:dom==null},
+    {k:"social",name:"Targeted Social Media Campaign",amt:SOCIAL_FEE},
+  ].map(it=>({...it,on:!omit.includes(it.k)}));
+  const mk=arr=>arr.map(it=>({...it,on:!omit.includes(it.k)}));
+  return { internet, boards:mk(SCHED_BASE.boards), photos:mk(SCHED_BASE.photos), misc:mk(SCHED_BASE.misc) };
 }
-// Append the REAL Savvi-branded Realtair marketing schedule (public/schedule-base.pdf,
-// a redacted-blank of the genuine doc) and overlay the deal values in the brand font
-// (Neue Haas Unica Pro, 9pt, Savvi brown) at the exact positions of the original form.
-async function appendSchedulePage(doc,rgb,{ propertyAddr, schedule }){
+const SCHED_SECS=["internet","boards","photos","misc"];
+function schedSubtotal(items){ return (items||[]).filter(it=>it.on!==false).reduce((a,it)=>a+(Number(it.amt)||0),0); }
+function schedTotal(sched){ return SCHED_SECS.reduce((a,s)=>a+schedSubtotal(sched[s]),0); }
+
+// Append the REAL Savvi-branded Realtair schedule (public/schedule-chrome.pdf = the genuine
+// doc with item rows + values blanked) and DRAW the items / subtotals / total dynamically in
+// the brand font (Neue Haas Unica Pro, 9pt, Savvi brown) at the form's exact positions — so
+// any item set (3 templates + custom add/remove) stays pixel-on-brand.
+async function appendSchedulePage(doc,rgb,{ propertyAddr, campaignName, sched }){
   const { PDFDocument }=await import("pdf-lib");
   const fontkit=(await import("@pdf-lib/fontkit")).default;
   try{ doc.registerFontkit(fontkit); }catch(e){}
   const nhBytes=await fetch("/fonts/NeueHaasUnicaPro-Regular.ttf").then(r=>r.arrayBuffer());
   const nh=await doc.embedFont(nhBytes,{ subset:true });
-  const baseBytes=await fetch("/schedule-base.pdf").then(r=>r.arrayBuffer());
+  const baseBytes=await fetch("/schedule-chrome.pdf").then(r=>r.arrayBuffer());
   const schedDoc=await PDFDocument.load(baseBytes);
-  const [pg]=await doc.copyPages(schedDoc,[0]);
-  doc.addPage(pg);
-  const H=pg.getHeight();
-  const BR=rgb(0.188,0.118,0.059); // Savvi brown #301E0F (matches the form's text colour)
+  const [pg]=await doc.copyPages(schedDoc,[0]); doc.addPage(pg);
+  const H=pg.getHeight(); const BR=rgb(0.188,0.118,0.059);
   const money=v=>"$"+Number(v||0).toLocaleString("en-AU",{minimumFractionDigits:2,maximumFractionDigits:2});
-  const draw=(x,fy,t,center)=>{ t=String(t==null?"":t); if(!t)return; let xx=x; if(center){ xx=x-nh.widthOfTextAtSize(t,9)/2; } pg.drawText(t,{x:xx,y:H-fy,size:9,font:nh,color:BR}); };
-  draw(180.2,166.1,new Date().toLocaleDateString("en-AU"));        // DATE (left)
-  draw(180.2,196.9,propertyAddr||"");                              // PROPERTY (left)
-  draw(548.8,249.9,money(schedule.internet),true);                 // Internet & Digital subtotal (centred)
-  draw(548.8,376.7,money(schedule.boards),true);                   // Boards & Brochures subtotal
-  draw(548.8,457.6,money(schedule.photos),true);                   // Photos, Plans & Copy subtotal
-  draw(548.8,563.9,money(schedule.misc),true);                     // Miscellaneous subtotal
-  draw(527.85,710.3,money(schedule.total),true);                   // Total value
+  const draw=(x,fy,t,center)=>{ t=String(t==null?"":t); if(!t)return; let xx=x; if(center) xx=x-nh.widthOfTextAtSize(t,9)/2; pg.drawText(t,{x:xx,y:H-fy,size:9,font:nh,color:BR}); };
+  draw(180.2,164.8,new Date().toLocaleDateString("en-AU"));   // DATE
+  draw(180.2,179.4,campaignName||"");                          // QUOTE (campaign name)
+  draw(180.2,193.9,propertyAddr||"");                          // PROPERTY
+  const secs=[
+    {items:sched.internet,start:270.4,subFy:249.9},
+    {items:sched.boards,  start:394.2,subFy:376.7},
+    {items:sched.photos,  start:479.0,subFy:457.6},
+    {items:sched.misc,    start:585.0,subFy:563.9},
+  ];
+  let total=0;
+  for(const s of secs){
+    const on=(s.items||[]).filter(it=>it.on!==false);
+    let fy=s.start;
+    for(const it of on){ draw(177.5,fy,it.name); fy+=18; }
+    const sub=on.reduce((a,it)=>a+(Number(it.amt)||0),0);
+    draw(548.8,s.subFy,money(sub),true); total+=sub;
+  }
+  draw(527.85,710.3,money(total),true);                        // Total
 }
 
 // Address autocomplete (OpenStreetMap Nominatim — keyless, CORS-enabled). Fills in
@@ -4367,9 +4395,9 @@ function AuthoritySheet({ open, onClose, agentName }){
   const [possession,setPossession]=useState("vacant");
   const [commission,setCommission]=useState("2.75");
   // advertising schedule stage
-  const [campaign,setCampaign]=useState("hidc");            // hidc | off
-  const [rea,setRea]=useState(""); const [domain,setDomain]=useState(""); const [social,setSocial]=useState("");
-  const [photos,setPhotos]=useState(""); const [boards,setBoards]=useState(""); const [misc,setMisc]=useState("");
+  const [campaign,setCampaign]=useState("hidc");            // hidc | noboard | nodomain | off | custom
+  const [sched,setSched]=useState(null);                   // {internet,boards,photos,misc} of {k,name,amt,on,needs?}
+  const [showEdit,setShowEdit]=useState(false);            // custom item editor (Luke / Madeline only)
   const [busy,setBusy]=useState(false);
   const [err,setErr]=useState("");
   const [pdfUrl,setPdfUrl]=useState(null);
@@ -4379,6 +4407,7 @@ function AuthoritySheet({ open, onClose, agentName }){
   const [draftId,setDraftId]=useState(null);
   const [savedMsg,setSavedMsg]=useState("");
   useEffect(()=>{ if(open) setDrafts(loadAuthDrafts()); },[open]);
+  useEffect(()=>{ if(stage==="schedule" && !sched && campaign!=="off") setSched(defaultSched(authPostcode(propertyAddr), domainBand(priceFrom||priceTo||vendorPrice), campaign==="custom"?"hidc":campaign)); },[stage,sched,campaign,propertyAddr,priceFrom,priceTo,vendorPrice]);
   const setV=(i,k,val)=>setVendors(vs=>vs.map((v,j)=>j===i?{...v,[k]:val}:v));
   const addV=()=>setVendors(vs=>[...vs,{name:"",mobile:"",email:""}]);
   const rmV=(i)=>setVendors(vs=>vs.length>1?vs.filter((_,j)=>j!==i):vs);
@@ -4389,31 +4418,33 @@ function AuthoritySheet({ open, onClose, agentName }){
   const band = domainBand(priceFrom||priceTo||vendorPrice);
   const fieldRow={display:"grid",gridTemplateColumns:"1fr 1fr",gap:8};
 
+  const canCustom = /luke|madeline/i.test(agentName||"");
   function collect(){ return { id:draftId||("d"+Date.now()), savedAt:Date.now(), label:(propertyAddr||vendors[0]?.name||"Untitled authority"),
-    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, campaign, rea, domain, social, photos, boards, misc }; }
+    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, campaign, sched }; }
   function saveDraft(silent){ const f=collect(); setDraftId(f.id); const arr=loadAuthDrafts().filter(d=>d.id!==f.id); arr.unshift(f); saveAuthDrafts(arr); setDrafts(arr); if(!silent){ setSavedMsg("Draft saved"); setTimeout(()=>setSavedMsg(""),1600);} }
-  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCampaign(d.campaign||"hidc"); setRea(d.rea||""); setDomain(d.domain||""); setSocial(d.social||""); setPhotos(d.photos||""); setBoards(d.boards||""); setMisc(d.misc||""); setStage(d.stage||"details"); }
+  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setStage(d.stage||"details"); }
   function deleteDraft(id){ const arr=loadAuthDrafts().filter(d=>d.id!==id); saveAuthDrafts(arr); setDrafts(arr); if(draftId===id) setDraftId(null); }
-  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCampaign("hidc"); setRea(""); setDomain(""); setSocial(""); setPhotos(""); setBoards(""); setMisc(""); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
+  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCampaign("hidc"); setSched(null); setShowEdit(false); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
   function handleClose(){ if(!pdfUrl && hasData) saveDraft(true); onClose(); }
 
-  function goSchedule(){
-    // seed schedule lines from suburb + price band, only where not already edited
-    const pc=authPostcode(propertyAddr), bd=domainBand(priceFrom||priceTo||vendorPrice);
-    if(!rea) setRea(String(reaPremiere(pc)));
-    const dv=domainPlatinum(pc,bd); if(!domain && dv!=null) setDomain(String(dv)); // b3 → leave blank, agent phones Domain
-    if(!social) setSocial(String(SOCIAL_FEE));
-    if(!photos) setPhotos(String(SCHED_FIXED.photos));
-    if(!boards) setBoards(String(SCHED_FIXED.boards));
-    if(!misc) setMisc(String(SCHED_FIXED.misc));
-    setStage("schedule");
-  }
-  const schedObj = buildScheduleObj({ rea:rea||0, domain:domain||0, social:social||0, photos:photos||0, boards:boards||0, misc:misc||0 });
+  function goSchedule(){ setSched(defaultSched(postcode, band, campaign==="custom"?"hidc":campaign)); setShowEdit(false); setStage("schedule"); }
+  // switch template → rebuild the default item set (preset omits); "custom" keeps the current set editable
+  function pickCampaign(id){ setCampaign(id); if(id!=="off"&&id!=="custom") setSched(defaultSched(postcode, band, id)); if(id!=="custom") setShowEdit(false); }
+  // item editing (custom)
+  const editItem=(sec,i,k,val)=>setSched(s=>({...s,[sec]:s[sec].map((it,j)=>j===i?{...it,[k]:val}:it)}));
+  const toggleItem=(sec,i)=>setSched(s=>({...s,[sec]:s[sec].map((it,j)=>j===i?{...it,on:it.on===false}:it)}));
+  const removeItem=(sec,i)=>setSched(s=>({...s,[sec]:s[sec].filter((_,j)=>j!==i)}));
+  const addItem=(sec)=>setSched(s=>({...s,[sec]:[...s[sec],{k:"c"+Date.now(),name:"",amt:0,on:true}]}));
+  const setDomainAmt=(v)=>setSched(s=>({...s,internet:s.internet.map(it=>it.k==="domain"?{...it,amt:Number(String(v).replace(/[^0-9]/g,""))||0,needs:false}:it)}));
+  const domItem = sched && (sched.internet||[]).find(it=>it.k==="domain");
+  const domainNeeds = campaign!=="off" && domItem && (domItem.needs || !(Number(domItem.amt)>0)) && domItem.on!==false;
+  const schedTot = sched ? schedTotal(sched) : 0;
 
   async function generate(){
     setErr(""); setBusy(true);
     try{
-      const schedule = campaign==="off" ? null : schedObj;
+      const campName=(SCHED_CAMPAIGNS.find(c=>c.id===campaign)||{}).name||"High Impact Digital Campaign";
+      const schedule = (campaign==="off"||!sched) ? null : { campaignName:campName, sched, total:schedTot };
       const bytes=await fillSaleAuthority({ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, vendorPrice, settlement, schedule });
       const blob=new Blob([bytes],{type:"application/pdf"});
       if(pdfUrl) URL.revokeObjectURL(pdfUrl);
@@ -4471,35 +4502,59 @@ function AuthoritySheet({ open, onClose, agentName }){
             <div style={{margin:"0 16px 12px",background:LINEN,borderRadius:10,padding:"10px 12px",fontSize:12,color:BROWN_M}}>
               {postcode?`${postcode} · `:""}REA Premiere {money(reaPremiere(postcode))} · Domain band {bandLabel(band)}
             </div>
-            <div style={{padding:"0 16px 10px"}}><label className="fl">Campaign</label>
-              <select className="fi" value={campaign} onChange={e=>setCampaign(e.target.value)}>
-                <option value="hidc">High Impact Digital Campaign</option>
-                <option value="off">Off-market — no advertising ($0)</option>
+            <div style={{padding:"0 16px 10px"}}><label className="fl">Campaign template</label>
+              <select className="fi" value={campaign} onChange={e=>pickCampaign(e.target.value)}>
+                {SCHED_CAMPAIGNS.filter(c=>c.id!=="custom"||canCustom).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
               </select></div>
-            {campaign!=="off" && <>
-              {band==="b3" && <div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12.5,lineHeight:1.4}}>
-                This property is over $2.25m. Domain isn't auto-priced at this level — phone Domain for the correct Platinum Edge price, enter it below, then you can continue.
+            {campaign==="off" ? (
+              <div style={{margin:"0 16px 12px",background:LINEN,borderRadius:10,padding:"12px 14px",fontSize:12.5,color:BROWN_M,lineHeight:1.5}}>No advertising schedule. Nothing is payable during the off-market period, and the authority's marketing expenses show NIL.</div>
+            ) : sched ? (<>
+              {domainNeeds && <div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12.5,lineHeight:1.4}}>
+                {band==="b3"?"This property is over $2.25m. ":""}Domain Platinum Edge isn't priced yet — phone Domain for the correct figure and enter it to continue.
+                <input className="fi" type="text" inputMode="numeric" placeholder="Domain Platinum Edge  $" value={domItem&&domItem.amt?domItem.amt:""} onChange={e=>setDomainAmt(e.target.value)} style={{marginTop:8}}/>
               </div>}
-              <div style={{padding:"4px 16px 2px",fontSize:11.5,color:BROWN_L,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase"}}>Internet & Digital</div>
-              <div style={{padding:"0 16px 8px"}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                <div><label className="fl">realestate.com.au Premiere</label><input className="fi" type="text" inputMode="numeric" value={rea} onChange={e=>setRea(e.target.value)}/></div>
-                <div><label className="fl">Domain Platinum Edge</label><input className="fi" type="text" inputMode="numeric" value={domain} onChange={e=>setDomain(e.target.value)}/></div>
-              </div></div>
-              <div style={{padding:"0 16px 10px"}}><label className="fl">Targeted Social Media Campaign</label><input className="fi" type="text" inputMode="numeric" value={social} onChange={e=>setSocial(e.target.value)}/>
-                <div style={{fontSize:11,color:BROWN_L,marginTop:4}}>e-Brochure is included free with Premiere.</div></div>
-              <div style={{padding:"4px 16px 2px",fontSize:11.5,color:BROWN_L,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase"}}>Other sections</div>
-              <div style={{padding:"0 16px 10px"}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-                <div><label className="fl">Photos/Plans/Copy</label><input className="fi" type="text" inputMode="numeric" value={photos} onChange={e=>setPhotos(e.target.value)} style={{textAlign:"center"}}/></div>
-                <div><label className="fl">Boards/Brochures</label><input className="fi" type="text" inputMode="numeric" value={boards} onChange={e=>setBoards(e.target.value)} style={{textAlign:"center"}}/></div>
-                <div><label className="fl">Miscellaneous</label><input className="fi" type="text" inputMode="numeric" value={misc} onChange={e=>setMisc(e.target.value)} style={{textAlign:"center"}}/></div>
-              </div><div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Miscellaneous includes Campaign Management ($595), AML/CTF & digital contract fees.</div></div>
-              <div style={{margin:"2px 16px 12px",padding:"12px 14px",background:BROWN,borderRadius:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <span style={{color:"#fff",fontWeight:700,fontSize:14}}>Advertising total</span>
-                <span style={{color:"#fff",fontWeight:800,fontSize:18}}>{money(schedObj.total)}</span>
+              <div style={{margin:"0 16px 12px",border:`1px solid ${SAND_D}`,borderRadius:12,overflow:"hidden"}}>
+                {[["internet","Internet & Digital"],["boards","Boards & Brochures"],["photos","Photos, Plans & Copy"],["misc","Miscellaneous"]].map(([sec,title])=>{
+                  const items=(sched[sec]||[]).filter(it=>it.on!==false);
+                  return (
+                    <div key={sec} style={{borderTop:sec!=="internet"?`1px solid ${LINEN}`:"none",padding:"10px 14px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+                        <span style={{fontWeight:700,fontSize:13,color:BROWN}}>{title}</span>
+                        <span style={{fontWeight:700,fontSize:13,color:BROWN}}>{money(schedSubtotal(sched[sec]))}</span>
+                      </div>
+                      <div style={{marginTop:3}}>{items.map((it,i)=><div key={i} style={{fontSize:12,color:BROWN_L,lineHeight:1.55}}>{it.name||"(unnamed item)"}</div>)}</div>
+                    </div>
+                  );
+                })}
+                <div style={{background:BROWN,padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{color:"#fff",fontWeight:700,fontSize:14}}>Total (incl. GST)</span>
+                  <span style={{color:"#fff",fontWeight:800,fontSize:18}}>{money(schedTot)}</span>
+                </div>
               </div>
-            </>}
+              {canCustom && <div style={{padding:"0 16px 10px"}}>
+                <button onClick={()=>{ if(campaign!=="custom") setCampaign("custom"); setShowEdit(x=>!x); }} style={{background:"transparent",border:`1px dashed #CDBFA6`,borderRadius:9,width:"100%",padding:"9px",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",fontSize:12.5}}>{showEdit?"Done editing":"Edit items / build custom"}</button>
+              </div>}
+              {showEdit && canCustom && (
+                <div style={{margin:"0 16px 12px",border:`1px solid ${SAND_D}`,borderRadius:12,padding:"2px 10px 10px"}}>
+                  {[["internet","Internet & Digital"],["boards","Boards & Brochures"],["photos","Photos, Plans & Copy"],["misc","Miscellaneous"]].map(([sec,title])=>(
+                    <div key={sec} style={{paddingTop:8}}>
+                      <div style={{fontSize:11,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase",color:BROWN_L,marginBottom:5}}>{title}</div>
+                      {(sched[sec]||[]).map((it,i)=>(
+                        <div key={i} style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
+                          <input type="checkbox" checked={it.on!==false} onChange={()=>toggleItem(sec,i)} style={{width:16,height:16,accentColor:BLUE_D,flex:"0 0 auto"}}/>
+                          <input className="fi" value={it.name} placeholder="Item name" onChange={e=>editItem(sec,i,"name",e.target.value)} style={{flex:1,padding:"8px 9px",fontSize:12.5}}/>
+                          <input className="fi" value={it.amt} inputMode="numeric" onChange={e=>editItem(sec,i,"amt",Number(String(e.target.value).replace(/[^0-9]/g,""))||0)} style={{width:64,padding:"8px 8px",fontSize:12.5,textAlign:"right"}}/>
+                          <button onClick={()=>removeItem(sec,i)} aria-label="Remove item" style={{background:"transparent",border:"none",color:BROWN_L,fontSize:16,cursor:"pointer",padding:"0 2px",flex:"0 0 auto"}}>×</button>
+                        </div>
+                      ))}
+                      <button onClick={()=>addItem(sec)} style={{background:"transparent",border:"none",color:BLUE_D,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit",padding:"1px 0"}}>+ Add item</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>) : null}
             {err&&<div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
-            <div className="fg" style={{paddingBottom:6}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={generate} disabled={busy||(campaign!=="off"&&!(Number(domain)>0))}>{busy?<><span className="sp-sm"/>Generating…</>:campaign==="off"?"Generate authority →":"Generate authority + schedule →"}</button></div>
+            <div className="fg" style={{paddingBottom:6}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={generate} disabled={busy||domainNeeds}>{busy?<><span className="sp-sm"/>Generating…</>:campaign==="off"?"Generate authority →":"Generate authority + schedule →"}</button></div>
             <div style={{display:"flex",gap:12,padding:"0 16px"}}>
               <button onClick={()=>setStage("details")} style={{flex:1,background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Back</button>
               <button onClick={()=>saveDraft(false)} style={{flex:1,background:"transparent",border:"none",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>{savedMsg||"Save as draft"}</button>
