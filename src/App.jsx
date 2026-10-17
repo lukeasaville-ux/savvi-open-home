@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v70-contract-opened-pill";
+const BUILD = "v71-authority-generator";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4172,6 +4172,128 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   </div>;
 }
 
+// ============ Authority generator (VICFORMS Exclusive Sale Authority, Code 002) ============
+// The agent block (Savvi Real Estate Pty Ltd / ACN / ABN / address / contacts) is baked into the
+// base PDF; here we overlay only the per-deal particulars with pdf-lib. Sending to sign (DocuSeal)
+// is wired separately through the backend so the API token stays server-side.
+const AUTH_GOODS = "All fixtures and fittings of a permanent nature including window furnishings and floor coverings as inspected";
+function authMoney(v){ const n=String(v==null?"":v).replace(/[^0-9]/g,""); return n?Number(n).toLocaleString("en-AU"):""; }
+
+async function fillSaleAuthority(d){
+  const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+  const bytes = await fetch("/authority-sale-base.pdf").then(r=>r.arrayBuffer());
+  const doc = await PDFDocument.load(bytes);
+  const page = doc.getPages()[0];
+  const H = page.getHeight();                       // 841.92; base is top-left origin (fitz) → pdf-lib y = H - fy
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const put=(x,fy,t,sz=9)=>{ if(t==null||t==="")return; page.drawText(String(t),{x,y:H-fy,size:sz,font,color:rgb(0,0,0)}); };
+  const names=(d.vendors||[]).map(v=>(v.name||"").trim()).filter(Boolean).join(" & ");
+  const v0=(d.vendors||[])[0]||{};
+  put(72,222.8,names);
+  put(104,235.8,d.vendorAddr);
+  put(104,273.3,v0.mobile);
+  put(104,292.1,v0.email);
+  put(104,311.3,d.propertyAddr);
+  put(100,332.3,AUTH_GOODS,8);
+  put(152,352.8,d.period||"90");
+  if(d.possession==="tenancy") put(254,378.4,"X",11); else put(126.5,378.4,"X",11);
+  const from=authMoney(d.priceFrom), to=authMoney(d.priceTo);
+  if(from) put(179,471.0,from,8);
+  if(to)   put(247,471.0,to,8);
+  const comm=(String(d.commission||"2.75").replace(/[^0-9.]/g,""))||"2.75";
+  put(31,543,comm+"% of the sale price");
+  const top=Number(String(d.priceTo||d.priceFrom||"").replace(/[^0-9]/g,""));
+  if(top){ const est=Math.round(top*parseFloat(comm)/100), gst=Math.round(est/11);
+    put(197,560.6,est.toLocaleString("en-AU")); put(404,560.6,gst.toLocaleString("en-AU")); put(316,579.3,top.toLocaleString("en-AU")); }
+  return await doc.save();
+}
+
+function AuthoritySheet({ open, onClose }){
+  const [vendors,setVendors]=useState([{name:"",mobile:"",email:""}]);
+  const [vendorAddr,setVendorAddr]=useState("");
+  const [propertyAddr,setPropertyAddr]=useState("");
+  const [sameAddr,setSameAddr]=useState(false);
+  const [priceFrom,setPriceFrom]=useState("");
+  const [priceTo,setPriceTo]=useState("");
+  const [period,setPeriod]=useState("90");
+  const [possession,setPossession]=useState("vacant");
+  const [commission,setCommission]=useState("2.75");
+  const [busy,setBusy]=useState(false);
+  const [err,setErr]=useState("");
+  const [pdfUrl,setPdfUrl]=useState(null);
+  const setV=(i,k,val)=>setVendors(vs=>vs.map((v,j)=>j===i?{...v,[k]:val}:v));
+  const addV=()=>setVendors(vs=>[...vs,{name:"",mobile:"",email:""}]);
+  const rmV=(i)=>setVendors(vs=>vs.length>1?vs.filter((_,j)=>j!==i):vs);
+  const effVendorAddr = sameAddr ? propertyAddr : vendorAddr;
+  const ready = (vendors[0]?.name||"").trim() && propertyAddr.trim();
+  async function generate(){
+    setErr(""); setBusy(true);
+    try{
+      const bytes=await fillSaleAuthority({ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission });
+      const blob=new Blob([bytes],{type:"application/pdf"});
+      if(pdfUrl) URL.revokeObjectURL(pdfUrl);
+      setPdfUrl(URL.createObjectURL(blob));
+    }catch(e){ setErr("Could not generate. "+(e?.message||"")); }
+    setBusy(false);
+  }
+  const fieldRow={display:"grid",gridTemplateColumns:"1fr 1fr",gap:8};
+  return (
+    <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div className="sh" onClick={e=>e.stopPropagation()}>
+        <div className="hndl"/>
+        <div className="sh-ttl">New authority</div>
+        <div className="sh-sub">Exclusive Sale Authority — the quick details, then preview</div>
+        {pdfUrl ? (
+          <div style={{padding:"4px 16px 16px"}}>
+            <div style={{border:`1px solid #E7DFD3`,borderRadius:10,overflow:"hidden",height:400,marginBottom:12,background:"#fff"}}>
+              <iframe title="Authority preview" src={pdfUrl} style={{width:"100%",height:"100%",border:"none"}}/>
+            </div>
+            <a href={pdfUrl} target="_blank" rel="noreferrer" className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px"}}>Open full screen</a>
+            <a href={pdfUrl} download={`Exclusive Sale Authority - ${(propertyAddr||"property").replace(/[\\/:*?"<>|]/g,"")}.pdf`} className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px",background:BLUE_D}}>Download PDF</a>
+            <button className="btn-dark" style={{width:"100%",margin:"0 0 10px",opacity:.55}} disabled>Send to vendor to sign (coming next)</button>
+            <button onClick={()=>{ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); }} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Edit details</button>
+          </div>
+        ) : <>
+          <div className="fg"><label className="fl">Listing property address</label>
+            <input className="fi" type="text" placeholder="e.g. 12/5 Berkeley Street, Hawthorn VIC 3122" value={propertyAddr} onChange={e=>setPropertyAddr(e.target.value)}/></div>
+          <label style={{display:"flex",alignItems:"center",gap:9,padding:"0 16px 10px",fontSize:13,color:BROWN,cursor:"pointer"}}>
+            <input type="checkbox" checked={sameAddr} onChange={e=>setSameAddr(e.target.checked)} style={{width:18,height:18,accentColor:BLUE_D}}/>
+            Owner currently lives at this property
+          </label>
+          {vendors.map((v,i)=>(
+            <div key={i} style={{borderTop:i?`1px solid #EFE8DC`:"none",paddingTop:i?8:0}}>
+              <div className="fg" style={{paddingBottom:8}}><label className="fl">{i===0?"Owner full name":`Owner ${i+1} full name`}{i>0&&<span onClick={()=>rmV(i)} style={{float:"right",color:BROWN_L,cursor:"pointer",fontWeight:400}}>remove</span>}</label>
+                <input className="fi" type="text" placeholder="e.g. Michael Chen" value={v.name} onChange={e=>setV(i,"name",e.target.value)}/></div>
+              <div style={{padding:"0 16px 8px"}}><div style={fieldRow}>
+                <div><label className="fl">Mobile</label><input className="fi" type="tel" placeholder="0412 345 678" value={v.mobile} onChange={e=>setV(i,"mobile",e.target.value)}/></div>
+                <div><label className="fl">Email</label><input className="fi" type="email" placeholder="name@email.com" value={v.email} onChange={e=>setV(i,"email",e.target.value)}/></div>
+              </div></div>
+            </div>
+          ))}
+          <div style={{padding:"0 16px 10px"}}><button onClick={addV} style={{background:"transparent",border:`1px dashed #CDBFA6`,borderRadius:9,width:"100%",padding:"9px",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",fontSize:12.5}}>+ Add another owner</button></div>
+          {!sameAddr&&<div className="fg"><label className="fl">Owner's current address</label>
+            <input className="fi" type="text" placeholder="Where the owner lives now" value={vendorAddr} onChange={e=>setVendorAddr(e.target.value)}/></div>}
+          <div style={{padding:"0 16px 10px"}}><label className="fl">Price guide</label><div style={fieldRow}>
+            <input className="fi" type="text" inputMode="numeric" placeholder="From  $" value={priceFrom} onChange={e=>setPriceFrom(e.target.value)}/>
+            <input className="fi" type="text" inputMode="numeric" placeholder="To  $" value={priceTo} onChange={e=>setPriceTo(e.target.value)}/>
+          </div></div>
+          <div style={{padding:"6px 16px 10px",borderTop:`1px solid #EFE8DC`}}>
+            <div style={{fontSize:11.5,color:BROWN_L,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase",marginBottom:8}}>Defaults (change if needed)</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+              <div><label className="fl">Period (days)</label><input className="fi" type="text" inputMode="numeric" value={period} onChange={e=>setPeriod(e.target.value)} style={{textAlign:"center"}}/></div>
+              <div><label className="fl">Commission %</label><input className="fi" type="text" inputMode="decimal" value={commission} onChange={e=>setCommission(e.target.value)} style={{textAlign:"center"}}/></div>
+              <div><label className="fl">Possession</label><select className="fi" value={possession} onChange={e=>setPossession(e.target.value)}><option value="vacant">Vacant</option><option value="tenancy">Tenanted</option></select></div>
+            </div>
+          </div>
+          {err&&<div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
+          <div className="fg" style={{paddingBottom:0}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={generate} disabled={busy||!ready}>{busy?<><span className="sp-sm"/>Generating…</>:"Generate authority →"}</button></div>
+        </>}
+        <div style={{height:24}}/>
+      </div>
+    </div>
+  );
+}
+
 
 export default function App(){
   const[agentName,setAgentName]=useState(()=>{ try { return SESSION_TOKEN ? (sessionStorage.getItem("savvi_who")||"") : ""; } catch(e){ return ""; } });
@@ -4247,6 +4369,7 @@ export default function App(){
   const[propBuyers,setPropBuyers]=useState({});
   const[showQuickContract,setShowQuickContract]=useState(false);
   const[showAddListing,setShowAddListing]=useState(false);
+  const[showAuthority,setShowAuthority]=useState(false);
   const[showAssistant,setShowAssistant]=useState(false);
   const[showGeneral,setShowGeneral]=useState(false);
   const[showInfo,setShowInfo]=useState(false);
@@ -5112,7 +5235,10 @@ export default function App(){
       </>}
 
       {!loading&&homeTab==="match"&&<BuyerMatch propIndex={propIndex} agentName={agentName}/>}
-      {!loading&&<div style={{padding:"26px 20px 0",textAlign:"center"}}><button onClick={()=>setShowAddListing(true)} style={{background:"transparent",border:"none",color:BROWN_L,fontSize:12.5,fontWeight:600,cursor:"pointer",textDecoration:"underline",fontFamily:"inherit",opacity:.8}}>+ Add a listing</button></div>}
+      {!loading&&<div style={{padding:"24px 20px 6px",textAlign:"center"}}>
+        <button onClick={()=>setShowAuthority(true)} style={{background:BROWN,border:"none",color:"#fff",fontSize:13.5,fontWeight:700,cursor:"pointer",fontFamily:"inherit",borderRadius:11,padding:"12px 24px",boxShadow:"0 4px 12px rgba(49,30,16,.18)"}}>+ New authority</button>
+        <div style={{marginTop:12}}><button onClick={()=>setShowAddListing(true)} style={{background:"transparent",border:"none",color:BROWN_L,fontSize:12.5,fontWeight:600,cursor:"pointer",textDecoration:"underline",fontFamily:"inherit",opacity:.8}}>+ Add a listing</button></div>
+      </div>}
       <div style={{height:40}}/>
     </div>
 
@@ -5277,6 +5403,7 @@ export default function App(){
         if(lr.ok) setAllListings(lr.data);
       }}
     />
+    <AuthoritySheet open={showAuthority} onClose={()=>setShowAuthority(false)}/>
 
     {/* ── SUCCESS: BUYER ADDED ── */}
     <div className={`sov ${showOk?"on":""}`}><div className="sc">
