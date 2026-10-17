@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v73-domain-guard";
+const BUILD = "v74-branded-schedule";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4216,8 +4216,7 @@ async function fillSaleAuthority(d){
   if(d.schedule && d.schedule.total){
     const tot=Number(d.schedule.total).toLocaleString("en-AU");
     put(75,651.5,tot); put(286,651.5,"NIL"); put(415,651.5,tot); put(213,689,"NIL");
-    const bold=await doc.embedFont(StandardFonts.HelveticaBold);
-    buildSchedulePage(doc,font,bold,rgb,{ propertyAddr:d.propertyAddr, schedule:d.schedule });
+    await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, schedule:d.schedule });
   }
   return await doc.save();
 }
@@ -4235,7 +4234,7 @@ const REA_DEFAULT=4419;
 // b3 (>$2.25m) is intentionally null → NOT auto-priced; agent must phone Domain and enter it.
 const DOMAIN_PLATINUM={ b1:1300, b2:3300, b3:null };
 const DOMAIN_OVERRIDE={ "3121":{ b2:3040 } }; // Richmond $1m–$2.249m is cheaper than standard $3,300
-const SCHED_FIXED={ photos:715, boards:725, misc:718 }; // fixed section subtotals (incl. Campaign Mgmt $595, Social is separate)
+const SCHED_FIXED={ photos:715, boards:718, misc:725 }; // fixed section subtotals (Misc incl. Campaign Mgmt $595; Social is separate)
 const SOCIAL_FEE=495, EBROCHURE_FEE=0;
 function authPostcode(addr){ const m=String(addr||"").match(/\b(3\d{3})\b/g); return m?m[m.length-1]:""; }
 function domainBand(bottom){ const n=Number(String(bottom||"").replace(/[^0-9]/g,"")); if(!n||n<=999999)return"b1"; if(n<=2249999)return"b2"; return"b3"; }
@@ -4256,36 +4255,30 @@ function buildScheduleObj({ rea, domain, social, photos, boards, misc }){
       { title:"Miscellaneous", items:["AML/CTF Compliance Fee","Campaign Management","Digital Contract Fee"], subtotal:misc },
     ] };
 }
-// Render a clean Savvi marketing schedule as an extra page on the authority doc.
-function buildSchedulePage(doc,font,bold,rgb,{ propertyAddr, schedule }){
-  const W=595.92,H=841.92;
-  const page=doc.addPage([W,H]);
-  const INK=rgb(0.19,0.12,0.06), MUT=rgb(0.46,0.41,0.37), LINE=rgb(0.84,0.80,0.72);
+// Append the REAL Savvi-branded Realtair marketing schedule (public/schedule-base.pdf,
+// a redacted-blank of the genuine doc) and overlay the deal values in the brand font
+// (Neue Haas Unica Pro, 9pt, Savvi brown) at the exact positions of the original form.
+async function appendSchedulePage(doc,rgb,{ propertyAddr, schedule }){
+  const { PDFDocument }=await import("pdf-lib");
+  const fontkit=(await import("@pdf-lib/fontkit")).default;
+  try{ doc.registerFontkit(fontkit); }catch(e){}
+  const nhBytes=await fetch("/fonts/NeueHaasUnicaPro-Regular.ttf").then(r=>r.arrayBuffer());
+  const nh=await doc.embedFont(nhBytes,{ subset:true });
+  const baseBytes=await fetch("/schedule-base.pdf").then(r=>r.arrayBuffer());
+  const schedDoc=await PDFDocument.load(baseBytes);
+  const [pg]=await doc.copyPages(schedDoc,[0]);
+  doc.addPage(pg);
+  const H=pg.getHeight();
+  const BR=rgb(0.188,0.118,0.059); // Savvi brown #301E0F (matches the form's text colour)
   const money=v=>"$"+Number(v||0).toLocaleString("en-AU",{minimumFractionDigits:2,maximumFractionDigits:2});
-  const txt=(x,fy,t,{s=10,f=font,c=INK,right=false}={})=>{ t=String(t==null?"":t); const w=f.widthOfTextAtSize(t,s); page.drawText(t,{x:right?x-w:x,y:H-fy,size:s,font:f,color:c}); };
-  const rule=(fy,x0=48,x1=W-48,c=LINE,th=0.8)=>page.drawLine({start:{x:x0,y:H-fy},end:{x:x1,y:H-fy},thickness:th,color:c});
-  let y=70;
-  txt(48,y,"MARKETING SCHEDULE",{s:17,f:bold}); y+=18;
-  txt(48,y,"Savvi Real Estate Pty Ltd  ·  High Impact Digital Campaign",{s:9.5,c:MUT}); y+=14;
-  txt(48,y,String(propertyAddr||""),{s:11,f:bold}); y+=20;
-  rule(y); y+=22;
-  for(const sec of schedule.sections){
-    txt(48,y,sec.title,{s:11,f:bold});
-    txt(W-48,y,money(sec.subtotal),{s:11,f:bold,right:true}); y+=15;
-    for(const it of sec.items){ txt(60,y,"•  "+it,{s:9.5,c:MUT}); y+=13.5; }
-    y+=6; rule(y); y+=18;
-  }
-  y+=4;
-  txt(48,y,"Total (incl. GST)",{s:13,f:bold});
-  txt(W-48,y,money(schedule.total),{s:13,f:bold,right:true}); y+=26;
-  txt(48,y,"*Prices subject to change at any time and include GST.",{s:8,c:MUT}); y+=11;
-  txt(48,y,"Marketing expenses are payable on the signing of this Authority.",{s:8,c:MUT});
-  // vendor acknowledgement line near the foot (mirrors the authority — signed together)
-  const sigY=770; // fitz fy from top
-  page.drawLine({start:{x:48,y:H-sigY},end:{x:250,y:H-sigY},thickness:0.8,color:INK});
-  page.drawLine({start:{x:330,y:H-sigY},end:{x:W-48,y:H-sigY},thickness:0.8,color:INK});
-  txt(48,sigY+13,"Vendor signature",{s:8,c:MUT});
-  txt(330,sigY+13,"Date",{s:8,c:MUT});
+  const draw=(x,fy,t,center)=>{ t=String(t==null?"":t); if(!t)return; let xx=x; if(center){ xx=x-nh.widthOfTextAtSize(t,9)/2; } pg.drawText(t,{x:xx,y:H-fy,size:9,font:nh,color:BR}); };
+  draw(180.2,166.1,new Date().toLocaleDateString("en-AU"));        // DATE (left)
+  draw(180.2,196.9,propertyAddr||"");                              // PROPERTY (left)
+  draw(548.8,249.9,money(schedule.internet),true);                 // Internet & Digital subtotal (centred)
+  draw(548.8,376.7,money(schedule.boards),true);                   // Boards & Brochures subtotal
+  draw(548.8,457.6,money(schedule.photos),true);                   // Photos, Plans & Copy subtotal
+  draw(548.8,563.9,money(schedule.misc),true);                     // Miscellaneous subtotal
+  draw(527.85,710.3,money(schedule.total),true);                   // Total value
 }
 
 // Address autocomplete (OpenStreetMap Nominatim — keyless, CORS-enabled). Fills in
