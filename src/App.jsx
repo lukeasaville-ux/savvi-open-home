@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v90-address-unit-display";
+const BUILD = "v91-places-autocomplete";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4547,13 +4547,13 @@ function AddressInput({ value, onChange, placeholder }){
   useEffect(()=>{
     if(!listOpen){ return; }
     const q=(value||"").replace(/^\s*\d+[A-Za-z]?\s*\/\s*/,"").trim();
-    if(q.length<5){ setSugs([]); return; }
+    if(q.length<3){ setSugs([]); return; }
     if(tRef.current) clearTimeout(tRef.current);
     tRef.current=setTimeout(async()=>{
       try{ setLoading(true);
-        // Server-side geocode (n8n proxies Nominatim with a proper User-Agent and
-        // its own IP + 24h cache). Browser-direct Nominatim shares a pooled rate
-        // limit and was failing intermittently. Fall back to direct if the proxy errors.
+        // Server-side finder: n8n calls Google Places Autocomplete (Melbourne-biased),
+        // falling back to Google Geocoding, then OpenStreetMap, from the droplet's
+        // allow-listed IP. Predictions carry a placeId resolved to components on pick.
         let list=[];
         const j=await call("geocode",{q});
         if(j && j.ok && Array.isArray(j.results)) list=j.results;
@@ -4566,10 +4566,18 @@ function AddressInput({ value, onChange, placeholder }){
     },450);
     return ()=>{ if(tRef.current) clearTimeout(tRef.current); };
   },[value,listOpen]);
-  // The address you'll get: Google geocodes to the building (e.g. "9 Griffiths St"),
-  // so re-attach the unit the user typed ("507/") for both the suggestion text and the pick.
-  function picked(item){ let f=formatAUAddress(item); if(unitPrefix && !/^\s*\d+[A-Za-z]?\s*\//.test(f)) f=unitPrefix+f; return f; }
-  function pick(item){ onChange(picked(item)); setListOpen(false); setSugs([]); }
+  // Suggestion text: an autocomplete prediction has no components yet (show its text); a
+  // resolved/fallback result formats from components. Re-attach the typed unit ("507/") either way.
+  function picked(item){ let f = item.address ? formatAUAddress(item) : (item.display_name||""); if(unitPrefix && !/^\s*\d+[A-Za-z]?\s*\//.test(f)) f=unitPrefix+f; return f; }
+  // On pick, resolve the prediction's placeId to full components (incl. postcode) before filling.
+  async function pick(item){
+    setListOpen(false); setSugs([]);
+    let it=item;
+    if(item.placeId){ try{ const j=await call("geocode",{placeId:item.placeId}); if(j&&j.ok&&j.result) it=j.result; }catch(e){} }
+    let f = it.address ? formatAUAddress(it) : (it.display_name||"");
+    if(unitPrefix && !/^\s*\d+[A-Za-z]?\s*\//.test(f)) f=unitPrefix+f;
+    onChange(f);
+  }
   return (
     <div style={{position:"relative"}}>
       <input className="fi" type="text" placeholder={placeholder} value={value}
