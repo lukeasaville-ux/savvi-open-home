@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v85-desktop-auth-contract";
+const BUILD = "v86-auth-commission-gst";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4283,10 +4283,21 @@ async function fillSaleAuthority(d){
   if(from) put(181,472.7,from,8);
   if(to)   put(245,472.7,to,8);
   const comm=(String(d.commission||"2.75").replace(/[^0-9.]/g,""))||"2.75";
-  put(31,545.5,comm+"% of the sale price");
   const top=Number(String(d.priceTo||d.priceFrom||"").replace(/[^0-9]/g,""));
-  if(top){ const est=Math.round(top*parseFloat(comm)/100), gst=Math.round(est/11);
-    put(197,562.0,est.toLocaleString("en-AU")); put(404,562.0,gst.toLocaleString("en-AU")); put(316,580.7,top.toLocaleString("en-AU")); }
+  // Commission: fixed $ amount OR % of sale price. The unused option is struck / "Not applicable".
+  const cFixed=(d.commissionType==="fixed"), fixedAmt=Number(String(d.fixedCommission||"").replace(/[^0-9]/g,""))||0;
+  if(cFixed && fixedAmt){
+    put(179,504,fixedAmt.toLocaleString("en-AU"));                       // fixed commission $ amount
+    put(31,545.5,"Not applicable");                                      // the % line does not apply
+    const gst=Math.round(fixedAmt/11);
+    put(197,562.0,fixedAmt.toLocaleString("en-AU")); put(404,562.0,gst.toLocaleString("en-AU"));
+    if(top) put(316,580.7,top.toLocaleString("en-AU"));
+  } else {
+    page.drawLine({ start:{x:179,y:H-503}, end:{x:285,y:H-503}, thickness:1, color:rgb(0,0,0) }); // strike the fixed-commission line
+    put(31,545.5,comm+"% of the sale price");
+    if(top){ const est=Math.round(top*parseFloat(comm)/100), gst=Math.round(est/11);
+      put(197,562.0,est.toLocaleString("en-AU")); put(404,562.0,gst.toLocaleString("en-AU")); put(316,580.7,top.toLocaleString("en-AU")); }
+  }
   // Marketing Expenses block (page 0): the advertising-schedule total flows into
   // Advertising + TOTAL; "Other" lines are never used → NIL. (coords from the base PDF)
   if(d.schedule && d.schedule.total){
@@ -4329,10 +4340,21 @@ async function fillAuctionAuthority(d){
   if(from) put(181,466.7,from,8);
   if(to)   put(245,466.7,to,8);
   const comm=(String(d.commission||"2.75").replace(/[^0-9.]/g,""))||"2.75";
-  put(31,537.2,comm+"% of the sale price");
   const top=Number(String(d.priceTo||d.priceFrom||"").replace(/[^0-9]/g,""));
-  if(top){ const est=Math.round(top*parseFloat(comm)/100), gst=Math.round(est/11);
-    put(37,572.5,est.toLocaleString("en-AU")); put(481,572.5,gst.toLocaleString("en-AU")); put(404,588.2,top.toLocaleString("en-AU")); }
+  // Commission: fixed $ amount OR % of sale price. The unused option is struck / "Not applicable".
+  const cFixed=(d.commissionType==="fixed"), fixedAmt=Number(String(d.fixedCommission||"").replace(/[^0-9]/g,""))||0;
+  if(cFixed && fixedAmt){
+    put(179,500,fixedAmt.toLocaleString("en-AU"));
+    put(31,537.2,"Not applicable");
+    const gst=Math.round(fixedAmt/11);
+    put(37,572.5,fixedAmt.toLocaleString("en-AU")); put(481,572.5,gst.toLocaleString("en-AU"));
+    if(top) put(404,588.2,top.toLocaleString("en-AU"));
+  } else {
+    page.drawLine({ start:{x:179,y:H-499}, end:{x:285,y:H-499}, thickness:1, color:rgb(0,0,0) }); // strike the fixed-commission line
+    put(31,537.2,comm+"% of the sale price");
+    if(top){ const est=Math.round(top*parseFloat(comm)/100), gst=Math.round(est/11);
+      put(37,572.5,est.toLocaleString("en-AU")); put(481,572.5,gst.toLocaleString("en-AU")); put(404,588.2,top.toLocaleString("en-AU")); }
+  }
   page.drawLine({ start:{x:19.6,y:H-698.0}, end:{x:133.3,y:H-698.0}, thickness:1, color:rgb(0,0,0) }); // strike "*the signing of this Authority"
   if(d.schedule && d.schedule.total){
     const tot=Number(d.schedule.total).toLocaleString("en-AU");
@@ -4500,6 +4522,8 @@ function AuthoritySheet({ open, onClose, agentName }){
   const [period,setPeriod]=useState("90");
   const [possession,setPossession]=useState("vacant");
   const [commission,setCommission]=useState("2.75");
+  const [commissionType,setCommissionType]=useState("percent");  // percent | fixed
+  const [fixedCommission,setFixedCommission]=useState("");        // $ amount when fixed
   const [authType,setAuthType]=useState("sale");           // sale (Code 002, incl. EOI) | auction (Code 003)
   const [auctionDate,setAuctionDate]=useState("");         // yyyy-mm-dd
   const [auctionTime,setAuctionTime]=useState("");         // blank → "To be advised"
@@ -4541,11 +4565,11 @@ function AuthoritySheet({ open, onClose, agentName }){
 
   const canCustom = /luke|madeline/i.test(agentName||"");
   function collect(){ return { id:draftId||("d"+Date.now()), savedAt:Date.now(), label:(propertyAddr||vendors[0]?.name||"Untitled authority"),
-    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, campaign, sched, itemised, authType, auctionDate, auctionTime, reserve, vendorType, entityName, entityAcn, deceasedName }; }
+    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, commissionType, fixedCommission, campaign, sched, itemised, authType, auctionDate, auctionTime, reserve, vendorType, entityName, entityAcn, deceasedName }; }
   function saveDraft(silent){ const f=collect(); setDraftId(f.id); const arr=loadAuthDrafts().filter(d=>d.id!==f.id); arr.unshift(f); saveAuthDrafts(arr); setDrafts(arr); if(!silent){ setSavedMsg("Draft saved"); setTimeout(()=>setSavedMsg(""),1600);} }
-  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setItemised(!!d.itemised); setAuthType(d.authType||"sale"); setAuctionDate(d.auctionDate||""); setAuctionTime(d.auctionTime||""); setReserve(d.reserve||""); setVendorType(d.vendorType||"individual"); setEntityName(d.entityName||""); setEntityAcn(d.entityAcn||""); setDeceasedName(d.deceasedName||""); setStage(d.stage||"details"); }
+  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCommissionType(d.commissionType||"percent"); setFixedCommission(d.fixedCommission||""); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setItemised(!!d.itemised); setAuthType(d.authType||"sale"); setAuctionDate(d.auctionDate||""); setAuctionTime(d.auctionTime||""); setReserve(d.reserve||""); setVendorType(d.vendorType||"individual"); setEntityName(d.entityName||""); setEntityAcn(d.entityAcn||""); setDeceasedName(d.deceasedName||""); setStage(d.stage||"details"); }
   function deleteDraft(id){ const arr=loadAuthDrafts().filter(d=>d.id!==id); saveAuthDrafts(arr); setDrafts(arr); if(draftId===id) setDraftId(null); }
-  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCampaign("hidc"); setSched(null); setShowEdit(false); setItemised(false); setAuthType("sale"); setAuctionDate(""); setAuctionTime(""); setReserve(""); setVendorType("individual"); setEntityName(""); setEntityAcn(""); setDeceasedName(""); setPeriod("90"); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
+  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCommissionType("percent"); setFixedCommission(""); setCampaign("hidc"); setSched(null); setShowEdit(false); setItemised(false); setAuthType("sale"); setAuctionDate(""); setAuctionTime(""); setReserve(""); setVendorType("individual"); setEntityName(""); setEntityAcn(""); setDeceasedName(""); setPeriod("90"); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
   function handleClose(){ if(!pdfUrl && hasData) saveDraft(true); onClose(); }
 
   function goSchedule(){ setSched(defaultSched(postcode, band, campaign==="custom"?"hidc":campaign)); setShowEdit(false); setStage("schedule"); }
@@ -4567,7 +4591,7 @@ function AuthoritySheet({ open, onClose, agentName }){
       const _cmp=SCHED_CAMPAIGNS.find(c=>c.id===campaign)||{};
       const campName=_cmp.quote||_cmp.name||"High Impact Digital Campaign";
       const schedule = (campaign==="off"||!sched) ? null : { campaignName:campName, sched, total:schedTot, itemised };
-      const common={ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, schedule, vendorType, entityName, entityAcn, deceasedName };
+      const common={ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, commissionType, fixedCommission, schedule, vendorType, entityName, entityAcn, deceasedName };
       const bytes = authType==="auction"
         ? await fillAuctionAuthority({ ...common, auctionDate, auctionTime, reserve })
         : await fillSaleAuthority({ ...common, vendorPrice, settlement });
@@ -4786,7 +4810,18 @@ function AuthoritySheet({ open, onClose, agentName }){
             <div style={{fontSize:11.5,color:BROWN_L,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase",marginBottom:8}}>Defaults (change if needed)</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
               <div><label className="fl" style={{whiteSpace:"nowrap"}}>{authType==="auction"?"After auction":"Exclusive"}</label><input className="fi" type="text" inputMode="numeric" value={period} onChange={e=>setPeriod(e.target.value)} style={{textAlign:"center"}}/></div>
-              <div><label className="fl">Commission %</label><input className="fi" type="text" inputMode="decimal" value={commission} onChange={e=>setCommission(e.target.value)} style={{textAlign:"center"}}/></div>
+              <div>
+                <label className="fl" style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:4}}>
+                  <span>Commission</span>
+                  <span style={{display:"inline-flex",border:`1px solid ${SAND_D}`,borderRadius:7,overflow:"hidden"}}>
+                    <button type="button" onClick={()=>setCommissionType("percent")} style={{border:"none",padding:"1px 7px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:commissionType==="percent"?BLUE_D:"#fff",color:commissionType==="percent"?"#fff":BROWN_L}}>%</button>
+                    <button type="button" onClick={()=>setCommissionType("fixed")} style={{border:"none",padding:"1px 7px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:commissionType==="fixed"?BLUE_D:"#fff",color:commissionType==="fixed"?"#fff":BROWN_L}}>$</button>
+                  </span>
+                </label>
+                {commissionType==="fixed"
+                  ? <MoneyInput value={fixedCommission} onChange={setFixedCommission} placeholder="e.g. 10,000"/>
+                  : <input className="fi" type="text" inputMode="decimal" value={commission} onChange={e=>setCommission(e.target.value)} style={{textAlign:"center"}}/>}
+              </div>
               <div><label className="fl">Possession</label><select className="fi" value={possession} onChange={e=>setPossession(e.target.value)}><option value="vacant">Vacant</option><option value="tenancy">Tenanted</option></select></div>
             </div>
           </div>
