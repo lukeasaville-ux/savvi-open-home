@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v88-sam-mobile";
+const BUILD = "v89-vendor-advocate-cav80";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4202,7 +4202,7 @@ function vendorPartyName(d){
 // DocuSeal signature fields. areas are page RATIOS (top-left); page is 1-indexed. One signature
 // per vendor (Vendor 1 uses the VENDOR box; Vendor 2+ use the drawn rows). Agent signs too.
 // Authority pages are 595.92x841.92; the appended schedule page is 595.5x842.25.
-function signFields(hasSchedule, nVendors, authType, vendorType){
+function signFields(hasSchedule, nVendors, authType, vendorType, hasAdvocate){
   const AW=595.92,AH=841.92,SW=595.5,SH=842.25;
   const a=(x,y,w,h,page,W,H)=>({x:x/W,y:y/H,w:w/W,h:h/H,page});
   const schedPage = authType==="auction" ? 8 : 7;   // schedule = (authority pages + 1): sale 6→7, auction 7→8
@@ -4225,6 +4225,21 @@ function signFields(hasSchedule, nVendors, authType, vendorType){
       f.push(sig(role+" Signature",role,95,r.lineY-14,205,18)); f.push(dte(role+" Date",role,350,r.lineY-14,110,14)); });
   }
   if(hasSchedule) f.push({name:"Vendor 1 Schedule Signature",role:"Vendor 1",type:"signature",required:true,areas:[a(95,724,185,18,schedPage,SW,SH)]});
+  if(hasAdvocate){
+    // CAV 80 commission-sharing page is appended LAST: authority pages + schedule(?) + 1.
+    const authPages = authType==="auction" ? 7 : 6;
+    const cavPage = authPages + (hasSchedule?1:0) + 1;
+    const S=CAV_SIG_TOP, X0=CAV_SX0, X1=CAV_SX1;
+    const sigP=(name,role,x,y,w,h)=>({name,role,type:"signature",required:true,areas:[a(x,y,w,h,cavPage,AW,AH)]});
+    const dteP=(name,role,x,y,w,h)=>({name,role,type:"date",required:true,readonly:true,areas:[a(x,y,w,h,cavPage,AW,AH)]});
+    f.push(sigP("Agent CAV Signature","Agent",X0+4,S+5,X1-X0-8,24));
+    f.push(dteP("Agent CAV Date","Agent",X0+6,S+40,120,16));
+    const vTop=S+70, vH=44, dTop=S+124, slice=(X1-X0)/n;
+    for(let i=0;i<n;i++){ const role="Vendor "+(i+1);
+      f.push(sigP(role+" CAV Signature",role,X0+4+slice*i,vTop,slice-8,vH));
+      f.push(dteP(role+" CAV Date",role,X0+6+slice*i,dTop,Math.min(slice-10,110),16));
+    }
+  }
   return f;
 }
 // Draw the vendor execution blocks on the signature page (index 1), by ownership type.
@@ -4306,6 +4321,7 @@ async function fillSaleAuthority(d){
     await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
   }
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  if(d.advocate && (d.advocateName||"").trim()) await appendCommissionSharingPage(doc, font, bold, rgb, d);
   drawVendorExecution(doc, font, bold, rgb, d);
   return await doc.save();
 }
@@ -4362,6 +4378,7 @@ async function fillAuctionAuthority(d){
     await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
   }
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  if(d.advocate && (d.advocateName||"").trim()) await appendCommissionSharingPage(doc, font, bold, rgb, d);
   drawVendorExecution(doc, font, bold, rgb, d);
   return await doc.save();
 }
@@ -4422,6 +4439,60 @@ function schedTotal(sched){ return SCHED_SECS.reduce((a,s)=>a+schedSubtotal(sche
 // doc with item rows + values blanked) and DRAW the items / subtotals / total dynamically in
 // the brand font (Neue Haas Unica Pro, 9pt, Savvi brown) at the form's exact positions — so
 // any item set (3 templates + custom add/remove) stays pixel-on-brand.
+// CAV 80 "Notice of commission sharing" (Consumer Affairs Victoria, approved under
+// s48 Estate Agents Act 1980). Appended when the vendor engages a vendor's advocate
+// so the agent shares commission outside the agency. Faithful recreation of the
+// standard form. The signature block sits at a FIXED position (CAV_SIG_TOP) so
+// signFields can land the agent + owner signatures on the appended page.
+const CAV_SIG_TOP=392, CAV_SX0=172, CAV_SX1=447;
+async function appendCommissionSharingPage(doc, font, bold, rgb, d){
+  const { StandardFonts } = await import("pdf-lib");
+  const obl = await doc.embedFont(StandardFonts.HelveticaOblique);
+  const page=doc.addPage([595.92,841.92]); const H=page.getHeight(), W=page.getWidth();
+  const black=rgb(0,0,0), red=rgb(0.80,0.09,0.11);
+  const M=32, R=W-32;
+  const T=(x,fy,t,sz=8,f=font,c=black)=>{ if(t==null||t==="")return; page.drawText(String(t),{x,y:H-fy,size:sz,font:f,color:c}); };
+  const box=(x0,fy0,x1,fy1,bw=0.8)=>page.drawRectangle({x:x0,y:H-fy1,width:x1-x0,height:fy1-fy0,borderWidth:bw,borderColor:black});
+  const wrapL=(f,sz,text,maxW)=>{ const words=String(text).split(/\s+/); const lines=[]; let ln=""; for(const w of words){ const t=ln?ln+" "+w:w; if(f.widthOfTextAtSize(t,sz)>maxW && ln){ lines.push(ln); ln=w; } else ln=t; } if(ln) lines.push(ln); return lines; };
+  const para=(x,fy,t,sz,f,lh,maxW,c=black)=>{ const ls=wrapL(f,sz,t,maxW); ls.forEach((l,i)=>T(x,fy+i*lh,l,sz,f,c)); return fy+ls.length*lh; };
+
+  T(M,54,"Notice of commission sharing",15,bold);
+  box(M,62,R,90);
+  const a1="Notice of commission sharing form approved by the Director in accordance with Section 48 of the ";
+  T(M+6,78,a1,7.5,bold); const w1=bold.widthOfTextAtSize(a1,7.5);
+  T(M+6+w1,78,"Estate Agents Act 1980",7.5,obl);
+  T(M+6+w1+obl.widthOfTextAtSize("Estate Agents Act 1980",7.5),78,".",7.5,bold);
+  const hd="Important information for vendors/landlord(s)";
+  T((W-bold.widthOfTextAtSize(hd,11))/2,108,hd,11,bold,red);
+  box(M,116,R,156);
+  para(M+6,128,"If the agent has agreed to share the commission that will be payable for selling, leasing or managing your property, before getting your signature to engage or appoint them, they must give you this commission sharing statement. This statement shows details of all other people who will share in the commission.",7.5,bold,10,R-M-12);
+  para(M,172,"The Agent's commission will be shared with other people (other than a licensed estate agent or an agent's representative employed by the agent, or a licensed agent who is in partnership with the agent.)",8,bold,11,R-M);
+  para(M,202,"In accordance with Section 48 of the Estate Agents Act 1980, the agent states that the commission the agent is entitled to under the terms of this Authority will be shared with other people as follows:",8,font,11,R-M);
+
+  const tTop=236, colX=M+252, hdrH=28, rowH=34, nRows=3;
+  box(M,tTop,R,tTop+hdrH+rowH*nRows);
+  page.drawLine({start:{x:colX,y:H-tTop},end:{x:colX,y:H-(tTop+hdrH+rowH*nRows)},thickness:0.8,color:black});
+  page.drawLine({start:{x:M,y:H-(tTop+hdrH)},end:{x:R,y:H-(tTop+hdrH)},thickness:0.8,color:black});
+  for(let i=1;i<nRows;i++) page.drawLine({start:{x:M,y:H-(tTop+hdrH+rowH*i)},end:{x:R,y:H-(tTop+hdrH+rowH*i)},thickness:0.6,color:black});
+  wrapL(bold,8,"Name and address of person with whom commission is to be shared",colX-M-8).forEach((l,i)=>T(M+5,tTop+13+i*10,l,8,bold));
+  T(colX+6,tTop+13,"Description of such person",8,bold);
+  if(d.advocateName) T(M+5,tTop+hdrH+13,d.advocateName,8);
+  if(d.advocateAddress) T(M+5,tTop+hdrH+26,d.advocateAddress,8);
+  T(colX+6,tTop+hdrH+13,(d.advocateDesc||"Vendor Advocate"),8);
+
+  const sTop=CAV_SIG_TOP;
+  const rowLabel=(fy,h,label,sub)=>{ box(CAV_SX0,fy,CAV_SX1,fy+h); const lw=font.widthOfTextAtSize(label,8); T(165-lw,fy+h/2+3,label,8); if(sub) T(165-font.widthOfTextAtSize(sub,7),fy+h/2+13,sub,7); };
+  rowLabel(sTop,34,"Signature of agent");
+  rowLabel(sTop+34,30,"Date","dd/mm/yyyy");
+  rowLabel(sTop+64,56,"Signatures of vendor(s)/landlord(s)");
+  rowLabel(sTop+120,30,"Date","dd/mm/yyyy");
+
+  T(M,795,"CAV 80 (02/16)",7);
+  T(M,807,"consumer.vic.gov.au/estateagents",7);
+  T((W-font.widthOfTextAtSize("Page 1 of 1",7))/2,807,"Page 1 of 1",7);
+  T(R-bold.widthOfTextAtSize("CONSUMER AFFAIRS VICTORIA",8),799,"CONSUMER AFFAIRS VICTORIA",8,bold);
+}
+
 async function appendSchedulePage(doc,rgb,{ propertyAddr, campaignName, sched, itemised }){
   const { PDFDocument }=await import("pdf-lib");
   const fontkit=(await import("@pdf-lib/fontkit")).default;
@@ -4533,6 +4604,9 @@ function AuthoritySheet({ open, onClose, agentName }){
   const [commission,setCommission]=useState("2.75");
   const [commissionType,setCommissionType]=useState("percent");  // percent | fixed
   const [fixedCommission,setFixedCommission]=useState("");        // $ amount when fixed
+  const [advocate,setAdvocate]=useState(false);                  // vendor advocate → CAV 80 commission-sharing page
+  const [advocateName,setAdvocateName]=useState("");
+  const [advocateAddress,setAdvocateAddress]=useState("");
   const [authType,setAuthType]=useState("sale");           // sale (Code 002, incl. EOI) | auction (Code 003)
   const [auctionDate,setAuctionDate]=useState("");         // yyyy-mm-dd
   const [auctionTime,setAuctionTime]=useState("");         // blank → "To be advised"
@@ -4574,11 +4648,11 @@ function AuthoritySheet({ open, onClose, agentName }){
 
   const canCustom = /luke|madeline/i.test(agentName||"");
   function collect(){ return { id:draftId||("d"+Date.now()), savedAt:Date.now(), label:(propertyAddr||vendors[0]?.name||"Untitled authority"),
-    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, commissionType, fixedCommission, campaign, sched, itemised, authType, auctionDate, auctionTime, reserve, vendorType, entityName, entityAcn, deceasedName }; }
+    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, commissionType, fixedCommission, advocate, advocateName, advocateAddress, campaign, sched, itemised, authType, auctionDate, auctionTime, reserve, vendorType, entityName, entityAcn, deceasedName }; }
   function saveDraft(silent){ const f=collect(); setDraftId(f.id); const arr=loadAuthDrafts().filter(d=>d.id!==f.id); arr.unshift(f); saveAuthDrafts(arr); setDrafts(arr); if(!silent){ setSavedMsg("Draft saved"); setTimeout(()=>setSavedMsg(""),1600);} }
-  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCommissionType(d.commissionType||"percent"); setFixedCommission(d.fixedCommission||""); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setItemised(!!d.itemised); setAuthType(d.authType||"sale"); setAuctionDate(d.auctionDate||""); setAuctionTime(d.auctionTime||""); setReserve(d.reserve||""); setVendorType(d.vendorType||"individual"); setEntityName(d.entityName||""); setEntityAcn(d.entityAcn||""); setDeceasedName(d.deceasedName||""); setStage(d.stage||"details"); }
+  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCommissionType(d.commissionType||"percent"); setFixedCommission(d.fixedCommission||""); setAdvocate(!!d.advocate); setAdvocateName(d.advocateName||""); setAdvocateAddress(d.advocateAddress||""); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setItemised(!!d.itemised); setAuthType(d.authType||"sale"); setAuctionDate(d.auctionDate||""); setAuctionTime(d.auctionTime||""); setReserve(d.reserve||""); setVendorType(d.vendorType||"individual"); setEntityName(d.entityName||""); setEntityAcn(d.entityAcn||""); setDeceasedName(d.deceasedName||""); setStage(d.stage||"details"); }
   function deleteDraft(id){ const arr=loadAuthDrafts().filter(d=>d.id!==id); saveAuthDrafts(arr); setDrafts(arr); if(draftId===id) setDraftId(null); }
-  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCommissionType("percent"); setFixedCommission(""); setCampaign("hidc"); setSched(null); setShowEdit(false); setItemised(false); setAuthType("sale"); setAuctionDate(""); setAuctionTime(""); setReserve(""); setVendorType("individual"); setEntityName(""); setEntityAcn(""); setDeceasedName(""); setPeriod("90"); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
+  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCommissionType("percent"); setFixedCommission(""); setAdvocate(false); setAdvocateName(""); setAdvocateAddress(""); setCampaign("hidc"); setSched(null); setShowEdit(false); setItemised(false); setAuthType("sale"); setAuctionDate(""); setAuctionTime(""); setReserve(""); setVendorType("individual"); setEntityName(""); setEntityAcn(""); setDeceasedName(""); setPeriod("90"); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
   function handleClose(){ if(!pdfUrl && hasData) saveDraft(true); onClose(); }
 
   function goSchedule(){ setSched(defaultSched(postcode, band, campaign==="custom"?"hidc":campaign)); setShowEdit(false); setStage("schedule"); }
@@ -4600,7 +4674,7 @@ function AuthoritySheet({ open, onClose, agentName }){
       const _cmp=SCHED_CAMPAIGNS.find(c=>c.id===campaign)||{};
       const campName=_cmp.quote||_cmp.name||"High Impact Digital Campaign";
       const schedule = (campaign==="off"||!sched) ? null : { campaignName:campName, sched, total:schedTot, itemised };
-      const common={ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, commissionType, fixedCommission, schedule, vendorType, entityName, entityAcn, deceasedName };
+      const common={ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, commissionType, fixedCommission, schedule, vendorType, entityName, entityAcn, deceasedName, advocate, advocateName, advocateAddress };
       const bytes = authType==="auction"
         ? await fillAuctionAuthority({ ...common, auctionDate, auctionTime, reserve })
         : await fillSaleAuthority({ ...common, vendorPrice, settlement });
@@ -4617,7 +4691,7 @@ function AuthoritySheet({ open, onClose, agentName }){
     setErr(""); setSendState("sending");
     try{
       const b64=u8ToB64(pdfBytes);
-      const fields=signFields(campaign!=="off", named.length, authType, vendorType);
+      const fields=signFields(campaign!=="off", named.length, authType, vendorType, advocate && (advocateName||"").trim());
       const submitters=named.map((v,i)=>({ role:"Vendor "+(i+1), name:v.name.trim(), email:v.email.trim() }));
       submitters.push({ role:"Agent", name:(agentName||"Savvi"), email:AGENT_EMAIL[agentName]||"hello@getsavvi.com.au" });
       const typeName = authType==="auction" ? "Exclusive Auction Authority" : "Exclusive Sale Authority";
@@ -4833,6 +4907,19 @@ function AuthoritySheet({ open, onClose, agentName }){
               </div>
               <div><label className="fl">Possession</label><select className="fi" value={possession} onChange={e=>setPossession(e.target.value)}><option value="vacant">Vacant</option><option value="tenancy">Tenanted</option></select></div>
             </div>
+          </div>
+          <div style={{padding:"6px 16px 10px",borderTop:`1px solid #EFE8DC`}}>
+            <label style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,cursor:"pointer"}} onClick={()=>setAdvocate(a=>!a)}>
+              <span style={{fontSize:13,fontWeight:600,color:BROWN}}>Vendor advocate<span style={{fontSize:11.5,fontWeight:500,color:BROWN_L}}> — adds the commission-sharing page</span></span>
+              <span style={{flex:"0 0 auto",width:42,height:24,borderRadius:12,background:advocate?BLUE_D:SAND_D,position:"relative",transition:"background .15s"}}>
+                <span style={{position:"absolute",top:2,left:advocate?20:2,width:20,height:20,borderRadius:10,background:"#fff",boxShadow:"0 1px 2px rgba(0,0,0,.2)",transition:"left .15s"}}/>
+              </span>
+            </label>
+            {advocate && <div style={{marginTop:9,display:"grid",gap:8}}>
+              <div><label className="fl">Advocate name</label><input className="fi" type="text" value={advocateName} onChange={e=>setAdvocateName(e.target.value)} placeholder="e.g. LongView Real Estate Pty Ltd"/></div>
+              <div><label className="fl">Advocate address</label><input className="fi" type="text" value={advocateAddress} onChange={e=>setAdvocateAddress(e.target.value)} placeholder="e.g. 31 Hardner Road, Mount Waverley"/></div>
+              <div style={{fontSize:11,color:BROWN_L}}>Appends the CAV 80 "Notice of commission sharing" page, signed by the agent and owner(s).</div>
+            </div>}
           </div>
           {err&&<div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
           <div className="fg" style={{paddingBottom:6}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={goSchedule} disabled={!ready}>Next: advertising schedule →</button></div>
