@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v86-auth-commission-gst";
+const BUILD = "v87-geocode-backend";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4480,8 +4480,17 @@ function AddressInput({ value, onChange, placeholder }){
     if(tRef.current) clearTimeout(tRef.current);
     tRef.current=setTimeout(async()=>{
       try{ setLoading(true);
-        const r=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&countrycodes=au&limit=6&q=${encodeURIComponent(q)}`,{headers:{Accept:"application/json"}});
-        const j=await r.json(); setSugs(Array.isArray(j)?j:[]);
+        // Server-side geocode (n8n proxies Nominatim with a proper User-Agent and
+        // its own IP + 24h cache). Browser-direct Nominatim shares a pooled rate
+        // limit and was failing intermittently. Fall back to direct if the proxy errors.
+        let list=[];
+        const j=await call("geocode",{q});
+        if(j && j.ok && Array.isArray(j.results)) list=j.results;
+        else {
+          const r=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&countrycodes=au&limit=6&q=${encodeURIComponent(q)}`,{headers:{Accept:"application/json"}});
+          const d=await r.json(); list=Array.isArray(d)?d:[];
+        }
+        setSugs(list);
       }catch(e){ setSugs([]); } finally{ setLoading(false); }
     },450);
     return ()=>{ if(tRef.current) clearTimeout(tRef.current); };
