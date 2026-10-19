@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v89-vendor-advocate-cav80";
+const BUILD = "v90-address-unit-display";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4566,7 +4566,10 @@ function AddressInput({ value, onChange, placeholder }){
     },450);
     return ()=>{ if(tRef.current) clearTimeout(tRef.current); };
   },[value,listOpen]);
-  function pick(item){ let f=formatAUAddress(item); if(unitPrefix && !/^\s*\d+[A-Za-z]?\s*\//.test(f)) f=unitPrefix+f; onChange(f); setListOpen(false); setSugs([]); }
+  // The address you'll get: Google geocodes to the building (e.g. "9 Griffiths St"),
+  // so re-attach the unit the user typed ("507/") for both the suggestion text and the pick.
+  function picked(item){ let f=formatAUAddress(item); if(unitPrefix && !/^\s*\d+[A-Za-z]?\s*\//.test(f)) f=unitPrefix+f; return f; }
+  function pick(item){ onChange(picked(item)); setListOpen(false); setSugs([]); }
   return (
     <div style={{position:"relative"}}>
       <input className="fi" type="text" placeholder={placeholder} value={value}
@@ -4576,7 +4579,7 @@ function AddressInput({ value, onChange, placeholder }){
         <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,zIndex:60,background:"#fff",border:`1px solid ${SAND_D}`,borderRadius:10,boxShadow:"0 10px 28px rgba(0,0,0,.14)",maxHeight:232,overflowY:"auto"}}>
           {loading && sugs.length===0 && <div style={{padding:"10px 12px",fontSize:12.5,color:BROWN_L}}>Searching…</div>}
           {sugs.map((s,i)=>(
-            <div key={i} onMouseDown={e=>{ e.preventDefault(); pick(s); }} style={{padding:"9px 12px",fontSize:12.5,lineHeight:1.35,color:BROWN,cursor:"pointer",borderTop:i?`1px solid ${LINEN}`:"none"}}>{s.display_name}</div>
+            <div key={i} onMouseDown={e=>{ e.preventDefault(); pick(s); }} style={{padding:"9px 12px",fontSize:12.5,lineHeight:1.35,color:BROWN,cursor:"pointer",borderTop:i?`1px solid ${LINEN}`:"none"}}>{picked(s)}</div>
           ))}
         </div>
       )}
