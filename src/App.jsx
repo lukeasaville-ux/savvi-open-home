@@ -2968,7 +2968,11 @@ const FORM_SENT_RE={ bid:/(Register to bid (SMS|email|text) sent|Text sent:[^]*\
 const formSentNote=(kind,channel)=>`${kind==="bid"?"Register to bid":"Offer form"} ${channel==="email"?"email":"SMS"} sent`;
 // Automated / system notes: never shown as "the last note from us" in previews, and drawn
 // as events (not notes) on timelines. Agent-written notes and call logs are not automated.
-const isAutoNote=(t)=>/^\s*(\[[a-z0-9_ -]+\]|Text sent:|Emailed |Checked in at|Inspected |Attended inspection|Enquiry via|Register to bid (SMS|email|text) sent|Offer form (SMS|email|text) sent|Contract sent|Contract requested)/i.test(t||"");
+// EXCEPTION: a buyer's OWN reply to a follow-up message ("[Follow-up] Maybe — price…",
+// "[Follow-up] Not proceeding…") is NOT automated — it is the most important thing to see on
+// the buyer card, so it is exempted here and surfaces as the "most recent message" regardless
+// of the feedback (Luke, 1 Nov). Bulk/automated notes (incl. [followup-sms-sent]) stay hidden.
+const isAutoNote=(t)=>!/^\s*\[Follow-up\]/i.test(t||"")&&/^\s*(\[[a-z0-9_ -]+\]|Text sent:|Emailed |Checked in at|Inspected |Attended inspection|Enquiry via|Register to bid (SMS|email|text) sent|Offer form (SMS|email|text) sent|Contract sent|Contract requested)/i.test(t||"");
 
 const BM_DEFAULT = "Hi {first_name}, Luke here from Savvi. A new listing just came up that looks right up your alley. Want me to send you the details or line up a private look?\n\nThanks,\nLuke Saville";
 const BM_EXAMPLES = [
