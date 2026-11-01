@@ -3367,6 +3367,50 @@ function ViewFilter({ view, onChange, options }){
     </div>
   );
 }
+// Multi-select buyer filter for the phone open/listing screen (Luke #4): narrows whatever
+// VIEW is showing by interest + contract status + which open a buyer came through. Across
+// facets = AND, within a facet = OR. Sits beside the View picker; stays out of the way when
+// no filter is on (grey pill), turns solid + shows a count when active.
+function BuyerFacetFilter({ filter, setFilter, opens }){
+  const [open,setOpen]=useState(false);
+  const active=Object.keys(filter).filter(k=>filter[k]);
+  const toggle=k=>setFilter(f=>{ const n={...f}; if(n[k]) delete n[k]; else n[k]=true; return n; });
+  const Chip=({k,l})=>{ const on=!!filter[k]; return (
+    <button onClick={()=>toggle(k)} style={{border:`1.5px solid ${on?BROWN:SAND_D}`,background:on?BROWN:"#fff",color:on?"#fff":BROWN,borderRadius:100,padding:"7px 13px",fontSize:12.5,fontWeight:700,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>{on?"✓ ":""}{l}</button>
+  ); };
+  const Lbl=({children})=><div style={{fontSize:10.5,fontWeight:800,letterSpacing:.6,color:BROWN_L,textTransform:"uppercase",marginBottom:8}}>{children}</div>;
+  return (
+    <div style={{position:"relative"}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{display:"flex",alignItems:"center",gap:8,background:active.length?BROWN:SAND,border:`1px solid ${active.length?BROWN:SAND_D}`,borderRadius:100,padding:"9px 16px",fontSize:13,fontWeight:700,color:active.length?"#fff":BROWN,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",whiteSpace:"nowrap"}}>
+        <span>Filter{active.length?` · ${active.length}`:""}</span>
+        <span style={{fontSize:9,opacity:.6,transform:open?"rotate(180deg)":"none",transition:"transform .15s"}}>▼</span>
+      </button>
+      {open&&<>
+        <div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:20}}/>
+        <div style={{position:"absolute",top:"100%",right:0,zIndex:21,marginTop:6,background:WHITE,border:`1px solid ${SAND_D}`,borderRadius:14,boxShadow:"0 8px 24px rgba(49,30,16,.16)",padding:"14px",width:286,maxWidth:"86vw"}}>
+          <Lbl>Interest</Lbl>
+          <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:14}}>
+            <Chip k="hot" l="Hot"/><Chip k="watching" l="Watching"/><Chip k="cool" l="Cool"/><Chip k="none" l="No interest set"/>
+          </div>
+          <Lbl>Status</Lbl>
+          <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:opens.length?14:2}}>
+            <Chip k="contract" l="Contract sent"/>
+          </div>
+          {opens.length>0&&<>
+            <Lbl>Came through</Lbl>
+            <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:2}}>
+              {opens.map(o=><Chip key={o.id} k={"open:"+o.id} l={o.label}/>)}
+            </div>
+          </>}
+          {active.length>0&&<div style={{borderTop:`1px solid ${SAND}`,marginTop:12,paddingTop:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:12,color:BROWN_L}}>{active.length} filter{active.length===1?"":"s"} on</span>
+            <button onClick={()=>setFilter({})} style={{background:"none",border:"none",color:BLUE_D,fontWeight:800,fontSize:12.5,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Clear all</button>
+          </div>}
+        </div>
+      </>}
+    </div>
+  );
+}
 /* ════════════════════════════════════════════
    DESKTOP CRM  (wide screens only — the phone layout is untouched)
    A HubSpot-style shell: left sidebar + a main pane with Dashboard, Opens,
@@ -5151,6 +5195,7 @@ export default function App(){
   const[showDetail,setShowDetail]=useState(false);
   const[bFilters,setBFilters]=useState([]); // active keys: hot|watching|cool|contract|repeat (empty = all) — desktop CRM
   const[bView,setBView]=useState("interest"); // phone buyer-list view: interest|inspections|contracts|enquiries
+  const[pFilter,setPFilter]=useState({}); // phone open-screen multi-select filter: {hot,watching,cool,none,contract,open:<id>}
   const[propOpens,setPropOpens]=useState([]);   // all opens for the current property (for the Inspections view grouping)
   const[propOpensFor,setPropOpensFor]=useState(null); // which propertyId propOpens was fetched for
   const[active,setActive]=useState(null);
@@ -5227,10 +5272,35 @@ export default function App(){
   const VIEW_LABEL={interest:"Interest",inspections:"Inspections",contracts:"Contracts",enquiries:"Enquiries"};
   // Sort used by the "everyone" views (Interest / Inspections).
   const viewSort = bView==="inspections" ? byInspection : byInterest;
+  // Multi-select filter (interest / contract / which open) — narrows whatever view shows.
+  // Within a facet = OR (Hot OR Watching); across facets = AND (warm AND contract AND this open).
+  const _pfK=Object.keys(pFilter).filter(k=>pFilter[k]);
+  const _pfInt=_pfK.filter(k=>k==="hot"||k==="watching"||k==="cool"||k==="none");
+  const _pfOpen=_pfK.filter(k=>k.startsWith("open:")).map(k=>k.slice(5));
+  const _pfContract=_pfK.includes("contract");
+  const matchesPFilter=(b)=>{
+    if(_pfInt.length && !_pfInt.includes(b.interest?b.interest:"none")) return false;
+    if(_pfContract && !b.contractSent) return false;
+    if(_pfOpen.length && !_pfOpen.some(o=>(b.openHomeIds||[]).includes(o))) return false;
+    return true;
+  };
+  const pfActive=_pfK.length>0;
+  // Filter chips for the opens this property has had (only worth offering when there's >1),
+  // most recent first, capped so a long-running listing's chip list stays tidy.
+  const pfOpens=(propOpens||[]).length>1
+    ? propOpens.slice().sort((a,b)=>{const da=openStartAt(a),db=openStartAt(b);return (db?db.getTime():0)-(da?da.getTime():0);})
+               .slice(0,8)
+               .map(o=>({id:o.id,label:openWhen(o)||o.date||"Open"}))
+    : [];
+  // Filtered views (also what counts + the bulk-text button act on).
+  const pbRealF=pbReal.filter(matchesPFilter);
+  const propExtraRealF=propExtraReal.filter(matchesPFilter);
+  const enquiriesF=enquiries.filter(matchesPFilter);
+  const propRealF=propReal.filter(matchesPFilter);
   // The list the current view shows (also what the bulk-text sheet acts on).
-  const filteredBuyers = bView==="contracts" ? contractsList.slice().sort(byInspection)
+  const filteredBuyers = (bView==="contracts" ? contractsList.slice().sort(byInspection)
                        : bView==="enquiries" ? enquiries.slice().sort((a,b)=>inspTs(b)-inspTs(a))
-                       : propReal.slice().sort(viewSort);
+                       : propReal.slice().sort(viewSort)).filter(matchesPFilter);
   const rowOf=(b,kp)=>(
     <div key={kp+b.id} className="brow" onClick={()=>{setActive(b);setShowDetail(true);}}>
       <div className="brow-top">
@@ -5375,7 +5445,7 @@ export default function App(){
   };
 
   const enterOpenHome=async oh=>{
-    setOpenHome(oh);setScreen("open");setBFilters([]);
+    setOpenHome(oh);setScreen("open");setBFilters([]);setPFilter({});
     // (n8n warm-up ping removed to conserve executions)
     if(oh._demo) return;
     // Instant: show cached / in-memory buyers so the list appears with no spinner…
@@ -5452,13 +5522,15 @@ export default function App(){
 
   // Fetch this property's full open-home list (past + upcoming) when the Inspections view is
   // opened — it groups buyers under each dated inspection session.
+  // Loaded on open-enter (not just the Inspections view) so the "Came through which open"
+  // filter chips are ready the moment the Filter dropdown is opened.
   useEffect(()=>{
-    if(bView!=="inspections"||!openHome||openHome._demo) return;
+    if(!openHome||openHome._demo) return;
     const pid=openHome.propertyId||openHome.id;
     if(propOpensFor===pid) return;
     Attio.getPropertyOpens(pid).then(l=>{ setPropOpens(l||[]); setPropOpensFor(pid); }).catch(()=>{ setPropOpens([]); setPropOpensFor(pid); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[bView,openHome?.id]);
+  },[openHome?.id]);
 
   // "Add to this open" (buyer card): someone already on the listing from an earlier open or
   // an enquiry has turned up again — create their inspection for THIS open (a repeat visit,
@@ -6102,13 +6174,16 @@ export default function App(){
         {!isDemo&&<div style={{display:"flex",justifyContent:"flex-end",marginBottom:6}}>
           <button onClick={refreshBuyers} disabled={buyersLoading} style={{display:"inline-flex",alignItems:"center",gap:6,background:"none",border:"none",color:BLUE_D,fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif",opacity:buyersLoading?0.5:1}}>{buyersLoading?"Refreshing…":"↻ Refresh buyers"}</button>
         </div>}
-        {/* Filter — a single dropdown to organise callbacks by interest / contract / repeat */}
-        {propAll.length>0&&<ViewFilter view={bView} onChange={setBView} options={[
-          {k:"interest",l:"Interest",n:propReal.length},
-          {k:"inspections",l:"Inspections",n:propReal.length},
-          {k:"contracts",l:"Contracts",n:contractsList.length},
-          {k:"enquiries",l:"Enquiries",n:enquiries.length},
-        ]}/>}
+        {/* View picker (organise/sort) + multi-select Filter (narrow by interest/contract/open) */}
+        {propAll.length>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"4px 0 12px"}}>
+          <ViewFilter view={bView} onChange={setBView} options={[
+            {k:"interest",l:"Interest",n:propReal.length},
+            {k:"inspections",l:"Inspections",n:propReal.length},
+            {k:"contracts",l:"Contracts",n:contractsList.length},
+            {k:"enquiries",l:"Enquiries",n:enquiries.length},
+          ]}/>
+          <BuyerFacetFilter filter={pFilter} setFilter={setPFilter} opens={pfOpens}/>
+        </div>}
 
         {buyersLoading&&<div style={{textAlign:"center",padding:"24px"}}><div className="sp"/></div>}
 
@@ -6117,31 +6192,32 @@ export default function App(){
           <div className="sec-lbl" style={{padding:"2px 0 10px"}}>{filteredBuyers.length} {bView==="enquiries"?(filteredBuyers.length===1?"enquiry":"enquiries"):(filteredBuyers.length===1?"buyer":"buyers")}</div>
           {filteredBuyers.some(b=>b.mobile)&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:12,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Text these {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
           {filteredBuyers.length===0
-            ? <div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>{bView==="enquiries"?"No enquiries yet.":"No contracts sent yet."}</div>
+            ? <div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>{pfActive?<>No buyers match this filter. <span onClick={()=>setPFilter({})} style={{color:BLUE_D,fontWeight:800,cursor:"pointer"}}>Clear</span></>:bView==="enquiries"?"No enquiries yet.":"No contracts sent yet."}</div>
             : filteredBuyers.map(b=>rowOf(b,"f"))}
         </>}
 
         {/* Interest = At this open + all buyers, sorted hottest first */}
         {!buyersLoading&&bView==="interest"&&<>
-          {filteredBuyers.filter(b=>b.mobile).length>0&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:14,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Text all {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
-          {!openHome._listing&&<>
-            <div className="sec-lbl" style={{padding:"2px 0 10px"}}>At this open{pbReal.length?` · ${pbReal.length}`:""}</div>
-            {pbReal.length===0&&<div style={{textAlign:"center",padding:"36px 16px",color:"#C0B8A8"}}>
+          {filteredBuyers.filter(b=>b.mobile).length>0&&<button onClick={()=>setShowBulk(true)} style={{width:"100%",padding:"12px",marginBottom:14,fontSize:13.5,fontWeight:800,borderRadius:11,border:"none",background:BLUE_D,color:"#fff",cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Text{pfActive?" these":" all"} {filteredBuyers.filter(b=>b.mobile).length} buyer{filteredBuyers.filter(b=>b.mobile).length===1?"":"s"}</button>}
+          {pfActive&&filteredBuyers.length===0&&enquiriesF.length===0&&<div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>No buyers match this filter. <span onClick={()=>setPFilter({})} style={{color:BLUE_D,fontWeight:800,cursor:"pointer"}}>Clear</span></div>}
+          {!openHome._listing&&(pbRealF.length>0||!pfActive)&&<>
+            <div className="sec-lbl" style={{padding:"2px 0 10px"}}>At this open{pbRealF.length?` · ${pbRealF.length}`:""}</div>
+            {pbRealF.length===0&&!pfActive&&<div style={{textAlign:"center",padding:"36px 16px",color:"#C0B8A8"}}>
               <div style={{fontSize:36,marginBottom:10}}>👥</div>
               <div style={{fontSize:14,lineHeight:1.5}}>No buyers yet — tap Add buyer to register the first.</div>
             </div>}
-            {pbReal.slice().sort(byInterest).map(b=>rowOf(b,"o"))}
+            {pbRealF.slice().sort(byInterest).map(b=>rowOf(b,"o"))}
           </>}
-          {(propExtraReal.length>0||openHome._listing)&&<>
+          {(propExtraRealF.length>0||(openHome._listing&&!pfActive))&&<>
             <div className="sec-lbl" style={{padding:openHome._listing?"2px 0 4px":"20px 0 4px"}}>{openHome._listing?"Buyers · this property":"All buyers · this property"}</div>
             <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Everyone registered to this property to date — call back, add notes or send a contract any day.</div>
-            {propExtraReal.length===0&&openHome._listing&&<div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8"}}><div style={{fontSize:36,marginBottom:10}}>👥</div><div style={{fontSize:14,lineHeight:1.5}}>No buyers registered on this listing yet — tap Add buyer to add one.</div></div>}
-            {propExtraReal.slice().sort(byInterest).map(b=>rowOf(b,"p"))}
+            {propExtraRealF.length===0&&openHome._listing&&!pfActive&&<div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8"}}><div style={{fontSize:36,marginBottom:10}}>👥</div><div style={{fontSize:14,lineHeight:1.5}}>No buyers registered on this listing yet — tap Add buyer to add one.</div></div>}
+            {propExtraRealF.slice().sort(byInterest).map(b=>rowOf(b,"p"))}
           </>}
-          {enquiries.length>0&&<>
-            <div className="sec-lbl" style={{padding:"24px 0 4px"}}>Enquiries · {enquiries.length}</div>
+          {enquiriesF.length>0&&<>
+            <div className="sec-lbl" style={{padding:"24px 0 4px"}}>Enquiries · {enquiriesF.length}</div>
             <div style={{fontSize:12,color:BROWN_L,padding:"0 0 10px",lineHeight:1.4}}>Online enquiries from realestate.com.au &amp; Domain — lower priority than buyers who've inspected.</div>
-            {enquiries.map(b=>rowOf(b,"e"))}
+            {enquiriesF.map(b=>rowOf(b,"e"))}
           </>}
         </>}
 
@@ -6153,9 +6229,9 @@ export default function App(){
             if(propOpensFor!==pid) return <div style={{textAlign:"center",padding:"24px"}}><div className="sp"/></div>;
             const sorted=(propOpens||[]).slice().sort((a,b)=>{const da=openStartAt(a),db=openStartAt(b);return (db?db.getTime():0)-(da?da.getTime():0);});
             const shown=new Set(); const groups=[];
-            for(const o of sorted){ const bs=propReal.filter(b=>(b.openHomeIds||[]).includes(o.id)); if(bs.length){ bs.forEach(b=>shown.add(b.id)); groups.push({o,bs}); } }
-            const orphans=propReal.filter(b=>!shown.has(b.id));
-            if(groups.length===0&&orphans.length===0) return <div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>No inspections recorded yet.</div>;
+            for(const o of sorted){ const bs=propRealF.filter(b=>(b.openHomeIds||[]).includes(o.id)); if(bs.length){ bs.forEach(b=>shown.add(b.id)); groups.push({o,bs}); } }
+            const orphans=propRealF.filter(b=>!shown.has(b.id));
+            if(groups.length===0&&orphans.length===0) return <div style={{textAlign:"center",padding:"30px 16px",color:"#C0B8A8",fontSize:14}}>{pfActive?<>No buyers match this filter. <span onClick={()=>setPFilter({})} style={{color:BLUE_D,fontWeight:800,cursor:"pointer"}}>Clear</span></>:"No inspections recorded yet."}</div>;
             return <>
               {groups.map(({o,bs})=><div key={o.id}>
                 <div className="sec-lbl" style={{padding:"14px 0 8px",display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
