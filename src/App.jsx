@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import wordmark from "./assets/savvi-wordmark.png";
 
 
@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v91-places-autocomplete";
+const BUILD = "v92-desktop-inspections";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3605,6 +3605,19 @@ const CRM_CSS = `
 .crm-lcard .a{font-family:'Newsreader',serif;font-size:18px;font-weight:700;color:${ESPRESSO};}
 .crm-lcard .s{font-size:12.5px;color:${BROWN_L};margin-top:3px;}
 .crm-bulkbar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:${CREAM};border-top:1px solid ${SAND_D};font-size:12.5px;font-weight:700;color:${BROWN};}
+.crm-subfilters{display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:9px 14px;border-bottom:1px solid ${SAND};}
+.crm-seg{display:inline-flex;background:${LINEN};border:1px solid ${SAND_D};border-radius:9px;padding:2px;}
+.crm-seg button{border:none;background:none;color:${BROWN_M};font-weight:700;font-size:12px;padding:5px 12px;border-radius:7px;cursor:pointer;font-family:inherit;}
+.crm-seg button.on{background:${WHITE};color:${BROWN};box-shadow:0 1px 2px rgba(49,30,16,.12);}
+.crm-came{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.crm-came .lbl{font-size:10.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:${BROWN_L};margin-right:2px;}
+.crm-came .fchip{border:1px solid ${SAND_D};background:${WHITE};color:${BROWN_M};border-radius:100px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer;}
+.crm-came .fchip.on{background:${BLUE};color:#fff;border-color:${BLUE};}
+.crm-came .fchip .n{opacity:.6;margin-left:4px;font-weight:600;}
+.crm-came .crm-clearx{border:none;background:none;color:${BLUE_D};font-weight:800;font-size:12px;cursor:pointer;font-family:inherit;}
+.crm-tbl tr.grouphdr td{background:${CREAM};border-top:1px solid ${SAND_D};padding:7px 14px;font-size:11px;font-weight:800;letter-spacing:.4px;color:${BROWN};text-transform:uppercase;}
+.crm-tbl tr.grouphdr .gh-agent{color:${BROWN_L};font-weight:700;text-transform:none;letter-spacing:0;}
+.crm-tbl tr.grouphdr .gh-n{float:right;color:${BROWN_L};font-weight:700;text-transform:none;letter-spacing:0;}
 .heat{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:800;padding:2px 7px;border-radius:6px;font-variant-numeric:tabular-nums;}
 .heat.h{background:#FDE7DF;color:#C0392B;}.heat.m{background:#FBF0D8;color:#B7770D;}.heat.l{background:${LINEN};color:${BROWN_L};}
 .ibadge.sm{font-size:10.5px;padding:2px 8px;}
@@ -3926,8 +3939,12 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const pb=crm.pb||[], propAll=crm.propAll||[], propReal=crm.propReal||[], enquiries=crm.enquiries||[];
   const isLive=sel&&!sel._listing;
   const [wsel,setWsel]=useState({}); const [wbulk,setWbulk]=useState(false);
-  useEffect(()=>{ setWsel({}); },[sel?.id]);
-  const tRows=useMemo(()=>{ const src=tf==="enquiry"?enquiries:tf==="open"?pb.filter(b=>!b.isEnquiry):propReal; const q=tq.trim().toLowerCase(); return src.filter(b=>tf==="all"||tf==="enquiry"||tf==="open"?true:tf==="contract"?!!b.contractSent:tf==="repeat"?(b.visits||1)>1:tf==="offer"?(b.notes||[]).some(n=>/^\s*\[(Offer|Bid registration)\]/i.test(n.text||"")):b.interest===tf).filter(b=>!q||(b.name||"").toLowerCase().includes(q)||(b.mobile||"").includes(q)||(b.email||"").toLowerCase().includes(q)).sort((a,b)=>(({hot:3,watching:2,cool:1})[b.interest]||0)-(({hot:3,watching:2,cool:1})[a.interest]||0)||buyerHeat(b).score-buyerHeat(a).score); },[tf,tq,pb,propReal,enquiries]);
+  const [wview,setWview]=useState("list");   // "list" | "insp" — group the buyer table by inspection session
+  const [wOpenF,setWOpenF]=useState({});      // multi-select "came through which open" filter {openId:true}
+  useEffect(()=>{ setWsel({}); setWOpenF({}); setWview("list"); },[sel?.id]);
+  // This property's opens (past + upcoming), newest first — powers the Inspections view + came-through filter.
+  const wsOpens=useMemo(()=>(crm.propOpens||[]).slice().sort((a,b)=>{const da=openStartAt(a),db=openStartAt(b);return (db?db.getTime():0)-(da?da.getTime():0);}),[crm.propOpens]);
+  const tRows=useMemo(()=>{ const src=tf==="enquiry"?enquiries:tf==="open"?pb.filter(b=>!b.isEnquiry):propReal; const q=tq.trim().toLowerCase(); const _of=Object.keys(wOpenF).filter(k=>wOpenF[k]); return src.filter(b=>tf==="all"||tf==="enquiry"||tf==="open"?true:tf==="contract"?!!b.contractSent:tf==="repeat"?(b.visits||1)>1:tf==="offer"?(b.notes||[]).some(n=>/^\s*\[(Offer|Bid registration)\]/i.test(n.text||"")):b.interest===tf).filter(b=>!q||(b.name||"").toLowerCase().includes(q)||(b.mobile||"").includes(q)||(b.email||"").toLowerCase().includes(q)).filter(b=>!_of.length||_of.some(id=>(b.openHomeIds||[]).includes(id))).sort((a,b)=>(({hot:3,watching:2,cool:1})[b.interest]||0)-(({hot:3,watching:2,cool:1})[a.interest]||0)||buyerHeat(b).score-buyerHeat(a).score); },[tf,tq,pb,propReal,enquiries,wOpenF]);
   const openBuyer=(b)=>{ crm.setActive(b); crm.setShowDetail(true); };
   const wselected=tRows.filter(b=>wsel[b.id]);
   const wAllOn=tRows.length>0&&tRows.every(b=>wsel[b.id]);
@@ -3937,6 +3954,22 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const allOhs=[...(opens||[]),...(allListings||[]).map(listingOh)];
   const renderWorkspace=()=>{
     const oh=sel; const loading=crm.buyersLoading;
+    const rowTr=(b)=>{ const ln=crmHumanNote(b); const fs=formStatus(b); const co=contractClicks(b.contractOpens,b.resendId).length; return <tr key={b.id} className="r" onClick={()=>openBuyer(b)}>
+      <td onClick={e=>{ e.stopPropagation(); setWsel(s=>({...s,[b.id]:!s[b.id]})); }}><span className={`crm-ck${wsel[b.id]?" on":""}`}>{wsel[b.id]?"✓":""}</span></td>
+      <td><div style={{display:"flex",alignItems:"center",gap:10}}><div className="av" style={{background:b.col||crmColor(b.name),width:30,height:30,fontSize:11}}>{b.initials||crmInitials(b.name)}</div><div><div className="nm">{b.name}</div><div className="mut">{b.email||""}</div></div></div></td>
+      <td className="num">{b.mobile||<span className="mut">—</span>}</td>
+      <td><IBadge v={b.interest} dash/></td>
+      <td><HeatBadge b={b}/></td>
+      <td>{b.contractSent?<span className={`chip ${co?"ok":"info"}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{co?`Opened ${co}×`:"Sent"}</span>:<span className="mut">—</span>}</td>
+      <td>{fs?<span className={`chip ${fs.c}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{fs.t}</span>:<span className="mut">—</span>}</td>
+      <td className="num">{b.isEnquiry?<span className="mut">enquiry</span>:(b.visits||1)}</td>
+      <td className="wrap" style={{minWidth:260,maxWidth:520}}><div className="mut" style={{whiteSpace:"normal",lineHeight:1.4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{ln?ln.text:"—"}</div>{ln&&ln.ts&&<div className="mut" style={{fontSize:11,marginTop:2}}>{crmAgo(ln.ts)}{ln.agent?` · ${ln.agent}`:""}</div>}</td>
+    </tr>; };
+    const thead=<thead><tr>
+      <th className="ns" style={{width:34}}><span className={`crm-ck${wAllOn?" on":""}`} onClick={()=>{ const s={}; if(!wAllOn) tRows.forEach(b=>{ s[b.id]=true; }); setWsel(s); }}>{wAllOn?"✓":""}</span></th>
+      <th className="ns">Buyer</th><th className="ns">Mobile</th><th className="ns">Interest</th><th className="ns">Heat</th><th className="ns">Contract</th><th className="ns">Offer / bid</th><th className="ns">Visits</th><th className="ns">Last note</th>
+    </tr></thead>;
+    const inspGroups=()=>{ const shown=new Set(); const gs=[]; for(const o of wsOpens){ const bs=tRows.filter(b=>(b.openHomeIds||[]).includes(o.id)); if(bs.length){ bs.forEach(b=>shown.add(b.id)); gs.push({o,bs}); } } const orphans=tRows.filter(b=>!shown.has(b.id)); return {gs,orphans}; };
     return <div className="ws">
       <div className="ws-head">
         <div className="ws-nav">
@@ -3979,26 +4012,30 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
           {tFilters.map(([k,l,n])=><button key={k} className={`fchip${tf===k?" on":""}`} onClick={()=>setTf(k)}>{l}<span className="n">{n}</span></button>)}
           <input value={tq} onChange={e=>setTq(e.target.value)} placeholder="Search this listing's buyers…"/>
         </div>
+        {wsOpens.length>0&&<div className="crm-subfilters">
+          <div className="crm-seg">
+            <button className={wview==="list"?"on":""} onClick={()=>setWview("list")}>List</button>
+            <button className={wview==="insp"?"on":""} onClick={()=>setWview("insp")}>By inspection</button>
+          </div>
+          {wsOpens.length>1&&<div className="crm-came">
+            <span className="lbl">Came through</span>
+            {wsOpens.map(o=>{ const on=!!wOpenF[o.id]; const n=propReal.filter(b=>(b.openHomeIds||[]).includes(o.id)).length; return <button key={o.id} className={`fchip${on?" on":""}`} onClick={()=>setWOpenF(f=>{ const m={...f}; if(m[o.id]) delete m[o.id]; else m[o.id]=true; return m; })}>{openWhen(o)||o.date}{o.agent_name?` · ${o.agent_name}`:""}<span className="n">{n}</span></button>; })}
+            {Object.keys(wOpenF).some(k=>wOpenF[k])&&<button className="crm-clearx" onClick={()=>setWOpenF({})}>Clear</button>}
+          </div>}
+        </div>}
         {wselected.length>0&&<div className="crm-bulkbar">{wselected.length} selected<button className="crm-btn p" disabled={!wselected.some(b=>b.mobile)} onClick={()=>setWbulk(true)}>Text {wselected.length}</button><button className="crm-btn" disabled={!wselected.some(b=>b.email)} onClick={()=>emailBuyers(wselected)}>Email {wselected.filter(b=>b.email).length}</button><button className="crm-btn" onClick={()=>setWsel({})}>Clear</button></div>}
         {loading&&<div style={{textAlign:"center",padding:40}}><div className="sp"/></div>}
         {!loading&&tRows.length===0&&<div className="crm-empty"><div className="em">👥</div><div>{propAll.length?"No buyers match that filter.":"No buyers on this listing yet."}</div></div>}
-        {!loading&&tRows.length>0&&<table className="crm-tbl">
-          <thead><tr>
-            <th className="ns" style={{width:34}}><span className={`crm-ck${wAllOn?" on":""}`} onClick={()=>{ const s={}; if(!wAllOn) tRows.forEach(b=>{ s[b.id]=true; }); setWsel(s); }}>{wAllOn?"✓":""}</span></th>
-            <th className="ns">Buyer</th><th className="ns">Mobile</th><th className="ns">Interest</th><th className="ns">Heat</th><th className="ns">Contract</th><th className="ns">Offer / bid</th><th className="ns">Visits</th><th className="ns">Last note</th>
-          </tr></thead>
-          <tbody>{tRows.map(b=>{ const ln=crmHumanNote(b); const fs=formStatus(b); const co=contractClicks(b.contractOpens,b.resendId).length; return <tr key={b.id} className="r" onClick={()=>openBuyer(b)}>
-            <td onClick={e=>{ e.stopPropagation(); setWsel(s=>({...s,[b.id]:!s[b.id]})); }}><span className={`crm-ck${wsel[b.id]?" on":""}`}>{wsel[b.id]?"✓":""}</span></td>
-            <td><div style={{display:"flex",alignItems:"center",gap:10}}><div className="av" style={{background:b.col||crmColor(b.name),width:30,height:30,fontSize:11}}>{b.initials||crmInitials(b.name)}</div><div><div className="nm">{b.name}</div><div className="mut">{b.email||""}</div></div></div></td>
-            <td className="num">{b.mobile||<span className="mut">—</span>}</td>
-            <td><IBadge v={b.interest} dash/></td>
-            <td><HeatBadge b={b}/></td>
-            <td>{b.contractSent?<span className={`chip ${co?"ok":"info"}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{co?`Opened ${co}×`:"Sent"}</span>:<span className="mut">—</span>}</td>
-            <td>{fs?<span className={`chip ${fs.c}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{fs.t}</span>:<span className="mut">—</span>}</td>
-            <td className="num">{b.isEnquiry?<span className="mut">enquiry</span>:(b.visits||1)}</td>
-            <td className="wrap" style={{minWidth:260,maxWidth:520}}><div className="mut" style={{whiteSpace:"normal",lineHeight:1.4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{ln?ln.text:"—"}</div>{ln&&ln.ts&&<div className="mut" style={{fontSize:11,marginTop:2}}>{crmAgo(ln.ts)}{ln.agent?` · ${ln.agent}`:""}</div>}</td>
-          </tr>; })}</tbody>
-        </table>}
+        {!loading&&tRows.length>0&&(wview==="insp"&&wsOpens.length>0 ? (()=>{ const {gs,orphans}=inspGroups(); return <table className="crm-tbl">{thead}<tbody>
+          {gs.map(({o,bs})=><Fragment key={o.id}>
+            <tr className="grouphdr"><td colSpan={9}><span className="gh-when">{openWhen(o)||o.date}{o.end_time?`–${o.end_time}`:""}</span>{o.agent_name?<span className="gh-agent"> · {o.agent_name}</span>:null}<span className="gh-n">{bs.length} buyer{bs.length===1?"":"s"}</span></td></tr>
+            {bs.map(rowTr)}
+          </Fragment>)}
+          {orphans.length>0&&<Fragment key="__orphans">
+            <tr className="grouphdr"><td colSpan={9}><span className="gh-when">Not tied to a dated inspection</span><span className="gh-n">{orphans.length}</span></td></tr>
+            {orphans.map(rowTr)}
+          </Fragment>}
+        </tbody></table>; })() : <table className="crm-tbl">{thead}<tbody>{tRows.map(rowTr)}</tbody></table>)}
       </div>
     </div>;
   };
@@ -5984,7 +6021,7 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
+  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
