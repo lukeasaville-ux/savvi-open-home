@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v92-desktop-inspections";
+const BUILD = "v93-campaign-report";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -925,6 +925,15 @@ const AVATAR_COLS=["#C75B3A","#5A7FBF","#8B4513","#2B5F3A","#6B4EAF","#1A5276","
 const SOFT_LAUNCH_URL="https://www.instagram.com/channel/AbaX4MTIDSizmiyT/";
 // Full agent name for the sign-off (backend `who` may be a first name only).
 const AGENT_FULL={ "Luke":"Luke Saville", "Sam":"Sam Robinson" };
+// Vendor-facing interest groupings for the FULL campaign report. Buyers are bucketed by
+// their actual interest, each heading a bold sub-head in the update. Contract status is
+// NOT a group — a contract-taker isn't automatically serious — it's woven into the
+// buyer's own line instead (see buyerDetail). Retune a label here, changes everywhere.
+const CAMP_GROUPS=[
+  { key:"hot",      label:"Highly engaged" },
+  { key:"watching", label:"Still deciding" },
+  { key:"cool",     label:"No further interest" },
+];
 // Build the post-registration welcome SMS: personal greeting → walkthrough reel (only
 // if the property has one on file) → Soft Launch Club invite → full-name sign-off.
 // Blank lines between each part so it reads clean. Built client-side + sent via the
@@ -2543,7 +2552,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
 /* ════════════════════════════════════════════
    VENDOR SUMMARY SHEET
 ════════════════════════════════════════════ */
-function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed}){
+function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentName,selIds}){
   const[sumText,setSumText]=useState("");
   const[loading,setLoading]=useState(false);
   const[copied,setCopied]=useState(false);
@@ -2551,91 +2560,139 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed}){
   const editedRef=useRef(false);           // same flag, readable synchronously inside an in-flight generation
   const[polishing,setPolishing]=useState(false); // AI is upgrading the instant draft in the background
   const[mode,setMode]=useState("open"); // "open" = quick post-open wrap (auto) · "campaign" = full weekly report
+  const[incl,setIncl]=useState({});      // campaign only: which buyers are in the report (id→bool)
+  const[pick,setPick]=useState(false);   // the buyer chooser panel is open
   const genSeq=useRef(0); // ignore a slower in-flight generation once you've switched mode
   const drag=useSheetDrag(onClose);
+  const agentFirst=String(agentName||"Luke").trim().split(/\s+/)[0]||"Luke";
 
-  // Detailed, casual vendor wrap: a recap line (keen / contracts / repeat visits)
-  // plus a by-line for every buyer built from their notes, interest, visit count
-  // and contract status. Reads like Luke firing off a quick SMS to the vendor,
-  // and is built client-side so it's always detailed and reliable. (An AI-polished
-  // version in Luke's exact voice returns once the n8n prompt is updated — #22.)
-  const build=useCallback(()=>{
-    // Campaign mode summarises the WHOLE campaign (allBuyers); post-open uses today's attendees.
-    // This is the fallback shown only if the AI write-up fails — it must never say "no groups"
-    // when the campaign clearly has buyers, which was the bug behind the empty report.
-    const src=(mode==="campaign"&&allBuyers&&allBuyers.length)?allBuyers:buyers;
-    if(!openHome||!src.length){setSumText(`Hi [Vendor],\n\nNo groups have come through ${openHome?.address||"the open"} just yet. I'll send the wrap-up as soon as we've had some numbers.\n\n— Luke, Savvi`);return;}
-    const first=n=>{const p=String(n||"").trim().split(/\s+/);return p[0]||"They";};
+  // Campaign report runs over the WHOLE campaign (allBuyers); post-open over today's lot.
+  const campSrc=(allBuyers&&allBuyers.length)?allBuyers:buyers;
+  const campNamed=useMemo(()=>campSrc.filter(b=>!b.isEnquiry),[campSrc]);       // named in the report
+  const enquiryCount=useMemo(()=>campSrc.filter(b=>b.isEnquiry).length,[campSrc]); // counted, not named
+
+  // First name(s) only — never surface a full name to a vendor.
+  const firstName=n=>String(n||"").trim().split(/\s+/)[0]||"They";
+  // Group purely by interest (contract status lives in the buyer's line, not a group).
+  const groupOf=b=>b.interest==="hot"?"hot":b.interest==="cool"?"cool":"watching";
+  // Contract intel woven into the line: having a contract isn't the same as being serious,
+  // so we report whether they've actually opened it (opens = genuine due diligence).
+  const contractLine=b=>{
+    if(!b.contractSent) return "";
+    const n=contractClicks(b.contractOpens,b.resendId).length;
+    return n===0 ? "received the contract but hasn't opened it yet"
+      : n===1 ? "received the contract and has opened it once so far"
+      : `received the contract and has opened it ${n} separate times, which suggests they're doing their due diligence`;
+  };
+  // Per-buyer detail line: their own notes (cleaned of system entries + PII, last few),
+  // then the contract status if they've been sent one. Sentence-cased for a clean read.
+  const cap=s=>s?s.charAt(0).toUpperCase()+s.slice(1):s;
+  const buyerDetail=b=>{
+    const notes=campCleanNotes(b).map(stripNotePII).filter(Boolean).slice(-3).join(" ").replace(/\s+/g," ").trim();
+    const cl=contractLine(b);
+    const parts=[];
+    if(notes) parts.push(cap(notes.replace(/[.\s]+$/,"")));
+    if(cl) parts.push(cap(cl));
+    return parts.join(". ")||cap(b.interest==="cool"?OUT_NO_NOTE:VENDOR_NO_NOTE);
+  };
+
+  // Seed the chooser: honour a desktop table selection if one was passed, else everyone.
+  const initIncl=useCallback(()=>{
+    const ids=campNamed.map(b=>b.id);
+    const sel=(selIds||[]).filter(id=>ids.includes(id));
+    const use=sel.length?sel:ids; // a stray/empty selection must never produce an empty report
+    const m={}; ids.forEach(id=>{ m[id]=use.includes(id); }); return m;
+  },[campNamed,selIds]);
+
+  // POST-OPEN quick wrap — casual recap + a line per buyer (same voice as before).
+  const buildOpen=useCallback(()=>{
+    const src=buyers;
+    if(!openHome||!src.length){setSumText(`Hi [Vendor],\n\nNo groups have come through ${openHome?.address||"the open"} just yet. I'll send the wrap-up as soon as we've had some numbers.\n\n— ${agentFirst}, Savvi`);return;}
     const nw=n=>["","one","two","three","four","five","six","seven","eight","nine","ten"][n]||String(n);
     const joinNat=a=>a.length<=1?(a[0]||""):`${a.slice(0,-1).join(", ")} and ${a[a.length-1]}`;
     const keen=src.filter(b=>b.interest==="hot"||b.interest==="watching");
     const contracts=src.filter(b=>b.contractSent);
     const repeats=src.filter(b=>(b.visits||1)>1);
-    // Natural-language recap that weaves in the counts, like a quick note to the vendor.
     const extra=[];
     if(keen.length) extra.push(`${nw(keen.length)} ${keen.length===1?"is":"are"} keen`);
     if(contracts.length) extra.push(`${nw(contracts.length)} asked for a contract`);
     if(repeats.length) extra.push(`${nw(repeats.length)} came back for a repeat look`);
     const recap=`We had ${src.length} ${src.length===1?"group":"groups"} through${extra.length?`, ${joinNat(extra)}`:""}.`;
-    // A line per buyer: their notes CLEANED of system entries + PII (never leak emails/phones),
-    // capped to the last few, with a light default when there's nothing to say.
-    const lines=src.map(b=>{
-      const notes=campCleanNotes(b).map(stripNotePII).filter(Boolean).slice(-3).join(" ").replace(/\s+/g," ").trim();
-      const detail=notes||(b.contractSent?"took a contract, we'll follow them up early next week":(b.interest==="cool"?OUT_NO_NOTE:VENDOR_NO_NOTE));
-      return `${first(b.name)} — ${detail}`;
-    });
-    const opener=mode==="campaign"?`Quick campaign update on ${openHome?.address||"the property"}.`:`Quick wrap from today's open at ${openHome?.address||"the property"}.`;
-    setSumText(`Hi [Vendor],\n\n${opener} ${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow these buyers up and be in touch early next week.\n\n— Luke, Savvi`);
-  },[openHome,buyers,allBuyers,mode]);
+    const lines=src.map(b=>`${firstName(b.name)} — ${buyerDetail(b)}`);
+    setSumText(`Hi [Vendor],\n\nQuick wrap from today's open at ${openHome?.address||"the property"}. ${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow these buyers up and be in touch early next week.\n\n— ${agentFirst}, Savvi`);
+  /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[openHome,buyers,agentFirst]);
 
-  // Try the AI vendor summary (backend now writes it in Luke's voice: greeting →
-  // prose recap → a line per buyer → sign-off). Fall back to the detailed
-  // client-built version if the AI is unavailable.
-  const gen=useCallback(async(m)=>{
-    if(!openHome)return;
-    const useMode=m||"open";
-    const seq=++genSeq.current; // this is now the current request
-    const src=useMode==="campaign"?((allBuyers&&allBuyers.length)?allBuyers:buyers):buyers;
-    if(useMode==="campaign"){
-      // Weekly report: structured + Opus-written, so show the spinner while it generates.
-      setPolishing(false);setLoading(true);setSumText("");
-      try{ const t=await aiVendorSummary(openHome,src,useMode); if(genSeq.current!==seq)return; if(t&&t.trim()) setSumText(t); else build(); }
-      catch{ if(genSeq.current===seq) build(); }
-      if(genSeq.current===seq) setLoading(false);
-      return;
+  // FULL CAMPAIGN report — chosen buyers grouped by interest, BOLD headings + BOLD names
+  // (WhatsApp *markup*), the online-enquiry count, a blank Next Steps for the agent to
+  // write, and the week's marketing report links. No AI: deterministic + instant.
+  const buildCampaign=useCallback((inc)=>{
+    const B=t=>`*${t}*`; // WhatsApp bold
+    const chosen=campNamed.filter(b=>inc[b.id]);
+    if(!chosen.length&&!enquiryCount){
+      setSumText(`Hi [Vendor],\n\nNo buyers to report on ${openHome?.address||"the property"} just yet. I'll send the full update as soon as we've had some through.\n\n— ${agentFirst}, Savvi`);return;
     }
-    // Post-open wrap: show a draft straight from OUR notes INSTANTLY (no spinner), then
-    // quietly upgrade it to the polished version in the background — so it never feels slow.
-    setLoading(false); build(); setPolishing(true);
-    try{ const t=await aiVendorSummary(openHome,src,useMode); if(genSeq.current!==seq)return; if(t&&t.trim()&&!editedRef.current) setSumText(t); }
+    const out=[`Hi [Vendor],`];
+    CAMP_GROUPS.forEach(g=>{
+      const gb=chosen.filter(b=>groupOf(b)===g.key);
+      if(!gb.length) return;
+      out.push("", B(g.label));
+      gb.forEach(b=>out.push(`${B(firstName(b.name))} — ${buyerDetail(b)}`));
+    });
+    if(enquiryCount) out.push("", `Plus ${enquiryCount} online ${enquiryCount===1?"enquiry":"enquiries"} this week.`);
+    out.push("", B("Next Steps"), "[Add your next steps here before sending]");
+    const rea=openHome?.reaReportUrl, dom=openHome?.domainReportUrl;
+    if(rea||dom){
+      out.push("", B("Marketing reports"));
+      if(rea) out.push(`realestate.com.au report: ${rea}`);
+      if(dom) out.push(`Domain report: ${dom}`);
+    }
+    out.push("", `— ${agentFirst}, Savvi`);
+    setSumText(out.join("\n"));
+  /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[campNamed,enquiryCount,openHome,agentFirst]);
+
+  // Post-open: instant client draft, then quietly upgrade to the AI-polished version.
+  const genOpen=useCallback(async()=>{
+    if(!openHome)return;
+    const seq=++genSeq.current;
+    setLoading(false); buildOpen(); setPolishing(true);
+    try{ const t=await aiVendorSummary(openHome,buyers,"open"); if(genSeq.current!==seq)return; if(t&&t.trim()&&!editedRef.current) setSumText(t); }
     catch{ /* keep the instant draft */ }
     if(genSeq.current===seq) setPolishing(false);
-  },[openHome,buyers,allBuyers,build]);
-  // On open, instantly generate the quick post-open wrap (unchanged behaviour).
-  const lastSig=useRef("");
-  const sigFor=(m)=>vendorSig(m, m==="campaign"?((allBuyers&&allBuyers.length)?allBuyers:buyers):buyers);
-  // On open: show the quick post-open wrap straight away (button is instant; the refresh
-  // runs in the background).
-  useEffect(()=>{ if(open){ setMode("open"); setEdited(false); editedRef.current=false; const sig=sigFor("open"); lastSig.current=sig;
-      if(precomputed&&precomputed.sig===sig&&precomputed.text){ setLoading(false); setPolishing(false); setSumText(precomputed.text); } // ready in the background → instant
-      else gen("open");
-    } /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[open]);
-  // Regenerate when you switch mode, or when a background refresh brings newer buyer data
-  // (e.g. Sam's latest note) — never while you're mid-edit, and skip if nothing changed.
-  useEffect(()=>{ if(!open||edited) return; const s=sigFor(mode); if(s===lastSig.current) return; lastSig.current=s; gen(mode); /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[buyers,allBuyers,mode]);
-  const switchMode=useCallback((m)=>{ setEdited(false); editedRef.current=false; setMode(m); },[]);
+  },[openHome,buyers,buildOpen]);
 
-  // Send the (edited) update via WhatsApp: opens WhatsApp with the text pre-filled
-  // so you pick the listing's group and hit send — a chance to eyeball it first.
+  const lastSig=useRef("");
+  // On open: show the post-open wrap straight away (precomputed if it's ready).
+  useEffect(()=>{ if(open){ setMode("open"); setEdited(false); editedRef.current=false; setPick(false);
+      const sig=vendorSig("open",buyers); lastSig.current=sig;
+      if(precomputed&&precomputed.sig===sig&&precomputed.text){ setLoading(false); setPolishing(false); setSumText(precomputed.text); }
+      else genOpen();
+    } /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[open]);
+  // A background buyer-data refresh (e.g. Sam's latest note) keeps the active view current —
+  // never while you're mid-edit.
+  useEffect(()=>{ if(!open||edited) return;
+    if(mode==="campaign"){ const m0=initIncl(); setIncl(m0); buildCampaign(m0); }
+    else { const s=vendorSig("open",buyers); if(s===lastSig.current) return; lastSig.current=s; genOpen(); }
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[buyers,allBuyers]);
+
+  const switchMode=useCallback((m)=>{
+    setEdited(false); editedRef.current=false; setMode(m);
+    if(m==="campaign"){ const m0=initIncl(); setIncl(m0); genSeq.current++; setLoading(false); setPolishing(false); buildCampaign(m0); setPick(true); }
+    else { setPick(false); const sig=vendorSig("open",buyers); lastSig.current=sig; genOpen(); }
+  },[initIncl,buildCampaign,genOpen,buyers]);
+
+  // Tick a buyer in/out → rebuild immediately (explicit intent, overrides any hand-edit).
+  const toggle=useCallback(id=>{ setIncl(prev=>{ const n={...prev,[id]:!prev[id]}; setEdited(false); editedRef.current=false; buildCampaign(n); return n; }); },[buildCampaign]);
+  const setAll=useCallback(v=>{ const n={}; campNamed.forEach(b=>n[b.id]=v); setIncl(n); setEdited(false); editedRef.current=false; buildCampaign(n); },[campNamed,buildCampaign]);
+
+  // Send the (edited) update via WhatsApp — text pre-filled, so you pick the group and send.
   const waSend=useCallback(()=>{
     const t=(sumText||"").trim(); if(!t) return;
     const url="https://wa.me/?text="+encodeURIComponent(t);
     const w=window.open(url,"_blank"); if(!w) window.location.href=url;
   },[sumText]);
 
-  // Stats reflect the ACTIVE source: the whole campaign in "campaign" mode (so the header
-  // shows real Total/Hot/Watching, not 0/0/0), today's attendees in "open" mode.
-  const statSrc=mode==="campaign"?((allBuyers&&allBuyers.length)?allBuyers:buyers):buyers;
+  const statSrc=mode==="campaign"?campSrc:buyers;
+  const chosenCount=campNamed.filter(b=>incl[b.id]).length;
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
     <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}} {...drag.handlers}>
@@ -2652,6 +2709,25 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed}){
         <div style={{margin:"0 0 10px",padding:3,background:SAND,borderRadius:11,display:"flex",gap:3}}>
           {[["open","Post-open update"],["campaign","Full campaign report"]].map(([k,l])=>{const on=mode===k;return <button key={k} onClick={()=>mode!==k&&switchMode(k)} style={{flex:1,padding:"9px 6px",fontSize:12.5,fontWeight:700,border:"none",borderRadius:9,cursor:"pointer",background:on?"#fff":"transparent",color:on?ESPRESSO:BROWN_L,boxShadow:on?"0 1px 3px rgba(49,30,16,.12)":"none"}}>{l}</button>;})}
         </div>
+        {mode==="campaign"&&campNamed.length>0&&<div style={{margin:"0 0 10px",border:`1px solid ${SAND_D}`,borderRadius:11,overflow:"hidden"}}>
+          <button onClick={()=>setPick(p=>!p)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:LINEN,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:12.5,fontWeight:700,color:ESPRESSO}}>
+            <span>Buyers in this report · {chosenCount}/{campNamed.length}</span><span style={{color:BROWN_L}}>{pick?"▲ hide":"▼ choose"}</span>
+          </button>
+          {pick&&<div style={{padding:"8px 12px 12px",maxHeight:230,overflowY:"auto",background:"#fff"}}>
+            <div style={{display:"flex",gap:8,marginBottom:8}}>
+              <button onClick={()=>setAll(true)} style={{flex:1,padding:"6px",fontSize:11.5,fontWeight:700,border:`1px solid ${SAND_D}`,borderRadius:8,background:SAND,color:ESPRESSO,cursor:"pointer",fontFamily:"inherit"}}>Select all</button>
+              <button onClick={()=>setAll(false)} style={{flex:1,padding:"6px",fontSize:11.5,fontWeight:700,border:`1px solid ${SAND_D}`,borderRadius:8,background:SAND,color:ESPRESSO,cursor:"pointer",fontFamily:"inherit"}}>Clear all</button>
+            </div>
+            {CAMP_GROUPS.map(g=>{ const gb=campNamed.filter(b=>groupOf(b)===g.key); if(!gb.length) return null; return <div key={g.key} style={{marginBottom:8}}>
+              <div style={{fontSize:10.5,fontWeight:800,letterSpacing:.5,textTransform:"uppercase",color:BROWN_L,margin:"4px 0 4px"}}>{g.label} · {gb.length}</div>
+              {gb.map(b=><label key={b.id} style={{display:"flex",alignItems:"center",gap:9,padding:"6px 2px",cursor:"pointer",fontSize:13.5,color:ESPRESSO}}>
+                <input type="checkbox" checked={!!incl[b.id]} onChange={()=>toggle(b.id)} style={{width:16,height:16,accentColor:GRN,cursor:"pointer"}}/>
+                <span style={{fontWeight:600}}>{firstName(b.name)}</span>
+                {b.contractSent&&<span style={{fontSize:10,color:GRN,fontWeight:700}}>contract</span>}
+              </label>)}
+            </div>; })}
+          </div>}
+        </div>}
         <div className="sum-box">
           <div className="sum-lbl">{mode==="campaign"?"Weekly campaign report · edit before sending":"Update for today's open · edit before sending"}</div>
           {loading&&<div className="sum-loading"><div className="sp"/><div className="sp-txt">Writing the campaign report…</div></div>}
@@ -2691,11 +2767,17 @@ const CAMPAIGN_SYS_PATTERNS = [
 const campIsSysNote = t => CAMPAIGN_SYS_PATTERNS.some(re => re.test(t));
 // A buyer's human notes, cleaned to plain text (system notes dropped, offer/bid
 // bracket tags stripped but their substance kept).
+// Only these bracketed tags carry real vendor-relevant info and are kept (tag stripped).
+// EVERY other leading [tag] — [Bulk SMS], [Bulk Email], [SMS], [Auto-reply], [Follow-up],
+// etc. — is an app/workflow log (often the raw outbound marketing text) and the WHOLE
+// note is dropped, so nothing automated ever leaks into a vendor-facing report.
+const CAMP_KEEP_TAG = /^\s*\[(Offer|Bid registration)\]/i;
 function campCleanNotes(buyer) {
   const out = [];
   (buyer?.notes || []).forEach(n => {
     let t = String(n.text || "").replace(/\s+/g, " ").trim();
     if (!t || campIsSysNote(t)) return;
+    if (/^\s*\[[^\]]+\]/.test(t) && !CAMP_KEEP_TAG.test(t)) return; // non-allowlisted [tag] log → drop
     t = t.replace(/^\s*\[(Offer|Bid registration)\]\s*/i, "").trim();
     if (t) out.push(t);
   });
@@ -3999,7 +4081,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
           <button className="crm-btn" disabled={!propAll.some(b=>b.mobile)} onClick={()=>{ crm.setBFilters([]); crm.setShowBulk(true); }}>Text buyers</button>
           <button className="crm-btn" disabled={!propAll.some(b=>b.email)} onClick={()=>emailBuyers(propReal)}>Email buyers</button>
           {oh.contractUrl?<button className="crm-btn" onClick={()=>crm.openQuickContract(oh)}>Send contract</button>:<ContractUpload compact label="Add contract PDF" propertyId={oh.propertyId} onUploaded={crm.applyContractUrl}/>}
-          <button className="crm-btn" onClick={()=>{ crm.setShowSum(true); if(crm.refreshBuyers) crm.refreshBuyers(); }}>Vendor update</button>
+          <button className="crm-btn" onClick={()=>{ if(crm.setSumSel) crm.setSumSel(Object.keys(wsel).filter(k=>wsel[k])); crm.setShowSum(true); if(crm.refreshBuyers) crm.refreshBuyers(); }}>Vendor update{wselected.length?` (${wselected.length})`:""}</button>
           <button className="crm-btn" onClick={()=>crm.setShowMatch(true)}>Matching buyers</button>
           <button className="crm-btn" onClick={()=>crm.setShowAssistant(true)}>AI assistant</button>
           <button className="crm-btn" onClick={()=>setShowInfo(v=>!v)}>Listing info {showInfo?"▴":"▾"}</button>
@@ -5254,6 +5336,7 @@ export default function App(){
   // Synthetic open context for the searched contact (their most-recent inspection's property),
   // so contract/interest actions target the right inspection.
   const[showSum,setShowSum]=useState(false);
+  const[sumSel,setSumSel]=useState([]); // buyer ids ticked on desktop to seed the campaign-report chooser
   const[showOk,setShowOk]=useState(false);
   const[lastAdded,setLastAdded]=useState(null);
   const[showCtr,setShowCtr]=useState(false);
@@ -6021,7 +6104,7 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
+  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
@@ -6322,7 +6405,7 @@ export default function App(){
       onUpdateDetails={(pid,id,d)=>{ setSearchProfile(a=>a&&{...a,name:d.name,mobile:d.mobile,email:d.email}); if(!isDemo&&searchProfile?.contactId) Attio.updatePerson({id:searchProfile.contactId,name:d.name,email:d.email,mobile:d.mobile}).catch(()=>{}); }}
       onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}} onOpenContact={openContact}
       onSendLink={(kind,channel,b)=>{ if(!b?._attioInspectionId) return false; const url=formLinkUrl(kind,b._attioInspectionId,agentName); const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const logSearch=(text)=>{ const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:AGENT_FULL[agentName]||agentName||""}; setSearchProfile(a=>{ if(!a) return a; const notes=[...(a.notes||[]),note]; if(!isDemo&&a._attioInspectionId){ const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; Attio.updateInspection(a._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); } return {...a,notes}; }); }; if(channel==="text"){ if(!b.mobile) return false; const msg=formLinkMsg(kind,first,addr,url,smsSig(agentName)); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:msg}).catch(()=>{}); logSearch(formSentNote(kind,"text")); return true; } if(channel==="email"){ if(!b.email) return false; Resend.sendFormLink({toEmail:b.email,toName:b.name,agentName,address:searchOpenHome?.address||addr,url,kind}).catch(()=>{}); logSearch(formSentNote(kind,"email")); return true; } return false; }}/>
-    <SummarySheet open={showSum} onClose={()=>setShowSum(false)} openHome={openHome} buyers={pb} allBuyers={propAll} precomputed={openHome?vendorReport.current[openHome.id]:null}/>
+    <SummarySheet open={showSum} onClose={()=>{setShowSum(false);setSumSel([]);}} openHome={openHome} buyers={pb} allBuyers={propAll} precomputed={openHome?vendorReport.current[openHome.id]:null} agentName={agentName} selIds={sumSel}/>
     <MatchSheet open={showMatch} onClose={()=>setShowMatch(false)} openHome={openHome} excludeIds={propAll.map(b=>b.contactId).filter(Boolean)} agentName={agentName} propIndex={propIndex}/>
     <QuickContractSheet
       open={showQuickContract}
