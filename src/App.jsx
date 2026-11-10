@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v94-report-plain-lowvalue";
+const BUILD = "v95-internet-stats";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2556,7 +2556,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
 /* ════════════════════════════════════════════
    VENDOR SUMMARY SHEET
 ════════════════════════════════════════════ */
-function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentName,selIds,initStats,startMode,tableSelect}){
+function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentName,selIds,initStats,startMode,tableSelect,mktStats}){
   const[sumText,setSumText]=useState("");
   const[loading,setLoading]=useState(false);
   const[copied,setCopied]=useState(false);
@@ -2666,14 +2666,24 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
     if(enquiryCount) blocks.push(`Plus ${enquiryCount} online ${enquiryCount===1?"enquiry":"enquiries"} this week.`);
     blocks.push("Next Steps","[Add your next steps here before sending]");
     if(st){
-      const rea=openHome?.reaReportUrl, dom=openHome?.domainReportUrl, ls=["Marketing reports"];
-      if(rea) ls.push(`realestate.com.au report: ${rea}`);
-      if(dom) ls.push(`Domain report: ${dom}`);
-      if(ls.length>1) blocks.push(ls.join("\n"));
+      // Internet stats for this listing, pulled from the Monday REA/Domain inbox sweep
+      // (go.getsavvi.com.au/contracts/marketing-stats.json), matched by address or id.
+      const nm=s=>String(s||"").toLowerCase().replace(/,.*$/,"").replace(/\s+/g," ").trim();
+      const L=mktStats&&mktStats.listings;
+      const ms=L?(L[nm(openHome?.address)]||Object.values(L).find(x=>x.propertyId&&x.propertyId===openHome?.propertyId)):null;
+      if(ms){
+        const wk=mktStats.weekOf?(()=>{try{return " (week of "+new Date(mktStats.weekOf+"T00:00:00").toLocaleDateString("en-AU",{day:"numeric",month:"short"})+")";}catch(e){return "";}})():"";
+        const ls=["Marketing reports"+wk];
+        if(ms.reaViews!=null) ls.push(`realestate.com.au: ${Number(ms.reaViews).toLocaleString()} views this week`);
+        if(ms.reaReportUrl) ls.push(`realestate.com.au report: ${ms.reaReportUrl}`);
+        if(ms.domainViews!=null) ls.push(`Domain: ${Number(ms.domainViews).toLocaleString()} views this week`);
+        if(ms.domainUrl) ls.push(`Domain report: ${ms.domainUrl}`);
+        if(ls.length>1) blocks.push(ls.join("\n"));
+      }
     }
     blocks.push(`— ${agentFirst}, Savvi`);
     setSumText(blocks.join("\n\n"));
-  /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[campNamed,enquiryCount,openHome,agentFirst]);
+  /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[campNamed,enquiryCount,openHome,agentFirst,mktStats]);
 
   // Post-open: instant client draft, then quietly upgrade to the AI-polished version.
   const genOpen=useCallback(async()=>{
@@ -5378,6 +5388,8 @@ export default function App(){
   const[sumSel,setSumSel]=useState([]); // buyer ids ticked on desktop to seed the campaign-report chooser
   const[sumStats,setSumStats]=useState(true);  // "include internet stats (REA + Domain)" in the report
   const[sumStart,setSumStart]=useState("open"); // which mode the vendor-update sheet opens in
+  const[mktStats,setMktStats]=useState(null);  // per-listing REA/Domain stats, refreshed Mondays (public JSON on the droplet)
+  useEffect(()=>{ let on=true; fetch("https://go.getsavvi.com.au/contracts/marketing-stats.json",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(j=>{ if(on&&j&&j.listings) setMktStats(j); }).catch(()=>{}); return ()=>{on=false;}; },[]);
   const[showOk,setShowOk]=useState(false);
   const[lastAdded,setLastAdded]=useState(null);
   const[showCtr,setShowCtr]=useState(false);
@@ -6446,7 +6458,7 @@ export default function App(){
       onUpdateDetails={(pid,id,d)=>{ setSearchProfile(a=>a&&{...a,name:d.name,mobile:d.mobile,email:d.email}); if(!isDemo&&searchProfile?.contactId) Attio.updatePerson({id:searchProfile.contactId,name:d.name,email:d.email,mobile:d.mobile}).catch(()=>{}); }}
       onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}} onOpenContact={openContact}
       onSendLink={(kind,channel,b)=>{ if(!b?._attioInspectionId) return false; const url=formLinkUrl(kind,b._attioInspectionId,agentName); const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const logSearch=(text)=>{ const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:AGENT_FULL[agentName]||agentName||""}; setSearchProfile(a=>{ if(!a) return a; const notes=[...(a.notes||[]),note]; if(!isDemo&&a._attioInspectionId){ const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; Attio.updateInspection(a._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); } return {...a,notes}; }); }; if(channel==="text"){ if(!b.mobile) return false; const msg=formLinkMsg(kind,first,addr,url,smsSig(agentName)); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:msg}).catch(()=>{}); logSearch(formSentNote(kind,"text")); return true; } if(channel==="email"){ if(!b.email) return false; Resend.sendFormLink({toEmail:b.email,toName:b.name,agentName,address:searchOpenHome?.address||addr,url,kind}).catch(()=>{}); logSearch(formSentNote(kind,"email")); return true; } return false; }}/>
-    <SummarySheet open={showSum} onClose={()=>{setShowSum(false);setSumSel([]);setSumStart("open");}} openHome={openHome} buyers={pb} allBuyers={propAll} precomputed={openHome?vendorReport.current[openHome.id]:null} agentName={agentName} selIds={sumSel} initStats={sumStats} startMode={sumStart} tableSelect={isDesktop}/>
+    <SummarySheet open={showSum} onClose={()=>{setShowSum(false);setSumSel([]);setSumStart("open");}} openHome={openHome} buyers={pb} allBuyers={propAll} precomputed={openHome?vendorReport.current[openHome.id]:null} agentName={agentName} selIds={sumSel} initStats={sumStats} startMode={sumStart} tableSelect={isDesktop} mktStats={mktStats}/>
     <MatchSheet open={showMatch} onClose={()=>setShowMatch(false)} openHome={openHome} excludeIds={propAll.map(b=>b.contactId).filter(Boolean)} agentName={agentName} propIndex={propIndex}/>
     <QuickContractSheet
       open={showQuickContract}
