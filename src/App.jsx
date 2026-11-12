@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v103-fill-contract";
+const BUILD = "v104-bpdays-share-btn";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2834,7 +2834,7 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
   put(T.s32PurchaserName, v.p1); put(T.s32PurchaserName2, v.p2);
   put(T.signPurchaserName, v.p1);
   if(v.loan){ put(T.lender, v.lender); put(T.loanAmount, v.loanAmount); put(T.approval, v.approval); tick(B.loan); }
-  if(v.bp){ tick(B.building); tick(B.pest); }
+  if(v.bp){ tick(B.building); tick(B.pest); (map.bpDays||[]).forEach(f=>put(f, v.bpDays||"14")); }
   return await doc.save();
 }
 
@@ -2842,27 +2842,34 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   const drag=useSheetDrag(onClose);
   const parsed=useMemo(()=>open&&buyer?parseOffer(buyer):null,[open,buyer]);
   const [p1,setP1]=useState(""),[p2,setP2]=useState(""),[padr,setPadr]=useState(""),[price,setPrice]=useState(""),[depAmt,setDepAmt]=useState(""),[depWhen,setDepWhen]=useState("on signing the contract"),[settle,setSettle]=useState(""),[fin,setFin]=useState(false),[lender,setLender]=useState(""),[loanMax,setLoanMax]=useState(""),[finDays,setFinDays]=useState("14"),[approval,setApproval]=useState(""),[bp,setBp]=useState(false),[vacant,setVacant]=useState(true),[copied,setCopied]=useState(false);
-  const [filling,setFilling]=useState(false),[fillErr,setFillErr]=useState(""),[filledOk,setFilledOk]=useState(false);
+  const [bpDays,setBpDays]=useState("14");
+  const [filling,setFilling]=useState(false),[fillErr,setFillErr]=useState(""),[filledFile,setFilledFile]=useState(null);
   useEffect(()=>{ if(open&&parsed){
     setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||""); setPadr(parsed.buyerAddress||"");
     setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); setDepWhen("on signing the contract");
-    setSettle(parsed.settlement||""); setFin(!!parsed.finance); setLender(parsed.lender||""); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setVacant(true); setCopied(false);
-    setFilling(false); setFillErr(""); setFilledOk(false);
+    setSettle(parsed.settlement||""); setFin(!!parsed.finance); setLender(parsed.lender||""); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setBpDays("14"); setVacant(true); setCopied(false);
+    setFilling(false); setFillErr(""); setFilledFile(null);
   } /* eslint-disable-next-line */ },[open,parsed]);
+  const fileName=()=>`Contract - ${String(openHome?.address||"property").replace(/[\\/:*?"<>|]/g,"")} - ${(p1||"purchaser").split(" ")[0]}.pdf`;
   const doFill=async()=>{
-    setFillErr(""); setFilling(true); setFilledOk(false);
+    setFillErr(""); setFilling(true); setFilledFile(null);
     try{
       const money=n=>n==null?"":Number(n).toLocaleString("en-AU");
       const v={ purchaserName:[p1,p2].filter(Boolean).join(" & "), purchaserAddr:padr,
         price:money(priceN), deposit:money(depN), balance:money(balance), settlement:settle, p1, p2,
-        loan:fin, lender, loanAmount:loanMax?money(num(loanMax)):"", approval, bp };
+        loan:fin, lender, loanAmount:loanMax?money(num(loanMax)):"", approval, bp, bpDays:(bpDays||"14") };
       const bytes=await fillOfferContractPdf({ contractUrl:openHome?.contractUrl, propertyId:openHome?.propertyId, v });
-      const blob=new Blob([bytes],{type:"application/pdf"}); const url=URL.createObjectURL(blob);
-      const a=document.createElement("a"); a.href=url; a.download=`Contract - ${String(openHome?.address||"property").replace(/[\\/:*?"<>|]/g,"")} - ${(p1||"purchaser").split(" ")[0]}.pdf`; document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(()=>URL.revokeObjectURL(url),15000); setFilledOk(true);
+      setFilledFile({ bytes, name:fileName() });
     }catch(e){ setFillErr(e?.code==="NO_MAP" ? "This contract isn't set up for auto-fill yet. I map each contract once when it's added — tell Luke which listing and it takes a few minutes." : (e?.message||"Couldn't fill the contract.")); }
     setFilling(false);
   };
+  const downloadFilled=()=>{ if(!filledFile)return; const blob=new Blob([filledFile.bytes],{type:"application/pdf"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=filledFile.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),15000); };
+  const shareFilled=async()=>{ if(!filledFile)return;
+    try{ const file=new File([filledFile.bytes],filledFile.name,{type:"application/pdf"});
+      if(navigator.canShare&&navigator.canShare({files:[file]})) await navigator.share({files:[file],title:filledFile.name,text:`Contract of Sale — ${openHome?.address||""}`});
+      else downloadFilled();
+    }catch(e){ /* user cancelled */ } };
+  const canShareFiles=()=>{ try{ return typeof navigator!=="undefined"&&!!navigator.canShare&&navigator.canShare({files:[new File([new Uint8Array([37,80])],"t.pdf",{type:"application/pdf"})]}); }catch(e){ return false; } };
   const num=v=>{const n=parseFloat(String(v).replace(/[^0-9.]/g,""));return isNaN(n)?null:n;};
   const priceN=num(price), depN=num(depAmt), balance=(priceN!=null&&depN!=null)?priceN-depN:null;
   const depPct=(priceN&&depN)?Math.round(depN/priceN*1000)/10:null;
@@ -2915,17 +2922,31 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
           <div><label style={fl}>Loan amount (no more than)</label><input style={fi} value={loanMax} onChange={e=>setLoanMax(e.target.value)} placeholder="$" inputMode="numeric"/></div>
           <div><label style={fl}>Approval within (days)</label><input style={fi} value={finDays} onChange={e=>setFinDays(e.target.value)} inputMode="numeric"/></div>
         </div>}
-        {chk(bp,setBp,"Subject to building & pest report (GC21 & GC22)")}
+        {chk(bp,setBp,"Subject to building & pest report")}
+        {bp&&<div style={{margin:"2px 0 6px",paddingLeft:26,maxWidth:230}}>
+          <label style={fl}>Report period (days)</label>
+          <input style={fi} value={bpDays} onChange={e=>setBpDays(e.target.value)} inputMode="numeric" placeholder="14"/>
+        </div>}
         {parsed.conditions&&<div style={{marginTop:12}}>
           <label style={fl}>Buyer's offer notes (reference)</label>
           <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:9,padding:"9px 11px",fontSize:12.5,color:BROWN_M,whiteSpace:"pre-wrap",maxHeight:120,overflowY:"auto"}}>{parsed.conditions}</div>
         </div>}
       </div>
       {fillErr&&<div style={{margin:"0 16px 10px",background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{fillErr}</div>}
+      {filledFile ? (
+        <div style={{padding:"0 16px 14px"}}>
+          <div style={{background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:11,padding:"11px 13px",fontSize:13.5,color:ESPRESSO,fontWeight:600,marginBottom:10}}>✓ Contract filled for {(p1||"the purchaser").split(" ")[0]} — {filledFile.name}</div>
+          <div style={{display:"flex",gap:8}}>
+            {canShareFiles()&&<button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} onClick={shareFilled}>Send / share →</button>}
+            <button className="btn-cream" style={{flex:canShareFiles()?"0 0 auto":"1 1 0",width:canShareFiles()?"auto":undefined,padding:"13px 18px",whiteSpace:"nowrap"}} onClick={downloadFilled}>Download</button>
+          </div>
+          <button onClick={()=>setFilledFile(null)} style={{width:"100%",marginTop:8,padding:"9px",borderRadius:10,border:"none",background:"transparent",color:BROWN_L,fontSize:12.5,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Change details & fill again</button>
+        </div>
+      ) : (
       <div className="cpy-row" style={{padding:"0 16px 14px",display:"flex",gap:8}}>
         <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 16px",fontSize:13,whiteSpace:"nowrap"}} onClick={()=>{navigator.clipboard?.writeText(particulars()).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),2000);}}>{copied?"✓ Copied":"Copy particulars"}</button>
-        <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} disabled={filling} onClick={doFill}>{filling?"Filling…":filledOk?"✓ Downloaded · fill again":"Fill contract →"}</button>
-      </div>
+        <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} disabled={filling} onClick={doFill}>{filling?"Filling…":"Fill contract →"}</button>
+      </div>)}
     </div>
   </div>;
 }
@@ -4082,7 +4103,7 @@ function crmBuildFeed(index, auctionByProp){
 const FEED_KINDS={ contract:{t:"Contract opened",why:"they're reading it: call while it's warm",ic:"📄"}, form:{t:"Form opened, not submitted",why:"a nudge usually gets it over the line",ic:"📝"}, enquiry:{t:"New enquiries",why:"reply today, they're shopping around",ic:"✉️"}, bid:{t:"Registered to bid this week",why:"confirm they're set for auction day",ic:"🔨"}, quiet:{t:"Hot buyers gone quiet",why:"7+ days without a note",ic:"🔥"} };
 
 /* ── The desktop buyer record (drawer). Same props as DetailSheet. ── */
-function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink,onCheckIn}){
+function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink,onCheckIn,onPrepareContract}){
   const [noteText,setNoteText]=useState(""); const [noteOpen,setNoteOpen]=useState(false);
   const [editing,setEditing]=useState(false); const [eName,setEName]=useState(""); const [eMobile,setEMobile]=useState(""); const [eEmail,setEEmail]=useState(""); const [savingEdit,setSavingEdit]=useState(false);
   const [editNoteId,setEditNoteId]=useState(null); const [editNoteText,setEditNoteText]=useState("");
@@ -4096,6 +4117,7 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
   useEffect(()=>{ if(open&&buyer&&propId&&!buyer.aiProfile&&(buyer.notes||[]).length) genProfile(buyer,propId,crossNotes); },[open,buyer?.id]);
   if(!open||!buyer) return null;
   const first=(buyer.name||"").split(" ")[0]||"";
+  const hasOffer=(buyer.notes||[]).some(n=>/^\s*\[Offer\]/i.test(n.text||""));
   const saveNote=()=>{ const t=noteText.trim(); if(!t) return; onAddNote(propId,buyer.id,t); setNoteText(""); setNoteOpen(false); };
   const startEdit=()=>{ setEName(buyer.name||""); setEMobile(buyer.mobile||""); setEEmail(buyer.email||""); setEditing(true); };
   const saveDetails=async()=>{ setSavingEdit(true); try{ await onUpdateDetails(propId,buyer.id,{name:eName.trim(),mobile:eMobile.trim(),email:eEmail.trim()}); setEditing(false); }finally{ setSavingEdit(false); } };
@@ -4121,6 +4143,7 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
             {days!==null&&<span style={{fontSize:11,color:BROWN_L}}>· {days}d in system</span>}
           </div>
           <div className="cgr mini" style={{padding:"10px 0 0",maxWidth:360}}>{ISET.map(o=><div key={o.v} className={`cb ${buyer.interest===o.v?(o.v==="hot"?"ah":o.v==="watching"?"aw":"ac"):""}`} onClick={()=>onUpdateInterest(propId,buyer.id,o.v)}><span className="e">{o.e}</span>{o.l}</div>)}</div>
+          {hasOffer&&onPrepareContract&&<button onClick={()=>onPrepareContract(buyer)} style={{marginTop:12,display:"inline-flex",alignItems:"center",gap:7,background:GRN,border:"none",color:"#fff",fontSize:13.5,fontWeight:800,cursor:"pointer",fontFamily:"inherit",borderRadius:10,padding:"11px 18px",boxShadow:"0 3px 10px rgba(45,138,94,.3)"}}><span style={{fontSize:15}}>📄</span> Prepare contract from offer →</button>}
         </div>
         <button className="x" aria-label="Close" onClick={onClose}>✕</button>
       </div>
@@ -6726,6 +6749,7 @@ export default function App(){
       onAddNote={addNote} onEditNote={editNote} onSetProfile={setProfile} onUpdateDetails={updateDetails}
       onRemoveBuyer={removeBuyer} onTransferBuyer={transferBuyer} onRequestContract={requestContract} onOpenContact={openContact} onSendLink={sendBuyerLink}
       onCheckIn={(active&&openHome&&!openHome._demo&&active.contactId)?checkInBuyer:undefined} onRemoveFromOpen={(!isDemo)?removeFromOpen:undefined}
+      onPrepareContract={(b)=>{ setShowDetail(false); setOfferContractBuyer(b); setShowOfferContract(true); }}
       onPrivateInspect={(!isDemo&&active&&openHome&&!openHome._demo&&active.contactId&&(openHome.propertyId||openHome.id))?privateInspectBuyer:undefined}/>
     {/* Contact-search detail: the searched person's full page, with their own inspection as
         the edit context. View + call/text/email + notes + interest across every property. */}
