@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v97-offer-contract";
+const BUILD = "v98-contract-picker";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1186,6 +1186,9 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 .hndl{width:36px;height:4px;background:${SAND_D};border-radius:2px;margin:12px auto 0;}
 .sh-ttl{font-family:'Newsreader',serif;font-size:22px;font-weight:700;color:${BROWN};padding:15px 20px 2px;}
 .sh-sub{font-size:13px;color:${BROWN_L};padding:0 20px 14px;}
+.pick-row{transition:border-color .12s,background .12s,transform .12s;}
+.pick-row:hover{border-color:${BLUE}!important;background:${LINEN}!important;}
+.pick-row:active{transform:scale(.99);}
 /* form */
 .fg{padding:0 16px 12px;}
 .fl{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:${BROWN_L};margin-bottom:7px;display:block;}
@@ -5280,11 +5283,15 @@ function ContractSheet({ open, onClose, agentName, listings }){
   const [sendState,setSendState]=useState("idle");       // idle | sending | sent
   const [previews,setPreviews]=useState([]);             // [{page,url,w,h}] rendered pages with field boxes
   const fileRef=useRef(null);
+  const [cq,setCq]=useState(""); // search the contract list
 
   const withContracts=(listings||[]).filter(l=>l && l.contractUrl && !l._demo)
-    .filter((l,i,a)=>a.findIndex(x=>x.contractUrl===l.contractUrl)===i);
+    .filter((l,i,a)=>a.findIndex(x=>x.contractUrl===l.contractUrl)===i)
+    .sort((a,b)=>String(a.address||"").localeCompare(String(b.address||"")));
+  const _cqn=cq.trim().toLowerCase();
+  const filteredContracts=_cqn?withContracts.filter(l=>(((l.address||"")+" "+(l.suburb||"")).toLowerCase().includes(_cqn))):withContracts;
 
-  function reset(){ setPdfBytes(null); setFileUrl(""); setDocName(""); setPropertyAddr(""); setDetected(null); setErr(""); setSendState("idle"); setPurchaser({name:"",email:""}); setVendor({name:"",email:""}); setPreviews([]); }
+  function reset(){ setPdfBytes(null); setFileUrl(""); setDocName(""); setPropertyAddr(""); setDetected(null); setErr(""); setSendState("idle"); setPurchaser({name:"",email:""}); setVendor({name:"",email:""}); setPreviews([]); setCq(""); }
   function handleClose(){ reset(); onClose(); }
 
   async function runDetect(buf){
@@ -5360,18 +5367,36 @@ function ContractSheet({ open, onClose, agentName, listings }){
           </div>
         ) : (<>
           {!detected && !detecting && <>
-            <div style={label}>Choose the contract</div>
-            {withContracts.length>0 ? (
-              <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
-                {withContracts.map(l=>(
-                  <button key={l.contractUrl} onClick={()=>pickListing(l)} style={{textAlign:"left",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:11,padding:"12px 14px",cursor:"pointer",fontFamily:"inherit"}}>
-                    <div style={{fontSize:14,fontWeight:700,color:ESPRESSO}}>{streetLine(l.address,l.suburb)||l.address}</div>
-                    <div style={{fontSize:12,color:BROWN_L,marginTop:2}}>Contract on file · tap to use</div>
+            <div style={{...label,display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+              <span>Choose the contract</span>
+              {withContracts.length>0 && <span style={{fontWeight:600,color:BROWN_L,fontSize:11}}>{filteredContracts.length} of {withContracts.length}</span>}
+            </div>
+            {withContracts.length>0 ? (<>
+              {withContracts.length>4 && (
+                <div style={{position:"relative",marginBottom:9}}>
+                  <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",color:BROWN_L,fontSize:14,pointerEvents:"none"}}>⌕</span>
+                  <input value={cq} onChange={e=>setCq(e.target.value)} placeholder="Search listings" style={{width:"100%",boxSizing:"border-box",padding:"10px 12px 10px 32px",fontSize:14,border:`1px solid ${SAND_D}`,borderRadius:10,fontFamily:"inherit",background:WHITE,color:ESPRESSO,outline:"none"}}/>
+                  {cq && <button onClick={()=>setCq("")} aria-label="Clear" style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",width:22,height:22,borderRadius:11,border:"none",background:SAND,color:BROWN,fontSize:13,cursor:"pointer",lineHeight:"22px"}}>×</button>}
+                </div>
+              )}
+              <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12,maxHeight:272,overflowY:"auto",paddingRight:2}}>
+                {filteredContracts.length>0 ? filteredContracts.map(l=>(
+                  <button key={l.contractUrl} onClick={()=>pickListing(l)} className="pick-row" style={{display:"flex",alignItems:"center",gap:11,textAlign:"left",background:WHITE,border:`1px solid ${SAND_D}`,borderRadius:11,padding:"10px 12px",cursor:"pointer",fontFamily:"inherit"}}>
+                    <span style={{flexShrink:0,width:32,height:32,borderRadius:8,background:LINEN,border:`1px solid ${SAND_D}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>📄</span>
+                    <span style={{flex:1,minWidth:0}}>
+                      <span style={{display:"block",fontSize:14,fontWeight:700,color:ESPRESSO,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{streetLine(l.address,l.suburb)||l.address}</span>
+                      <span style={{display:"block",fontSize:12,color:BROWN_L,marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{l.suburb||"Contract on file"}</span>
+                    </span>
+                    <span style={{flexShrink:0,color:BROWN_L,fontSize:18,lineHeight:1}}>›</span>
                   </button>
-                ))}
+                )) : <div style={{fontSize:13,color:BROWN_L,padding:"14px 2px",textAlign:"center"}}>No listings match “{cq}”.</div>}
               </div>
-            ) : <div style={{fontSize:13,color:BROWN_L,marginBottom:12}}>No listings have a contract on file yet.</div>}
-            <div style={{fontSize:12,color:BROWN_L,textAlign:"center",margin:"2px 0 10px"}}>or</div>
+            </>) : <div style={{fontSize:13,color:BROWN_L,marginBottom:12}}>No listings have a contract on file yet.</div>}
+            <div style={{display:"flex",alignItems:"center",gap:10,margin:"2px 0 10px"}}>
+              <div style={{flex:1,height:1,background:SAND_D}}/>
+              <div style={{fontSize:11,color:BROWN_L,fontWeight:600,letterSpacing:.3}}>OR</div>
+              <div style={{flex:1,height:1,background:SAND_D}}/>
+            </div>
             <input ref={fileRef} type="file" accept="application/pdf" onChange={onUpload} style={{display:"none"}}/>
             <button className="btn-outline" style={{width:"100%"}} onClick={()=>fileRef.current&&fileRef.current.click()}>Upload a contract PDF</button>
           </>}
