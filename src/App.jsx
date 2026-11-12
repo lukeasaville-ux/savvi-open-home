@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v100-s32-signing";
+const BUILD = "v101-sent-panel";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3268,12 +3268,19 @@ function BulkTextSheet({ open, onClose, buyers, agentName, label, address, subur
     <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",maxHeight:"92vh",display:"flex",flexDirection:"column",...drag.style}} {...drag.handlers}>
       <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
       <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
-      <div style={{padding:"4px 18px 8px"}}>
+      {!done&&<div style={{padding:"4px 18px 8px"}}>
         <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>Text these buyers</div>
         <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>{label?label+" · ":""}{selected.length} of {sendable.length} selected{noMobile?` · ${noMobile} no mobile`:""}{skipped?` · ${skipped} already ${mode==="bid"?"registered":"offered"}`:""}</div>
-      </div>
+      </div>}
       {done
-      ? <div style={{padding:"10px 18px 20px",textAlign:"center"}}><div style={{fontSize:40,marginBottom:8}}>✅</div><div style={{fontSize:16,fontWeight:800,color:ESPRESSO}}>Sent to {done.ok}{done.fail?` · ${done.fail} failed`:""}</div><button className="btn-cream" style={{marginTop:16,padding:"13px"}} onClick={onClose}>Done</button></div>
+      ? <div style={{padding:"32px 28px 30px",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center"}}>
+          <div style={{width:58,height:58,borderRadius:"50%",background:done.fail?"#FDECEA":GRN_BG,border:`1px solid ${done.fail?"#F2C4B5":"#A9DFBF"}`,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:16}}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={done.fail?"#C0392B":GRN} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <div style={{fontSize:20,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>Sent to {done.ok} buyer{done.ok!==1?"s":""}</div>
+          <div style={{fontSize:13,color:BROWN_L,marginTop:6,lineHeight:1.5,maxWidth:300}}>{done.fail?`${done.fail} didn't go through. Check their mobile and try those again.`:`Your message is on its way${what?` with the ${what}`:""}, and it's logged on each buyer's card.`}</div>
+          <button className="btn-dark" style={{marginTop:22,width:"100%",maxWidth:260}} onClick={onClose}>Done</button>
+        </div>
       : <>
         {templates&&<div className="seg3" style={{margin:"0 16px 10px"}}>
           {MODES.map(([k,l])=><button key={k} className={mode===k?"on":""} onClick={()=>applyMode(k)}>{l}</button>)}
