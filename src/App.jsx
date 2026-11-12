@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v101-sent-panel";
+const BUILD = "v102-email-buyers";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3322,6 +3322,101 @@ function BulkTextSheet({ open, onClose, buyers, agentName, label, address, subur
 }
 
 /* ════════════════════════════════════════════
+   EMAIL BUYERS — compose ONE personalised email in-app, then open each buyer's
+   draft in Outlook one at a time so every buyer gets their own individual email
+   (not a BCC blast). Luke reviews + hits Send in Outlook for each.
+   ════════════════════════════════════════════ */
+function EmailBuyersSheet({ open, onClose, buyers, agentName, label, address, suburb, onLogNote }){
+  const sig=smsSig(agentName);
+  const first=sig.split(" ")[0];
+  const shortAddr=streetLine(address,suburb)||String(address||"the property").split(",")[0];
+  const [subject,setSubject]=useState("");
+  const [body,setBody]=useState("");
+  const [sel,setSel]=useState({});
+  const [opened,setOpened]=useState({});
+  const bodyRef=useRef(null);
+  const emailable=(buyers||[]).filter(b=>b.email);
+  useEffect(()=>{ if(open){
+    setSubject(`${shortAddr} — update from Savvi`);
+    setBody(`Hi {first_name},\n\n\n\nKind regards,\n${first}\n${sig}\nSavvi Real Estate`);
+    const s={}; emailable.forEach(b=>{ s[b.id]=true; }); setSel(s); setOpened({});
+  } },[open]);
+  const selected=emailable.filter(b=>sel[b.id]);
+  const noEmail=(buyers||[]).filter(b=>!b.email).length;
+  const toggle=id=>setSel(s=>({...s,[id]:!s[id]}));
+  const allOn=emailable.length>0&&emailable.every(b=>sel[b.id]);
+  const toggleAll=()=>{ const s={}; emailable.forEach(b=>{ s[b.id]=!allOn; }); setSel(s); };
+  const insertToken=(tok)=>{ const el=bodyRef.current; if(!el){setBody(m=>m+tok);return;} const a=el.selectionStart??body.length,b2=el.selectionEnd??body.length; setBody(body.slice(0,a)+tok+body.slice(b2)); setTimeout(()=>{el.focus();el.selectionStart=el.selectionEnd=a+tok.length;},0); };
+  const openFor=(b)=>{
+    const subj=personalize(subject,b), bod=personalize(body,b);
+    window.open(`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(b.email)}&subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(bod)}`,"_blank","noopener");
+    setOpened(o=>({...o,[b.id]:true}));
+    onLogNote&&onLogNote(b,subj);
+  };
+  const nextBuyer=selected.find(b=>!opened[b.id]);
+  const openedCount=selected.filter(b=>opened[b.id]).length;
+  const allDone=selected.length>0&&openedCount===selected.length;
+  if(!open) return null;
+  const pb=selected[0]||emailable[0]||{name:"there"};
+  const lbl={fontSize:11.5,fontWeight:800,letterSpacing:.5,color:BROWN_L,margin:"10px 2px 5px"};
+  const fn=b=>((b.name||"").trim().split(/\s+/)[0])||"there";
+  return <div className="ov s" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",maxHeight:"92vh",display:"flex",flexDirection:"column"}}>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
+      <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
+      {!allDone&&<div style={{padding:"4px 18px 8px"}}>
+        <div style={{fontSize:17,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>Email these buyers</div>
+        <div style={{fontSize:12.5,color:BROWN_L,marginTop:2}}>{label?label+" · ":""}{selected.length} selected{noEmail?` · ${noEmail} no email`:""} · each gets their own personalised email</div>
+      </div>}
+      {allDone
+      ? <div style={{padding:"32px 28px 30px",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center"}}>
+          <div style={{width:58,height:58,borderRadius:"50%",background:GRN_BG,border:"1px solid #A9DFBF",display:"flex",alignItems:"center",justifyContent:"center",marginBottom:16}}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={GRN} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <div style={{fontSize:20,fontWeight:800,color:ESPRESSO,fontFamily:"'Newsreader',serif"}}>Opened all {selected.length} in Outlook</div>
+          <div style={{fontSize:13,color:BROWN_L,marginTop:6,lineHeight:1.5,maxWidth:320}}>Each one is a personalised draft to that buyer. Check it and hit Send in Outlook.</div>
+          <button className="btn-dark" style={{marginTop:22,width:"100%",maxWidth:260}} onClick={onClose}>Done</button>
+        </div>
+      : <><div style={{flex:1,overflowY:"auto",padding:"0 16px"}}>
+          <div style={lbl}>SUBJECT</div>
+          <input className="fi" value={subject} onChange={e=>setSubject(e.target.value)} placeholder="Subject line"/>
+          <div style={lbl}>MESSAGE</div>
+          <textarea ref={bodyRef} className="note-area" style={{minHeight:150}} value={body} onChange={e=>setBody(e.target.value)} placeholder="Hi {first_name}, …"/>
+          <div style={{display:"flex",alignItems:"center",gap:8,margin:"6px 0 12px",flexWrap:"wrap"}}>
+            <button onClick={()=>insertToken("{first_name}")} style={{fontSize:12,fontWeight:700,color:BLUE_D,background:"#eef2fb",border:`1px solid ${BLUE}33`,borderRadius:8,padding:"6px 10px",cursor:"pointer"}}>+ {"{first_name}"}</button>
+            <span style={{fontSize:11.5,color:BROWN_L}}>Personalised per buyer. Opens in Outlook so you send from your own account.</span>
+          </div>
+          <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"10px 12px",fontSize:13,color:ESPRESSO,marginBottom:14,wordBreak:"break-word"}}>
+            <b style={{color:BROWN_L,fontSize:11}}>PREVIEW{pb.name&&pb.name!=="there"?` · TO ${fn(pb).toUpperCase()}`:""}</b>
+            <div style={{fontWeight:700,margin:"6px 0 4px"}}>{personalize(subject||"(no subject)",pb)}</div>
+            <div style={{whiteSpace:"pre-wrap",color:BROWN}}>{personalize(body||"",pb)}</div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+            <div style={{fontSize:11.5,fontWeight:800,letterSpacing:.5,color:BROWN_L}}>RECIPIENTS</div>
+            {emailable.length>0&&<button onClick={toggleAll} style={{background:"none",border:"none",color:BLUE_D,fontWeight:700,cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>{allOn?"Clear all":"Select all"}</button>}
+          </div>
+          {emailable.length===0&&<div style={{fontSize:13,color:BROWN_L,padding:"6px 2px 14px"}}>None of these buyers have an email on file.</div>}
+          {emailable.map(b=>{ const on=!!sel[b.id], op=opened[b.id]; return (
+            <div key={b.id} onClick={()=>toggle(b.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 4px",cursor:"pointer",borderBottom:`1px solid ${SAND}`}}>
+              <div style={{width:20,height:20,borderRadius:6,border:`2px solid ${on?BLUE_D:SAND_D}`,background:on?BLUE_D:"#fff",color:"#fff",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{on?"✓":""}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13.5,color:ESPRESSO,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}</div>
+                <div style={{fontSize:12,color:BROWN_L,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.email}</div>
+              </div>
+              {op&&<span style={{fontSize:11,fontWeight:700,color:GRN,background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:100,padding:"3px 8px",flexShrink:0}}>Opened</span>}
+            </div>); })}
+          <div style={{height:8}}/>
+        </div>
+        <div style={{padding:"8px 16px calc(12px + env(safe-area-inset-bottom,0px))",borderTop:`1px solid ${SAND_D}`}}>
+          {openedCount>0&&<div style={{fontSize:12.5,color:BROWN_L,marginBottom:8,textAlign:"center"}}>{openedCount} of {selected.length} opened in Outlook</div>}
+          <button disabled={!subject.trim()||!body.trim()||!nextBuyer} onClick={()=>nextBuyer&&openFor(nextBuyer)} style={{width:"100%",padding:"15px",borderRadius:12,border:"none",background:(!subject.trim()||!body.trim()||!nextBuyer)?SAND_D:BLUE_D,color:"#fff",fontSize:15,fontWeight:800,cursor:nextBuyer?"pointer":"default"}}>{nextBuyer?`${openedCount>0?"Next":"Open"} ${fn(nextBuyer)}’s email in Outlook →`:"All opened"}</button>
+          <div style={{fontSize:11.5,color:BROWN_L,marginTop:8,textAlign:"center",lineHeight:1.4}}>Opens one personalised draft at a time. Send it in Outlook, then come back and open the next.</div>
+        </div></>}
+    </div>
+  </div>;
+}
+
+/* ════════════════════════════════════════════
    BUYER MATCH — natural-language buyer search + bulk personalised SMS.
    Replaces the old "Ask your CRM" bar: describe the buyer you want, it reads
    every buyer's notes/history (aiQuery backend), pulls the matches, then you
@@ -4163,7 +4258,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   // buyers as a full-width table that scrolls with the page (no nested scroll boxes).
   const pb=crm.pb||[], propAll=crm.propAll||[], propReal=crm.propReal||[], enquiries=crm.enquiries||[];
   const isLive=sel&&!sel._listing;
-  const [wsel,setWsel]=useState({}); const [wbulk,setWbulk]=useState(false);
+  const [wsel,setWsel]=useState({}); const [wbulk,setWbulk]=useState(false); const [webuyers,setWebuyers]=useState(null);
   const [wview,setWview]=useState("list");   // "list" | "insp" — group the buyer table by inspection session
   const [wOpenF,setWOpenF]=useState({});      // multi-select "came through which open" filter {openId:true}
   const [reportMode,setReportMode]=useState(false); // selecting buyers ON the table for a campaign report
@@ -4174,7 +4269,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const openBuyer=(b)=>{ crm.setActive(b); crm.setShowDetail(true); };
   const wselected=tRows.filter(b=>wsel[b.id]);
   const wAllOn=tRows.length>0&&tRows.every(b=>wsel[b.id]);
-  const emailBuyers=(list)=>{ const to=list.map(b=>b.email).filter(Boolean); if(!to.length) return; const subj=encodeURIComponent(`${streetLine(sel.address,sel.suburb)}: update from Savvi`); window.open(`https://outlook.office.com/mail/deeplink/compose?bcc=${encodeURIComponent(to.join(";"))}&subject=${subj}`,"_blank","noopener"); };
+  const emailBuyers=(list)=>{ const withEmail=(list||[]).filter(b=>b.email); if(!withEmail.length) return; setWebuyers(withEmail); };
   const formStatus=(b)=>{ const ns=b.notes||[]; const done=ns.find(n=>/^\s*\[Offer\]/i.test(n.text||""))?"Offer in":ns.find(n=>/^\s*\[Bid registration\]/i.test(n.text||""))?"Registered":null; if(done) return {t:done,c:"ok"}; const op=(b.contractOpens||[]).find(o=>o.kind==="offer-opened"||o.kind==="bid-opened"); if(op) return {t:op.kind==="bid-opened"?"Bid form opened":"Offer form opened",c:"info"}; const sent=ns.some(n=>/(Text sent:[^]*\/(bid|offer)\/|Emailed (offer form|bid registration))/i.test(n.text||"")); return sent?{t:"Link sent",c:"info"}:null; };
   const tFilters=[["all","All",propReal.length],isLive?["open","At this open",pb.filter(b=>!b.isEnquiry).length]:null,["hot","Hot",propAll.filter(b=>b.interest==="hot").length],["watching","Watching",propAll.filter(b=>b.interest==="watching").length],["cool","Cool",propAll.filter(b=>b.interest==="cool").length],["contract","Contract sent",propReal.filter(b=>b.contractSent).length],["offer","Offers & bids",propAll.filter(b=>(b.notes||[]).some(n=>/^\s*\[(Offer|Bid registration)\]/i.test(n.text||""))).length],["repeat","Repeat",propReal.filter(b=>(b.visits||1)>1).length],["enquiry","Enquiries",enquiries.length]].filter(Boolean);
   const allOhs=[...(opens||[]),...(allListings||[]).map(listingOh)];
@@ -4494,6 +4589,8 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
     {/* Selected rows on the listing workspace → same bulk sheet the phone uses, templates included */}
     {sel&&<BulkTextSheet open={wbulk} onClose={()=>setWbulk(false)} buyers={wselected} agentName={agentName} label={`${wselected.length} selected`} address={sel.address} suburb={sel.suburb} isAuction={!!sel.auctionDate}
       onLogNote={(b,sent,mode)=>{ if(crm.addNote&&crm.openHome?.id&&b?.id) crm.addNote(crm.openHome.id,b.id,mode&&mode!=="custom"?formSentNote(mode,"text"):`Text sent: "${sent}"`); }}/>}
+    {sel&&<EmailBuyersSheet open={!!webuyers} onClose={()=>setWebuyers(null)} buyers={webuyers||[]} agentName={agentName} label={sel?streetLine(sel.address,sel.suburb):""} address={sel.address} suburb={sel.suburb}
+      onLogNote={(b,subj)=>{ if(crm.addNote&&crm.openHome?.id&&b?.id) crm.addNote(crm.openHome.id,b.id,`Emailed: "${subj}"`); }}/>}
     {/* Contact-level bulk text (custom message only — link templates need a listing context) */}
     <BulkTextSheet open={cbulk} onClose={()=>setCbulk(false)} buyers={bulkContacts} agentName={agentName} label="Contacts" address="" templates={false}
       onLogNote={(b,sent)=>{ if(!b._attioInspectionId) return; const agentFull=AGENT_FULL[agentName]||agentName||""; const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; const notes=[...(b._inspNotes||[]),{ts:new Date().toISOString(),agent:agentFull,text:`Text sent: "${sent}"`}]; Attio.updateInspection(b._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); }}/>
