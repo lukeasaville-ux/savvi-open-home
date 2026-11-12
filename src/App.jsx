@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v102-email-buyers";
+const BUILD = "v103-fill-contract";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2805,15 +2805,64 @@ function parseOffer(buyer){
     buyerAddress:f.address||"", conditions,
   };
 }
+// Fill an accepted offer onto its listing's Contract of Sale. The field POSITIONS are
+// mapped once per contract (different conveyancer layouts) and stored on the droplet
+// CORS-open at /contracts/maps/<propertyId>.json; here we just overlay the review-screen
+// values with pdf-lib (already bundled for authorities). Map coords are PyMuPDF top-left
+// baseline, pdf-lib is bottom-left, so y' = pageHeight - y. Returns filled PDF bytes.
+async function fillOfferContractPdf({ contractUrl, propertyId, v }){
+  if(!contractUrl) throw new Error("This listing has no contract on file to fill.");
+  if(!propertyId){ const e=new Error("NO_MAP"); e.code="NO_MAP"; throw e; }
+  const mapUrl=`https://go.getsavvi.com.au/contracts/maps/${encodeURIComponent(propertyId)}.json`;
+  const [pdfR,mapR]=await Promise.all([ fetch(contractUrl,{cache:"no-store"}), fetch(mapUrl,{cache:"no-store"}) ]);
+  if(!mapR.ok){ const e=new Error("NO_MAP"); e.code="NO_MAP"; throw e; }
+  if(!pdfR.ok) throw new Error("Couldn't load the contract PDF ("+pdfR.status+").");
+  const map=await mapR.json();
+  const bytes=new Uint8Array(await pdfR.arrayBuffer());
+  const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+  const doc=await PDFDocument.load(bytes);
+  const font=await doc.embedFont(StandardFonts.Helvetica);
+  const pages=doc.getPages();
+  const INK=rgb(0.03,0.09,0.45);
+  const T=map.text||{}, B=map.boxes||{};
+  const put=(f,text)=>{ if(!f||text==null||text==="")return; const pg=pages[f.page]; if(!pg)return; pg.drawText(String(text),{x:f.x,y:pg.getHeight()-f.y,size:f.size||10,font,color:INK}); };
+  const tick=(f)=>{ if(!f)return; const pg=pages[f.page]; if(!pg)return; pg.drawText("X",{x:f.x,y:pg.getHeight()-f.y,size:f.size||9,font,color:INK}); };
+  put(T.purchaserName, v.purchaserName);
+  put(T.purchaserAddr, v.purchaserAddr);
+  put(T.price, v.price); put(T.deposit, v.deposit); put(T.balance, v.balance);
+  put(T.settlement, v.settlement);
+  put(T.s32PurchaserName, v.p1); put(T.s32PurchaserName2, v.p2);
+  put(T.signPurchaserName, v.p1);
+  if(v.loan){ put(T.lender, v.lender); put(T.loanAmount, v.loanAmount); put(T.approval, v.approval); tick(B.loan); }
+  if(v.bp){ tick(B.building); tick(B.pest); }
+  return await doc.save();
+}
+
 function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   const drag=useSheetDrag(onClose);
   const parsed=useMemo(()=>open&&buyer?parseOffer(buyer):null,[open,buyer]);
-  const [p1,setP1]=useState(""),[p2,setP2]=useState(""),[price,setPrice]=useState(""),[depAmt,setDepAmt]=useState(""),[depWhen,setDepWhen]=useState("on signing the contract"),[settle,setSettle]=useState(""),[fin,setFin]=useState(false),[lender,setLender]=useState(""),[loanMax,setLoanMax]=useState(""),[finDays,setFinDays]=useState("14"),[approval,setApproval]=useState(""),[bp,setBp]=useState(false),[vacant,setVacant]=useState(true),[copied,setCopied]=useState(false);
+  const [p1,setP1]=useState(""),[p2,setP2]=useState(""),[padr,setPadr]=useState(""),[price,setPrice]=useState(""),[depAmt,setDepAmt]=useState(""),[depWhen,setDepWhen]=useState("on signing the contract"),[settle,setSettle]=useState(""),[fin,setFin]=useState(false),[lender,setLender]=useState(""),[loanMax,setLoanMax]=useState(""),[finDays,setFinDays]=useState("14"),[approval,setApproval]=useState(""),[bp,setBp]=useState(false),[vacant,setVacant]=useState(true),[copied,setCopied]=useState(false);
+  const [filling,setFilling]=useState(false),[fillErr,setFillErr]=useState(""),[filledOk,setFilledOk]=useState(false);
   useEffect(()=>{ if(open&&parsed){
-    setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||"");
+    setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||""); setPadr(parsed.buyerAddress||"");
     setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); setDepWhen("on signing the contract");
     setSettle(parsed.settlement||""); setFin(!!parsed.finance); setLender(parsed.lender||""); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setVacant(true); setCopied(false);
+    setFilling(false); setFillErr(""); setFilledOk(false);
   } /* eslint-disable-next-line */ },[open,parsed]);
+  const doFill=async()=>{
+    setFillErr(""); setFilling(true); setFilledOk(false);
+    try{
+      const money=n=>n==null?"":Number(n).toLocaleString("en-AU");
+      const v={ purchaserName:[p1,p2].filter(Boolean).join(" & "), purchaserAddr:padr,
+        price:money(priceN), deposit:money(depN), balance:money(balance), settlement:settle, p1, p2,
+        loan:fin, lender, loanAmount:loanMax?money(num(loanMax)):"", approval, bp };
+      const bytes=await fillOfferContractPdf({ contractUrl:openHome?.contractUrl, propertyId:openHome?.propertyId, v });
+      const blob=new Blob([bytes],{type:"application/pdf"}); const url=URL.createObjectURL(blob);
+      const a=document.createElement("a"); a.href=url; a.download=`Contract - ${String(openHome?.address||"property").replace(/[\\/:*?"<>|]/g,"")} - ${(p1||"purchaser").split(" ")[0]}.pdf`; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),15000); setFilledOk(true);
+    }catch(e){ setFillErr(e?.code==="NO_MAP" ? "This contract isn't set up for auto-fill yet. I map each contract once when it's added — tell Luke which listing and it takes a few minutes." : (e?.message||"Couldn't fill the contract.")); }
+    setFilling(false);
+  };
   const num=v=>{const n=parseFloat(String(v).replace(/[^0-9.]/g,""));return isNaN(n)?null:n;};
   const priceN=num(price), depN=num(depAmt), balance=(priceN!=null&&depN!=null)?priceN-depN:null;
   const depPct=(priceN&&depN)?Math.round(depN/priceN*1000)/10:null;
@@ -2847,6 +2896,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
         <div style={{display:"grid",gap:8}}>
           <div><label style={fl}>Purchaser 1 (full legal name)</label><input style={fi} value={p1} onChange={e=>setP1(e.target.value)}/></div>
           <div><label style={fl}>Purchaser 2 (if any)</label><input style={fi} value={p2} onChange={e=>setP2(e.target.value)} placeholder="—"/></div>
+          <div><label style={fl}>Purchaser address</label><input style={fi} value={padr} onChange={e=>setPadr(e.target.value)} placeholder="Street, suburb, state, postcode"/></div>
         </div>
         <div style={sectn}>Payment</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
@@ -2871,9 +2921,10 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
           <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:9,padding:"9px 11px",fontSize:12.5,color:BROWN_M,whiteSpace:"pre-wrap",maxHeight:120,overflowY:"auto"}}>{parsed.conditions}</div>
         </div>}
       </div>
+      {fillErr&&<div style={{margin:"0 16px 10px",background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{fillErr}</div>}
       <div className="cpy-row" style={{padding:"0 16px 14px",display:"flex",gap:8}}>
         <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 16px",fontSize:13,whiteSpace:"nowrap"}} onClick={()=>{navigator.clipboard?.writeText(particulars()).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),2000);}}>{copied?"✓ Copied":"Copy particulars"}</button>
-        <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} disabled title="Contract fill coming next">Fill contract (next)</button>
+        <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} disabled={filling} onClick={doFill}>{filling?"Filling…":filledOk?"✓ Downloaded · fill again":"Fill contract →"}</button>
       </div>
     </div>
   </div>;
