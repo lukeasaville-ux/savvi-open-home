@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v98-contract-picker";
+const BUILD = "v99-contract-picker-tidy";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5285,7 +5285,8 @@ function ContractSheet({ open, onClose, agentName, listings }){
   const fileRef=useRef(null);
   const [cq,setCq]=useState(""); // search the contract list
 
-  const withContracts=(listings||[]).filter(l=>l && l.contractUrl && !l._demo)
+  const _DONE_STATUS=["sold","withdrawn","off-market","off market","settled","leased","rented"];
+  const withContracts=(listings||[]).filter(l=>l && l.contractUrl && !l._demo && !_DONE_STATUS.includes(String(l.statusText||"").toLowerCase()))
     .filter((l,i,a)=>a.findIndex(x=>x.contractUrl===l.contractUrl)===i)
     .sort((a,b)=>String(a.address||"").localeCompare(String(b.address||"")));
   const _cqn=cq.trim().toLowerCase();
@@ -5359,13 +5360,13 @@ function ContractSheet({ open, onClose, agentName, listings }){
         <div className="sh-sub">{sendState==="sent"?"The parties will receive it from Savvi to e-sign":"Pick the contract, we find the signing spots, then send it to the parties"}</div>
 
         {sendState==="sent" ? (
-          <div style={{padding:"8px 2px 14px"}}>
+          <div style={{padding:"8px 20px 14px"}}>
             <div style={{background:"#EAF7EE",border:"1px solid #A9DFBF",borderRadius:12,padding:"14px 15px",color:"#1E6B3A",fontSize:14,fontWeight:600,lineHeight:1.5}}>
               ✓ Contract of Sale for {propertyAddr||"the property"} sent to {[purchaser.email&&"the purchaser",vendor.email&&"the vendor"].filter(Boolean).join(" and ")} to e-sign. Each receives an email from Savvi with the signing link.
             </div>
             <button className="btn-cream" style={{marginTop:14}} onClick={()=>{ reset(); }}>Send another contract</button>
           </div>
-        ) : (<>
+        ) : (<div style={{padding:"0 20px"}}>
           {!detected && !detecting && <>
             <div style={{...label,display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
               <span>Choose the contract</span>
@@ -5440,7 +5441,7 @@ function ContractSheet({ open, onClose, agentName, listings }){
 
           {err && <div style={{marginTop:12,background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{err}</div>}
           <div style={{height:20}}/>
-        </>)}
+        </div>)}
       </div>
     </div>
   );
