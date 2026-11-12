@@ -109,7 +109,37 @@ export async function detectContractFields(data, pdfjsOverride) {
     fields.push({ role, type, page, x0, y0, x1, y1 });
   };
 
+  // Section 32 purchaser-acknowledgement page(s): the Vendor Statement block the
+  // purchaser signs/dates to confirm they received it before signing the
+  // contract (and the vendor name/date/signature). These are empty table cells,
+  // not dotted write-on lines, so they get their own pass.
+  const ackPages = new Set();
   for (const pg of pages) {
+    const flat = pg.items.map(i => i.str).join("").replace(/\s+/g, " ");
+    if (/acknowledges being given this statement/i.test(flat)) ackPages.add(pg.p);
+  }
+
+  for (const pg of pages) {
+    // --- Section 32 acknowledgement block (no write-on lines; cell-based) ---
+    if (ackPages.has(pg.p)) {
+      const W = pg.W, RM = W - 55;
+      const ctr = it => it.base - (it.h || 10) / 2;         // vertical centre from top
+      const anchors = pg.items
+        .filter(it => it.x0 < 180 && /(vendor|purchaser)['’]s/i.test(it.str))
+        .map(it => ({ role: /vendor/i.test(it.str) ? "Vendor" : "Purchaser", y: ctr(it) }));
+      const roleAt = y => { let best = null, bd = 1e9; for (const a of anchors) { const d = Math.abs(a.y - y); if (d < bd) { bd = d; best = a.role; } } return best; };
+      for (const it of pg.items) {
+        const s = it.str.replace(/\s+/g, " ").trim().toLowerCase().replace(/:/g, "");
+        const y = ctr(it);
+        if (it.x0 < 180 && s === "signature") {             // signature cell, to the right
+          const role = roleAt(y); if (role) push(role, "signature", pg.p, 165, y - 15, RM, y + 11);
+        } else if (s === "date" && it.x0 > 380) {           // date cell, right-hand column
+          const role = roleAt(y); if (role) push(role, "date", pg.p, it.x1 + 2, y - 8, W - 45, y + 9);
+        }
+      }
+      continue;
+    }
+
     const lines = toLines(pg.items);
     // every write-on line on the page (dots/underscores), as its own run
     const runs = [];
