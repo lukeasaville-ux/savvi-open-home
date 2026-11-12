@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v95-internet-stats";
+const BUILD = "v96-fast-open";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -273,6 +273,90 @@ function normBuyer(b) {
    SERVICE SHIMS — same method names/signatures as the old direct-API
    services, so the UI below is UNCHANGED; only the transport is secure.
 ════════════════════════════════════════════ */
+// Pure, synchronous build of a listing's buyers from raw Attio inspection + people
+// records. Shared by getBuyersFor (fresh, backend-fed) and getBuyersForCached (instant,
+// from the in-memory whole-CRM cache). propMeta is passed in (not fetched) so the cached
+// path stays non-blocking.
+function _buildBuyers(inspData, pplData, openHomeId, propertyId, propMeta) {
+    propMeta = propMeta || {};
+    const inspJ = { data: inspData }, pplJ = { data: pplData };
+    const rid = r => r?.id?.record_id ?? null;
+    const rref = (r, f) => r?.values?.[f]?.[0]?.target_record_id ?? null;
+    const rval = (r, f) => r?.values?.[f]?.[0]?.value ?? null;
+    const people = {};
+    (pplJ?.data || []).forEach(p => { const id = rid(p); if (id) people[id] = p; });
+    const pnm = p => { const n = p?.values?.name?.[0]; return n ? `${n.first_name || ""} ${n.last_name || ""}`.trim() : ""; };
+    const pph = p => p?.values?.phone_numbers?.[0]?.phone_number ?? "";
+    const pem = p => p?.values?.email_addresses?.[0]?.email_address ?? "";
+    const build = insp => {
+      const cid = rref(insp, "contact"); const c = cid ? people[cid] : null;
+      return {
+        id: rid(insp), contactId: cid,
+        _attioInspectionId: rid(insp),
+        name: c ? pnm(c) : "Unknown", mobile: c ? pph(c) : "", email: c ? pem(c) : "",
+        interest: (rval(insp, "interest") || "").toLowerCase(),
+        contractSent: !!rval(insp, "contract_sent"), contractSentTime: (v=>v?(/^\d{4}-\d\d-\d\dT/.test(v)?fmtDateTime(v):v):null)(rval(insp, "contract_sent_time")),
+        smsSent: !!rval(insp, "sms_sent"), resendId: rval(insp, "resend_id") || null,
+        contractOpens: rval(insp, "contract_opens") || "",
+        notes: rval(insp, "notes") || "", _createdAt: insp?.created_at || null,
+        openHomeId: rref(insp, "open_home") || null,
+      };
+    };
+    const mergeGroup = list => {
+      const lines = new Set();
+      list.forEach(b => String(b.contractOpens || "").split("\n").map(s => s.trim()).filter(Boolean).forEach(l => lines.add(l)));
+      const src = list.find(b => String(b.contractOpens || "").trim())
+                || [...list].reverse().find(b => b.contractSent)
+                || list[0];
+      const seenN = new Set(), noteLines = [];
+      list.forEach(b => String(b.notes || "").split("\n---\n").map(s => s.trim()).filter(Boolean).forEach(l => { if (!seenN.has(l)) { seenN.add(l); noteLines.push(l); } }));
+      noteLines.sort((a, b) => (/^\d{4}-/.test(a) ? a.slice(0, 24) : "~").localeCompare(/^\d{4}-/.test(b) ? b.slice(0, 24) : "~"));
+      return {
+        ...src,
+        notes: noteLines.join("\n---\n"),
+        contractSent: list.some(b => b.contractSent),
+        contractSentTime: src.contractSentTime || (list.find(b => b.contractSentTime) || {}).contractSentTime || null,
+        resendId: src.resendId || (list.find(b => b.resendId) || {}).resendId || null,
+        contractOpens: [...lines].join("\n"),
+        visits: (list.filter(b => !/((REA|Domain|Portal)\s+enquiry|Enquiry via (text|sms|email|phone|dm))/i.test(String(b.notes||""))).length) || 1,
+        openHomeIds: [...new Set(list.map(b => b.openHomeId).filter(Boolean))],
+        insByOpen: (() => { const m = {}; list.forEach(b => { if (b.openHomeId && !m[b.openHomeId]) m[b.openHomeId] = b.id; }); return m; })(),
+        lastInspectedAt: (() => { const real = list.filter(b => b.openHomeId).map(b => new Date(b._createdAt || 0).getTime()); const arr = real.length ? real : list.map(b => new Date(b._createdAt || 0).getTime()); return arr.length ? Math.max.apply(null, arr) : 0; })(),
+      };
+    };
+    const openGroups = {}, propGroups = {};
+    const rankX = { hot: 3, watching: 2, cool: 1 };
+    const contactProps = {};
+    (inspJ.data || []).forEach(insp => {
+      const cid = rref(insp, "contact"), pr = rref(insp, "property"); if (!cid || !pr) return;
+      const it = (rval(insp, "interest") || "").toLowerCase();
+      const enq = /(^|\n)[^\t\n]*\t?(REA|Domain|Portal)\s+enquiry/i.test(String(rval(insp, "notes") || ""));
+      const m = (contactProps[cid] = contactProps[cid] || {});
+      const e = (m[pr] = m[pr] || { ref: pr, interest: "", visits: 0, enquiredOnly: true });
+      e.visits++; if (!enq) e.enquiredOnly = false;
+      if ((rankX[it] || 0) > (rankX[e.interest] || 0)) e.interest = it;
+    });
+    const attachOther = (list, curProp) => list.map(b => ({
+      ...b,
+      otherProps: Object.values(contactProps[b.contactId] || {}).filter(x => x.ref !== curProp).map(x => {
+        const m = propMeta[x.ref] || {};
+        return { ...x, address: m.address || "", suburb: m.suburb || "", price: m.price || "" };
+      }),
+    }));
+    (inspJ.data || []).forEach(insp => {
+      const oh = rref(insp, "open_home"), pr = rref(insp, "property"), b = build(insp);
+      const k = b.contactId || b.id;
+      if (openHomeId && oh === openHomeId) (openGroups[k] = openGroups[k] || []).push(b);
+      if (propertyId && pr === propertyId) (propGroups[k] = propGroups[k] || []).push(b);
+    });
+    const property = attachOther(Object.values(propGroups).map(mergeGroup).map(normBuyer), propertyId);
+    const byKey = {}; property.forEach(p => { byKey[p.contactId || p.id] = p; });
+    const open = attachOther(Object.values(openGroups).map(mergeGroup).map(normBuyer), propertyId).map(c => {
+      const p = byKey[c.contactId || c.id]; if (!p) return c;
+      return { ...c, notes: p.notes, visits: p.visits, openHomeIds: p.openHomeIds, contractSent: c.contractSent || p.contractSent, contractSentTime: c.contractSentTime || p.contractSentTime, resendId: c.resendId || p.resendId, contractOpens: p.contractOpens, otherProps: p.otherProps };
+    });
+    return { ok: true, open, property };
+}
 const Attio = {
   // tolerant id: works on a shaped object ({id}) or a raw Attio record
   id: r => (r && (r.id?.record_id ?? r.id)) ?? null,
@@ -390,109 +474,16 @@ const Attio = {
         _buyerRecCache = { t: Date.now(), insp: inspData, ppl: pplData };
       }
     }
-    const inspJ = { data: inspData }, pplJ = { data: pplData };
-    const rid = r => r?.id?.record_id ?? null;
-    const rref = (r, f) => r?.values?.[f]?.[0]?.target_record_id ?? null;
-    const rval = (r, f) => r?.values?.[f]?.[0]?.value ?? null;
-    const people = {};
-    (pplJ?.data || []).forEach(p => { const id = rid(p); if (id) people[id] = p; });
-    const pnm = p => { const n = p?.values?.name?.[0]; return n ? `${n.first_name || ""} ${n.last_name || ""}`.trim() : ""; };
-    const pph = p => p?.values?.phone_numbers?.[0]?.phone_number ?? "";
-    const pem = p => p?.values?.email_addresses?.[0]?.email_address ?? "";
-    const build = insp => {
-      const cid = rref(insp, "contact"); const c = cid ? people[cid] : null;
-      return {
-        id: rid(insp), contactId: cid,
-        // Carry the real Attio inspection id on every loaded buyer so writes
-        // (contract sent, notes, interest) actually persist — not just on
-        // just-registered buyers that happen to have _attioInspectionId set.
-        _attioInspectionId: rid(insp),
-        name: c ? pnm(c) : "Unknown", mobile: c ? pph(c) : "", email: c ? pem(c) : "",
-        interest: (rval(insp, "interest") || "").toLowerCase(),
-        contractSent: !!rval(insp, "contract_sent"), contractSentTime: (v=>v?(/^\d{4}-\d\d-\d\dT/.test(v)?fmtDateTime(v):v):null)(rval(insp, "contract_sent_time")),
-        smsSent: !!rval(insp, "sms_sent"), resendId: rval(insp, "resend_id") || null,
-        contractOpens: rval(insp, "contract_opens") || "",
-        notes: rval(insp, "notes") || "", _createdAt: insp?.created_at || null,
-        openHomeId: rref(insp, "open_home") || null,
-      };
-    };
-    // A buyer can have several inspections for the same property (repeat visits,
-    // or test re-registrations). Merge each contact's inspections into ONE card so
-    // the contract + its open/click tracking always surface on the buyer you see —
-    // even if the send landed on a different inspection than the one first listed.
-    const mergeGroup = list => {
-      // Union every contract_opens line across the group (dedup identical events).
-      const lines = new Set();
-      list.forEach(b => String(b.contractOpens || "").split("\n").map(s => s.trim()).filter(Boolean).forEach(l => lines.add(l)));
-      // Contract source = the inspection that actually carries the tracking (non-empty
-      // contract_opens), else the most recent one marked sent, else the first.
-      const src = list.find(b => String(b.contractOpens || "").trim())
-                || [...list].reverse().find(b => b.contractSent)
-                || list[0];
-      // Notes: UNION across every inspection in the group, oldest first. A repeat visit
-      // creates a fresh inspection record, and showing only that record's notes made
-      // earlier notes look "lost" (they were still in Attio on the older record).
-      const seenN = new Set(), noteLines = [];
-      list.forEach(b => String(b.notes || "").split("\n---\n").map(s => s.trim()).filter(Boolean).forEach(l => { if (!seenN.has(l)) { seenN.add(l); noteLines.push(l); } }));
-      noteLines.sort((a, b) => (/^\d{4}-/.test(a) ? a.slice(0, 24) : "~").localeCompare(/^\d{4}-/.test(b) ? b.slice(0, 24) : "~"));
-      return {
-        ...src,
-        notes: noteLines.join("\n---\n"),
-        contractSent: list.some(b => b.contractSent),
-        contractSentTime: src.contractSentTime || (list.find(b => b.contractSentTime) || {}).contractSentTime || null,
-        resendId: src.resendId || (list.find(b => b.resendId) || {}).resendId || null,
-        contractOpens: [...lines].join("\n"),
-        // Real visits only — an online enquiry is NOT an inspection, so don't count it
-        // (was over-counting, e.g. "3 visits" when they'd been through twice + 1 enquiry).
-        visits: (list.filter(b => !/((REA|Domain|Portal)\s+enquiry|Enquiry via (text|sms|email|phone|dm))/i.test(String(b.notes||""))).length) || 1,
-        // Every open-home session this buyer came through (for the "filter by open" picker).
-        openHomeIds: [...new Set(list.map(b => b.openHomeId).filter(Boolean))],
-        // open-home id → its inspection record id, so a mis-add can be removed from ONE
-        // specific open without touching the buyer's other registrations.
-        insByOpen: (() => { const m = {}; list.forEach(b => { if (b.openHomeId && !m[b.openHomeId]) m[b.openHomeId] = b.id; }); return m; })(),
-        // Most recent inspection time (drives the "Inspections" view, newest first). Prefer
-        // real open attendances; fall back to any record's created time.
-        lastInspectedAt: (() => { const real = list.filter(b => b.openHomeId).map(b => new Date(b._createdAt || 0).getTime()); const arr = real.length ? real : list.map(b => new Date(b._createdAt || 0).getTime()); return arr.length ? Math.max.apply(null, arr) : 0; })(),
-      };
-    };
-    const openGroups = {}, propGroups = {};
-    // Cross-property activity: every property a contact has an inspection on, with
-    // their strongest interest + visit count there. Powers the "Also active on"
-    // section — always live, never a stale snapshot.
-    const rankX = { hot: 3, watching: 2, cool: 1 };
-    const contactProps = {};
-    (inspJ.data || []).forEach(insp => {
-      const cid = rref(insp, "contact"), pr = rref(insp, "property"); if (!cid || !pr) return;
-      const it = (rval(insp, "interest") || "").toLowerCase();
-      const enq = /(^|\n)[^\t\n]*\t?(REA|Domain|Portal)\s+enquiry/i.test(String(rval(insp, "notes") || ""));
-      const m = (contactProps[cid] = contactProps[cid] || {});
-      const e = (m[pr] = m[pr] || { ref: pr, interest: "", visits: 0, enquiredOnly: true });
-      e.visits++; if (!enq) e.enquiredOnly = false;
-      if ((rankX[it] || 0) > (rankX[e.interest] || 0)) e.interest = it;
-    });
     const propMeta = await loadPropMeta();
-    const attachOther = (list, curProp) => list.map(b => ({
-      ...b,
-      otherProps: Object.values(contactProps[b.contactId] || {}).filter(x => x.ref !== curProp).map(x => {
-        const m = propMeta[x.ref] || {};
-        return { ...x, address: m.address || "", suburb: m.suburb || "", price: m.price || "" };
-      }),
-    }));
-    (inspJ.data || []).forEach(insp => {
-      const oh = rref(insp, "open_home"), pr = rref(insp, "property"), b = build(insp);
-      const k = b.contactId || b.id;
-      if (openHomeId && oh === openHomeId) (openGroups[k] = openGroups[k] || []).push(b);
-      if (propertyId && pr === propertyId) (propGroups[k] = propGroups[k] || []).push(b);
-    });
-    const property = attachOther(Object.values(propGroups).map(mergeGroup).map(normBuyer), propertyId);
-    // An open-scoped card only groups the inspections FROM THAT OPEN; borrow the
-    // property-level merge so notes/visits/contract state from earlier visits still show.
-    const byKey = {}; property.forEach(p => { byKey[p.contactId || p.id] = p; });
-    const open = attachOther(Object.values(openGroups).map(mergeGroup).map(normBuyer), propertyId).map(c => {
-      const p = byKey[c.contactId || c.id]; if (!p) return c;
-      return { ...c, notes: p.notes, visits: p.visits, openHomeIds: p.openHomeIds, contractSent: c.contractSent || p.contractSent, contractSentTime: c.contractSentTime || p.contractSentTime, resendId: c.resendId || p.resendId, contractOpens: p.contractOpens, otherProps: p.otherProps };
-    });
-    return { ok: true, open, property };
+    return _buildBuyers(inspData, pplData, openHomeId, propertyId, propMeta);
+  },
+  // Instant, synchronous build straight from the in-memory whole-CRM cache (no backend
+  // round-trip) — used to paint a listing's buyers the moment it opens, while a fresh
+  // getBuyersFor refreshes in the background. Cross-property "otherProps" fills from
+  // whatever propMeta is already cached; the background refresh completes it.
+  getBuyersForCached(openHomeId, propertyId){
+    if(!_buyerRecCache || !_buyerRecCache.insp) return null;
+    return _buildBuyers(_buyerRecCache.insp, _buyerRecCache.ppl, openHomeId, propertyId, (_propMetaCache && _propMetaCache.map) || {});
   },
   // One row per buyer (deduped by contact) with every note they have across all
   // inspections joined together — the corpus the AI query reads over.
@@ -5627,8 +5618,12 @@ export default function App(){
     setOpenHome(oh);setScreen("open");setBFilters([]);setPFilter({});
     // (n8n warm-up ping removed to conserve executions)
     if(oh._demo) return;
-    // Instant: show cached / in-memory buyers so the list appears with no spinner…
+    // Instant paint, no backend wait: in-memory state → the whole-CRM cache (desktop has
+    // it loaded) → localStorage. The getBuyersFor refresh below then reconciles.
     let hadCache=!!buyers[oh.id];
+    if(!hadCache){
+      try{ const c=Attio.getBuyersForCached(oh.id, oh.propertyId); if(c&&c.ok&&(c.open.length||c.property.length)){ applyFreshBuyers(oh.id,c); hadCache=true; } }catch(e){}
+    }
     if(!hadCache){
       try{
         const c=localStorage.getItem("savvi_buyers_"+oh.id);
@@ -5636,12 +5631,10 @@ export default function App(){
       }catch(e){}
     }
     if(!hadCache) setBuyersLoading(true);
-    // …but ALWAYS refetch fresh so buyers another agent registered (on their phone)
-    // show up here too. Bypass the short-lived cache so it's genuinely current.
-    invalidateBuyerCache();
-    const r=await Attio.getBuyersFor(oh.id, oh.propertyId);
-    if(r.ok) applyFreshBuyers(oh.id,r);
-    setBuyersLoading(false);
+    // Refresh fresh from the backend in the BACKGROUND so another agent's registrations show
+    // up — without blocking the paint, and without nuking the whole-CRM cache (that keeps the
+    // NEXT listing's instant paint fast). This is what cut open-a-listing from 3-6s to instant.
+    Attio.getBuyersFor(oh.id, oh.propertyId).then(r=>{ if(r&&r.ok) applyFreshBuyers(oh.id,r); }).catch(()=>{}).finally(()=>setBuyersLoading(false));
   };
 
   // Manual refresh (tap ↻) — pulls the very latest buyers for the current open.
