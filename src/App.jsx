@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v96-fast-open";
+const BUILD = "v97-offer-contract";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2773,6 +2773,110 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
 }
 
 /* ════════════════════════════════════════════
+   OFFER → CONTRACT — parse a buyer's "[Offer]" note (written by the offer form) into
+   structured particulars, and a review screen to check/edit them before filling the
+   Contract of Sale. Offer note format (6 real samples, 11 Nov 2026):
+   [Offer] Price 640000 · deposit 10% · settlement Fri 11 December 2026 · finance Yes ·
+   B&P Yes · purchasers: Name One; Name Two · address: <buyer addr> · conditions: <free text>
+════════════════════════════════════════════ */
+function parseOffer(buyer){
+  const raw = typeof buyer?.notes==="string" ? buyer.notes : (Array.isArray(buyer?.notes)? buyer.notes.map(n=>n.text||n).join("\n---\n") : "");
+  const seg = raw.split("\n---\n").map(s=>s.trim()).reverse().find(s=>/\[Offer\]/i.test(s));
+  if(!seg) return null;
+  const body = seg.replace(/^[\s\S]*?\[Offer\]\s*/i,"");
+  const ci = body.search(/·\s*conditions\s*:/i);
+  const head = ci>=0 ? body.slice(0,ci) : body;
+  const conditions = ci>=0 ? body.slice(ci).replace(/^·\s*conditions\s*:\s*/i,"").trim() : "";
+  const f={};
+  head.split("·").forEach(p=>{ const m=p.trim().match(/^([A-Za-z&]+)\s*:?\s*([\s\S]*)$/); if(m) f[m[1].toLowerCase()]=m[2].trim(); });
+  const money=v=>{ if(!v) return null; const k=/k\b/i.test(v); const n=parseFloat(v.replace(/[^0-9.]/g,"")); if(isNaN(n)) return null; return Math.round(k&&n<10000?n*1000:n); };
+  const price=money(f.price);
+  const dm=(f.deposit||"").match(/([\d.]+)/); const depPct=dm?parseFloat(dm[1]):null;
+  const depAmt=(price&&depPct)?Math.round(price*depPct/100):null;
+  const finDays=(conditions.match(/(\d+)\s*(?:business\s*)?days?\s*(?:for\s*)?finance/i)||conditions.match(/finance[^.\d]{0,40}?(\d+)\s*(?:business\s*)?days?/i)||[])[1]||"";
+  const lender=(conditions.match(/with\s+(?:the\s+)?([A-Z][A-Za-z .&'-]*?(?:Bank|Banking|CBA|ANZ|NAB|Westpac|Macquarie|ING|Bendigo|BOQ|Suncorp)[A-Za-z .]*)/)||[])[1]||"";
+  return {
+    price, depPct, depAmt, balance:(price!=null&&depAmt!=null)?price-depAmt:null,
+    settlement:f.settlement||"", finance:/^y/i.test(f.finance||""), bp:/^y/i.test(f["b&p"]||f.bp||""),
+    finDays, lender, purchasers:(f.purchasers||"").split(";").map(s=>s.trim()).filter(Boolean),
+    buyerAddress:f.address||"", conditions,
+  };
+}
+function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
+  const drag=useSheetDrag(onClose);
+  const parsed=useMemo(()=>open&&buyer?parseOffer(buyer):null,[open,buyer]);
+  const [p1,setP1]=useState(""),[p2,setP2]=useState(""),[price,setPrice]=useState(""),[depAmt,setDepAmt]=useState(""),[depWhen,setDepWhen]=useState("on signing the contract"),[settle,setSettle]=useState(""),[fin,setFin]=useState(false),[lender,setLender]=useState(""),[loanMax,setLoanMax]=useState(""),[finDays,setFinDays]=useState("14"),[approval,setApproval]=useState(""),[bp,setBp]=useState(false),[vacant,setVacant]=useState(true),[copied,setCopied]=useState(false);
+  useEffect(()=>{ if(open&&parsed){
+    setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||"");
+    setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); setDepWhen("on signing the contract");
+    setSettle(parsed.settlement||""); setFin(!!parsed.finance); setLender(parsed.lender||""); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setVacant(true); setCopied(false);
+  } /* eslint-disable-next-line */ },[open,parsed]);
+  const num=v=>{const n=parseFloat(String(v).replace(/[^0-9.]/g,""));return isNaN(n)?null:n;};
+  const priceN=num(price), depN=num(depAmt), balance=(priceN!=null&&depN!=null)?priceN-depN:null;
+  const depPct=(priceN&&depN)?Math.round(depN/priceN*1000)/10:null;
+  const d$=n=>n==null?"":"$"+Number(n).toLocaleString("en-AU");
+  const fi={width:"100%",padding:"8px 10px",fontSize:13.5,border:`1px solid ${SAND_D}`,borderRadius:8,fontFamily:"inherit",background:WHITE,color:ESPRESSO,outline:"none",boxSizing:"border-box"};
+  const fl={fontSize:10.5,fontWeight:800,letterSpacing:.4,textTransform:"uppercase",color:BROWN_L,display:"block",marginBottom:3};
+  const sectn={fontSize:11,fontWeight:800,letterSpacing:1,textTransform:"uppercase",color:ESPRESSO,margin:"14px 0 8px"};
+  const chk=(on,set,label)=>(<label style={{display:"flex",alignItems:"center",gap:9,cursor:"pointer",fontSize:13.5,color:ESPRESSO,fontWeight:600,padding:"4px 0"}}><input type="checkbox" checked={on} onChange={e=>set(e.target.checked)} style={{width:17,height:17,accentColor:GRN,cursor:"pointer"}}/>{label}</label>);
+  const particulars=()=>{
+    const L=[`${openHome?.address||"Property"} — Particulars of Sale`,""];
+    L.push(`Purchaser(s): ${[p1,p2].filter(Boolean).join("; ")||"—"}`);
+    L.push(`Price: ${d$(priceN)}`);
+    L.push(`Deposit: ${d$(depN)}${depPct?` (${depPct}%)`:""} ${depWhen||""}`.trim());
+    L.push(`Balance at settlement: ${d$(balance)}`);
+    L.push(`Settlement: ${settle||"—"}`);
+    L.push(`Vacant possession: ${vacant?"Yes":"No"}`);
+    L.push(`Subject to loan (GC20): ${fin?`Yes — Lender: ${lender||"____"}, max loan ${loanMax?d$(num(loanMax)):"____"}, approval ${approval||(finDays?`within ${finDays} days`:"____")}`:"No"}`);
+    L.push(`Building report (GC21): ${bp?"Yes":"No"}`);
+    L.push(`Pest report (GC22): ${bp?"Yes":"No"}`);
+    return L.join("\n");
+  };
+  if(!parsed) return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}><div className="sh" onClick={e=>e.stopPropagation()}><div className="hndl" onClick={onClose}/><div className="sh-ttl">Prepare contract</div><div style={{padding:"20px 16px",color:BROWN_L}}>No offer found on this buyer yet.</div></div></div>;
+  return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}} {...drag.handlers}>
+      <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
+      <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
+      <div className="sh-ttl" style={{paddingRight:44}}>Prepare contract</div>
+      <div className="sh-sub">{openHome?.address} · from {(p1||"the buyer").split(" ")[0]}'s offer · check and edit before it's filled</div>
+      <div style={{padding:"4px 16px 16px",overflowY:"auto",maxHeight:"62vh"}}>
+        <div style={sectn}>Purchasers</div>
+        <div style={{display:"grid",gap:8}}>
+          <div><label style={fl}>Purchaser 1 (full legal name)</label><input style={fi} value={p1} onChange={e=>setP1(e.target.value)}/></div>
+          <div><label style={fl}>Purchaser 2 (if any)</label><input style={fi} value={p2} onChange={e=>setP2(e.target.value)} placeholder="—"/></div>
+        </div>
+        <div style={sectn}>Payment</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+          <div><label style={fl}>Price</label><input style={fi} value={price} onChange={e=>setPrice(e.target.value)} inputMode="numeric"/></div>
+          <div><label style={fl}>Deposit {depPct?`(${depPct}%)`:""}</label><input style={fi} value={depAmt} onChange={e=>setDepAmt(e.target.value)} inputMode="numeric"/></div>
+          <div><label style={fl}>Deposit paid</label><input style={fi} value={depWhen} onChange={e=>setDepWhen(e.target.value)}/></div>
+          <div><label style={fl}>Balance at settlement</label><input style={{...fi,background:LINEN}} value={d$(balance)} readOnly/></div>
+        </div>
+        <div style={sectn}>Settlement</div>
+        <div><label style={fl}>Settlement due on</label><input style={fi} value={settle} onChange={e=>setSettle(e.target.value)} placeholder="e.g. Fri 11 December 2026"/></div>
+        <div style={{marginTop:6}}>{chk(vacant,setVacant,"Vacant possession at settlement")}</div>
+        <div style={sectn}>Conditions</div>
+        {chk(fin,setFin,"Subject to loan (General Condition 20)")}
+        {fin&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,margin:"4px 0 6px",paddingLeft:26}}>
+          <div style={{gridColumn:"1 / span 2"}}><label style={fl}>Lender</label><input style={fi} value={lender} onChange={e=>setLender(e.target.value)} placeholder="e.g. Commonwealth Bank"/></div>
+          <div><label style={fl}>Loan amount (no more than)</label><input style={fi} value={loanMax} onChange={e=>setLoanMax(e.target.value)} placeholder="$" inputMode="numeric"/></div>
+          <div><label style={fl}>Approval within (days)</label><input style={fi} value={finDays} onChange={e=>setFinDays(e.target.value)} inputMode="numeric"/></div>
+        </div>}
+        {chk(bp,setBp,"Subject to building & pest report (GC21 & GC22)")}
+        {parsed.conditions&&<div style={{marginTop:12}}>
+          <label style={fl}>Buyer's offer notes (reference)</label>
+          <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:9,padding:"9px 11px",fontSize:12.5,color:BROWN_M,whiteSpace:"pre-wrap",maxHeight:120,overflowY:"auto"}}>{parsed.conditions}</div>
+        </div>}
+      </div>
+      <div className="cpy-row" style={{padding:"0 16px 14px",display:"flex",gap:8}}>
+        <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 16px",fontSize:13,whiteSpace:"nowrap"}} onClick={()=>{navigator.clipboard?.writeText(particulars()).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),2000);}}>{copied?"✓ Copied":"Copy particulars"}</button>
+        <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} disabled title="Contract fill coming next">Fill contract (next)</button>
+      </div>
+    </div>
+  </div>;
+}
+
+/* ════════════════════════════════════════════
    VENDOR-REPORT NOTE CLEANING — shared helpers used by aiVendorSummary to strip
    system / automation notes and any PII (emails, phone numbers) out of a buyer's
    notes BEFORE they are sent to the backend report prompt. FIRST NAMES ONLY (privacy).
@@ -4073,7 +4177,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
       <td><IBadge v={b.interest} dash/></td>
       <td><HeatBadge b={b}/></td>
       <td>{b.contractSent?<span className={`chip ${co?"ok":"info"}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{co?`Opened ${co}×`:"Sent"}</span>:<span className="mut">—</span>}</td>
-      <td>{fs?<span className={`chip ${fs.c}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{fs.t}</span>:<span className="mut">—</span>}</td>
+      <td>{fs?(fs.t==="Offer in"?<button className={`chip ${fs.c}`} onClick={e=>{e.stopPropagation();crm.openOfferContract(b);}} title="Prepare contract from this offer" style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100,border:"none",cursor:"pointer"}}>{fs.t} →</button>:<span className={`chip ${fs.c}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{fs.t}</span>):<span className="mut">—</span>}</td>
       <td className="num">{b.isEnquiry?<span className="mut">enquiry</span>:(b.visits||1)}</td>
       <td className="wrap" style={{minWidth:260,maxWidth:520}}><div className="mut" style={{whiteSpace:"normal",lineHeight:1.4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{ln?ln.text:"—"}</div>{ln&&ln.ts&&<div className="mut" style={{fontSize:11,marginTop:2}}>{crmAgo(ln.ts)}{ln.agent?` · ${ln.agent}`:""}</div>}</td>
     </tr>; };
@@ -5379,6 +5483,8 @@ export default function App(){
   const[sumSel,setSumSel]=useState([]); // buyer ids ticked on desktop to seed the campaign-report chooser
   const[sumStats,setSumStats]=useState(true);  // "include internet stats (REA + Domain)" in the report
   const[sumStart,setSumStart]=useState("open"); // which mode the vendor-update sheet opens in
+  const[showOfferContract,setShowOfferContract]=useState(false);
+  const[offerContractBuyer,setOfferContractBuyer]=useState(null);
   const[mktStats,setMktStats]=useState(null);  // per-listing REA/Domain stats, refreshed Mondays (public JSON on the droplet)
   useEffect(()=>{ let on=true; fetch("https://go.getsavvi.com.au/contracts/marketing-stats.json",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(j=>{ if(on&&j&&j.listings) setMktStats(j); }).catch(()=>{}); return ()=>{on=false;}; },[]);
   const[showOk,setShowOk]=useState(false);
@@ -6150,7 +6256,7 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, sumStats, setSumStats, setSumStart, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setBFilters, fmtDay, addNote, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
+  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, sumStats, setSumStats, setSumStart, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setBFilters, fmtDay, addNote, openOfferContract:(b)=>{ setOfferContractBuyer(b); setShowOfferContract(true); }, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
@@ -6452,6 +6558,7 @@ export default function App(){
       onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}} onOpenContact={openContact}
       onSendLink={(kind,channel,b)=>{ if(!b?._attioInspectionId) return false; const url=formLinkUrl(kind,b._attioInspectionId,agentName); const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const logSearch=(text)=>{ const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:AGENT_FULL[agentName]||agentName||""}; setSearchProfile(a=>{ if(!a) return a; const notes=[...(a.notes||[]),note]; if(!isDemo&&a._attioInspectionId){ const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; Attio.updateInspection(a._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); } return {...a,notes}; }); }; if(channel==="text"){ if(!b.mobile) return false; const msg=formLinkMsg(kind,first,addr,url,smsSig(agentName)); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:msg}).catch(()=>{}); logSearch(formSentNote(kind,"text")); return true; } if(channel==="email"){ if(!b.email) return false; Resend.sendFormLink({toEmail:b.email,toName:b.name,agentName,address:searchOpenHome?.address||addr,url,kind}).catch(()=>{}); logSearch(formSentNote(kind,"email")); return true; } return false; }}/>
     <SummarySheet open={showSum} onClose={()=>{setShowSum(false);setSumSel([]);setSumStart("open");}} openHome={openHome} buyers={pb} allBuyers={propAll} precomputed={openHome?vendorReport.current[openHome.id]:null} agentName={agentName} selIds={sumSel} initStats={sumStats} startMode={sumStart} tableSelect={isDesktop} mktStats={mktStats}/>
+    <OfferContractSheet open={showOfferContract} onClose={()=>setShowOfferContract(false)} buyer={offerContractBuyer} openHome={openHome} agentName={agentName}/>
     <MatchSheet open={showMatch} onClose={()=>setShowMatch(false)} openHome={openHome} excludeIds={propAll.map(b=>b.contactId).filter(Boolean)} agentName={agentName} propIndex={propIndex}/>
     <QuickContractSheet
       open={showQuickContract}
