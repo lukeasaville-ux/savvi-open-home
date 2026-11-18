@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v108-offer-generate-filter";
+const BUILD = "v109-contract-autofill";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2806,12 +2806,37 @@ function parseOffer(buyer){
   const finDays=(conditions.match(/(\d+)\s*(?:business\s*)?days?\s*(?:for\s*)?finance/i)||conditions.match(/finance[^.\d]{0,40}?(\d+)\s*(?:business\s*)?days?/i)||(f.finance||"").match(/(\d+)\s*days?/i)||[])[1]||"";
   const bpDays=((f["b&p"]||f.bp||"").match(/(\d+)\s*days?/i)||conditions.match(/(\d+)\s*(?:business\s*)?days?[^.\d]{0,24}?(?:building|pest|b&p|inspection)/i)||[])[1]||"";
   const lender=(conditions.match(/with\s+(?:the\s+)?([A-Z][A-Za-z .&'-]*?(?:Bank|Banking|CBA|ANZ|NAB|Westpac|Macquarie|ING|Bendigo|BOQ|Suncorp)[A-Za-z .]*)/)||[])[1]||"";
+  // Conveyancer split into name + email (for the Purchaser's conveyancer block on the contract).
+  const convRaw=(f.conveyancer||"").trim();
+  const convTbd=/not\s*yet\s*appointed/i.test(convRaw);
+  const convEmail=convTbd?"":((convRaw.match(/[^\s,;]+@[^\s,;]+/)||[])[0]||"");
+  const convName=convTbd?"":convRaw.replace(convEmail,"").replace(/[,;]/g," ").replace(/\s+/g," ").trim();
   return {
     price, depPct, depAmt, balance:(price!=null&&depAmt!=null)?price-depAmt:null,
     settlement:f.settlement||"", finance:/^y/i.test(f.finance||""), bp:/^y/i.test(f["b&p"]||f.bp||""),
     finDays, bpDays, lender, purchasers:(f.purchasers||"").split(";").map(s=>s.trim()).filter(Boolean),
-    buyerAddress:f.address||"", conveyancer:(f.conveyancer||"").trim(), conditions,
+    buyerAddress:f.address||"", conveyancer:convRaw, convName, convEmail,
+    depositBy:(f.depositby||"").trim(), depositPaid:(f.depositpaid||"").trim(), conditions,
   };
+}
+// VIC public holidays (keep in sync with the offer-form list in n8n workflow CRxlBNxElQhP1O13).
+const VIC_HOLS=["2026-09-25","2026-11-03","2026-12-25","2026-12-28","2027-01-01","2027-01-26","2027-03-08","2027-03-26","2027-03-29","2027-06-14","2027-11-02","2027-12-27","2027-12-28","2028-01-03","2028-01-26"];
+const _iso=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+const _isVicHol=d=>VIC_HOLS.indexOf(_iso(d))>-1;
+// Settlement/approval date rule (Luke): N days from the base date; a Saturday moves back to
+// Friday, a Sunday forward to Monday; then a VIC public holiday pushes to the next business day.
+function adjustBizDay(d){ const g=d.getDay(); if(g===6) d.setDate(d.getDate()-1); else if(g===0) d.setDate(d.getDate()+1); let gd=0; while(_isVicHol(d)&&gd++<21){ d.setDate(d.getDate()+1); const gg=d.getDay(); if(gg===6) d.setDate(d.getDate()+2); else if(gg===0) d.setDate(d.getDate()+1); } return d; }
+function dateFromDays(days, base){ const n=parseInt(String(days).replace(/[^0-9]/g,""),10); if(!n) return null; const d=new Date((base||new Date()).getTime()); d.setHours(0,0,0,0); d.setDate(d.getDate()+n); return adjustBizDay(d); }
+const fmtContractDate=d=>d?d.toLocaleDateString("en-AU",{weekday:"short",day:"numeric",month:"long",year:"numeric"}):"";
+// "60 days" -> a real settlement date string; a legacy date string is returned unchanged.
+function computeSettleDate(periodOrDate, base){ const m=String(periodOrDate||"").match(/(\d+)\s*days?/i); if(!m) return String(periodOrDate||""); return fmtContractDate(dateFromDays(m[1], base)); }
+// Standard building & pest special condition (used when the contract has no B&P box, e.g. Lisson).
+function bpSpecialConditionText(days){
+  const d=String(days).replace(/\s*days?/i,"")||"14";
+  const a="SPECIAL CONDITION 1 — BUILDING AND PEST INSPECTION\n(a) This contract is subject to the purchaser obtaining, at the purchaser's own cost, a satisfactory building inspection report and a satisfactory timber pest (pest) inspection report in respect of the property within "+d+" days of the day of sale.\n";
+  const b=(d==="14")?"(b) General Conditions 21 (Building Report) and 22 (Pest Report) of this contract apply to this special condition as if the applicable boxes in the particulars of sale had been checked.\n":"(b) General Conditions 21 (Building Report) and 22 (Pest Report) of this contract apply to this special condition as if the applicable boxes in the particulars of sale had been checked, except that the period of \"14 days\" in each of those general conditions is replaced with \""+d+" days\".\n";
+  const c="(c) The purchaser may end this contract by written notice to the vendor within the "+d+" day period if a report obtained under the relevant general condition discloses a major defect in a structure on the land, or a current major pest infestation. If the purchaser ends this contract under this special condition, all money paid by the purchaser must be immediately refunded.";
+  return a+b+c;
 }
 // Fill an accepted offer onto its listing's Contract of Sale. The field POSITIONS are
 // mapped once per contract (different conveyancer layouts) and stored on the droplet
@@ -2830,19 +2855,47 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
   const doc=await PDFDocument.load(bytes);
   const font=await doc.embedFont(StandardFonts.Helvetica);
+  const fontB=await doc.embedFont(StandardFonts.HelveticaBold);
   const pages=doc.getPages();
-  const INK=rgb(0.03,0.09,0.45);
+  const INK=rgb(0,0,0);          // black ink
+  const LIFT=3.5;                // sit values just ABOVE the dotted line, not on it
   const T=map.text||{}, B=map.boxes||{};
-  const put=(f,text)=>{ if(!f||text==null||text==="")return; const pg=pages[f.page]; if(!pg)return; pg.drawText(String(text),{x:f.x,y:pg.getHeight()-f.y,size:f.size||10,font,color:INK}); };
-  const tick=(f)=>{ if(!f)return; const pg=pages[f.page]; if(!pg)return; pg.drawText("X",{x:f.x,y:pg.getHeight()-f.y,size:f.size||9,font,color:INK}); };
-  put(T.purchaserName, v.purchaserName);
+  const put=(f,text)=>{ if(!f||text==null||text==="")return; const pg=pages[f.page]; if(!pg)return; pg.drawText(String(text),{x:f.x,y:pg.getHeight()-f.y+LIFT,size:f.size||10,font,color:INK}); };
+  const tick=(f)=>{ if(!f)return; const pg=pages[f.page]; if(!pg)return; pg.drawText("X",{x:f.x,y:pg.getHeight()-f.y+LIFT,size:f.size||9,font,color:INK}); };
+  // Multi-line, word-wrapped special-condition text in the contract's special-conditions area.
+  const drawSpecial=(sc,text)=>{ const pg=pages[sc.page]; if(!pg)return; const size=sc.size||9, lh=sc.lineHeight||12.5, maxW=sc.width||448; let y=pg.getHeight()-sc.y;
+    String(text).split("\n").forEach(para=>{ const bold=/^SPECIAL CONDITION/i.test(para); const ff=bold?fontB:font; const words=para.split(/\s+/); let line="";
+      words.forEach(w=>{ const t=line?line+" "+w:w; if(ff.widthOfTextAtSize(t,size)>maxW && line){ pg.drawText(line,{x:sc.x,y,size,font:ff,color:INK}); y-=lh; line=w; } else line=t; });
+      if(line){ pg.drawText(line,{x:sc.x,y,size,font:ff,color:INK}); y-=lh; } y-=4; }); };
+  const names=v.purchaserName||[v.p1,v.p2].filter(Boolean).join(" & ");
+  put(T.purchaserName, names);
   put(T.purchaserAddr, v.purchaserAddr);
-  put(T.price, v.price); put(T.deposit, v.deposit); put(T.balance, v.balance);
+  put(T.purchaserConvName, v.convName);
+  put(T.purchaserConvEmail, v.convEmail);
+  put(T.price, v.price);
+  put(T.deposit, v.deposit);
+  put(T.depositBy, v.depositBy);
+  put(T.depositPaid, v.depositPaid);
+  put(T.balance, v.balance);
   put(T.settlement, v.settlement);
   put(T.s32PurchaserName, v.p1); put(T.s32PurchaserName2, v.p2);
-  put(T.signPurchaserName, v.p1);
-  if(v.loan){ put(T.lender, v.lender); put(T.loanAmount, v.loanAmount); put(T.approval, v.approval); tick(B.loan); }
-  if(v.bp){ tick(B.building); tick(B.pest); (map.bpDays||[]).forEach(f=>put(f, v.bpDays||"14")); }
+  put(T.signPurchaserName, names);
+  // Finance (General Condition 14/20): fill the loan details when the offer is subject to finance.
+  if(v.loan){
+    put(T.lender, v.lender||"An approved lending institution");
+    put(T.loanAmount, v.loanAmount);
+    put(T.approval, v.approval);                 // single-blank layout (older maps)
+    if(v.approvalD){ put(T.approvalDay, v.approvalD); put(T.approvalMonth, v.approvalM); put(T.approvalYear, v.approvalYY); }
+    tick(B.loan);
+  }
+  // Building & pest: tick the particulars boxes only when the contract has them AND the buyer
+  // chose the standard 14 days; otherwise add the standard GC21/22 terms as a special condition.
+  if(v.bp){
+    const d=String(v.bpDays||"14").replace(/\s*days?/i,"");
+    if((B.building||B.pest) && d==="14"){ tick(B.building); tick(B.pest); }
+    else if(map.specialConditions){ drawSpecial(map.specialConditions, bpSpecialConditionText(v.bpDays||"14")); }
+    else if(B.building||B.pest){ tick(B.building); tick(B.pest); }
+  }
   return await doc.save();
 }
 
@@ -2851,11 +2904,13 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   const parsed=useMemo(()=>open&&buyer?parseOffer(buyer):null,[open,buyer]);
   const [p1,setP1]=useState(""),[p2,setP2]=useState(""),[padr,setPadr]=useState(""),[price,setPrice]=useState(""),[depAmt,setDepAmt]=useState(""),[depWhen,setDepWhen]=useState("on signing the contract"),[settle,setSettle]=useState(""),[fin,setFin]=useState(false),[lender,setLender]=useState(""),[loanMax,setLoanMax]=useState(""),[finDays,setFinDays]=useState("14"),[approval,setApproval]=useState(""),[bp,setBp]=useState(false),[vacant,setVacant]=useState(true),[copied,setCopied]=useState(false);
   const [bpDays,setBpDays]=useState("14");
+  const [depUpfront,setDepUpfront]=useState("");
   const [filling,setFilling]=useState(false),[fillErr,setFillErr]=useState(""),[filledFile,setFilledFile]=useState(null);
   useEffect(()=>{ if(open&&parsed){
     setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||""); setPadr(parsed.buyerAddress||"");
-    setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); setDepWhen("on signing the contract");
-    setSettle(parsed.settlement||""); setFin(!!parsed.finance); setLender(parsed.lender||""); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setBpDays(parsed.bpDays||"14"); setVacant(true); setCopied(false);
+    setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); setDepWhen(parsed.depositBy||"on signing"); setDepUpfront(parsed.depositPaid||"");
+    // Settlement period ("60 days") becomes a real date from today; the agent can still edit it.
+    setSettle(computeSettleDate(parsed.settlement, new Date())); setFin(!!parsed.finance); setLender(parsed.lender||"An approved lending institution"); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setBpDays(parsed.bpDays||"14"); setVacant(true); setCopied(false);
     setFilling(false); setFillErr(""); setFilledFile(null);
   } /* eslint-disable-next-line */ },[open,parsed]);
   const fileName=()=>`Contract - ${String(openHome?.address||"property").replace(/[\\/:*?"<>|]/g,"")} - ${(p1||"purchaser").split(" ")[0]}.pdf`;
@@ -2863,9 +2918,16 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
     setFillErr(""); setFilling(true); setFilledFile(null);
     try{
       const money=n=>n==null?"":Number(n).toLocaleString("en-AU");
+      // Finance approval date computed from the finance period (business-day adjusted).
+      const apprDate=fin?dateFromDays(finDays, new Date()):null;
+      const depPaidStr=depUpfront.trim()?(num(depUpfront)!=null?money(num(depUpfront)):depUpfront.trim()):"Nil";
       const v={ purchaserName:[p1,p2].filter(Boolean).join(" & "), purchaserAddr:padr,
-        price:money(priceN), deposit:money(depN), balance:money(balance), settlement:settle, p1, p2,
-        loan:fin, lender, loanAmount:loanMax?money(num(loanMax)):"", approval, bp, bpDays:(bpDays||"14") };
+        convName:parsed.convName||"", convEmail:parsed.convEmail||"",
+        price:money(priceN), deposit:money(depN), depositBy:(depWhen||"on signing").trim(), depositPaid:depPaidStr,
+        balance:money(balance), settlement:settle, p1, p2,
+        loan:fin, lender:lender||"An approved lending institution", loanAmount:money(balance),
+        approval:apprDate?fmtContractDate(apprDate):"", approvalD:apprDate?apprDate.getDate():"", approvalM:apprDate?(apprDate.getMonth()+1):"", approvalYY:apprDate?String(apprDate.getFullYear()).slice(-2):"",
+        bp, bpDays:(bpDays||"14") };
       const bytes=await fillOfferContractPdf({ contractUrl:openHome?.contractUrl, propertyId:openHome?.propertyId, v });
       setFilledFile({ bytes, name:fileName() });
     }catch(e){ setFillErr(e?.code==="NO_MAP" ? "This contract isn't set up for auto-fill yet. I map each contract once when it's added — tell Luke which listing and it takes a few minutes." : (e?.message||"Couldn't fill the contract.")); }
@@ -2918,18 +2980,22 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
           <div><label style={fl}>Price</label><input style={fi} value={price} onChange={e=>setPrice(e.target.value)} inputMode="numeric"/></div>
           <div><label style={fl}>Deposit {depPct?`(${depPct}%)`:""}</label><input style={fi} value={depAmt} onChange={e=>setDepAmt(e.target.value)} inputMode="numeric"/></div>
-          <div><label style={fl}>Deposit paid</label><input style={fi} value={depWhen} onChange={e=>setDepWhen(e.target.value)}/></div>
           <div><label style={fl}>Balance at settlement</label><input style={{...fi,background:LINEN}} value={d$(balance)} readOnly/></div>
+          <div><label style={fl}>Deposit payable by</label><input style={fi} value={depWhen} onChange={e=>setDepWhen(e.target.value)} placeholder="on signing"/></div>
+          <div><label style={fl}>Paid up front now</label><input style={fi} value={depUpfront} onChange={e=>setDepUpfront(e.target.value)} placeholder="Nil"/></div>
         </div>
         <div style={sectn}>Settlement</div>
         <div><label style={fl}>Settlement due on</label><input style={fi} value={settle} onChange={e=>setSettle(e.target.value)} placeholder="e.g. Fri 11 December 2026"/></div>
         <div style={{marginTop:6}}>{chk(vacant,setVacant,"Vacant possession at settlement")}</div>
         <div style={sectn}>Conditions</div>
-        {chk(fin,setFin,"Subject to loan (General Condition 20)")}
-        {fin&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,margin:"4px 0 6px",paddingLeft:26}}>
-          <div style={{gridColumn:"1 / span 2"}}><label style={fl}>Lender</label><input style={fi} value={lender} onChange={e=>setLender(e.target.value)} placeholder="e.g. Commonwealth Bank"/></div>
-          <div><label style={fl}>Loan amount (no more than)</label><input style={fi} value={loanMax} onChange={e=>setLoanMax(e.target.value)} placeholder="$" inputMode="numeric"/></div>
-          <div><label style={fl}>Approval within (days)</label><input style={fi} value={finDays} onChange={e=>setFinDays(e.target.value)} inputMode="numeric"/></div>
+        {chk(fin,setFin,"Subject to finance (loan approval)")}
+        {fin&&<div style={{margin:"4px 0 6px",paddingLeft:26}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            <div style={{gridColumn:"1 / span 2"}}><label style={fl}>Lender</label><input style={fi} value={lender} onChange={e=>setLender(e.target.value)} placeholder="An approved lending institution"/></div>
+            <div><label style={fl}>Loan amount (= balance)</label><input style={{...fi,background:LINEN}} value={d$(balance)} readOnly/></div>
+            <div><label style={fl}>Approval within (days)</label><input style={fi} value={finDays} onChange={e=>setFinDays(e.target.value)} inputMode="numeric"/></div>
+          </div>
+          {finDays&&<div style={{fontSize:11.5,color:BROWN_L,marginTop:5}}>Approval date on the contract: <b>{fmtContractDate(dateFromDays(finDays,new Date()))||"—"}</b></div>}
         </div>}
         {chk(bp,setBp,"Subject to building & pest report")}
         {bp&&<div style={{margin:"2px 0 6px",paddingLeft:26,maxWidth:230}}>
