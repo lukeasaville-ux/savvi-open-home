@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v109-contract-autofill";
+const BUILD = "v110-contract-autofill-editions";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2861,12 +2861,19 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
   const LIFT=3.5;                // sit values just ABOVE the dotted line, not on it
   const T=map.text||{}, B=map.boxes||{};
   const put=(f,text)=>{ if(!f||text==null||text==="")return; const pg=pages[f.page]; if(!pg)return; pg.drawText(String(text),{x:f.x,y:pg.getHeight()-f.y+LIFT,size:f.size||10,font,color:INK}); };
-  const tick=(f)=>{ if(!f)return; const pg=pages[f.page]; if(!pg)return; pg.drawText("X",{x:f.x,y:pg.getHeight()-f.y+LIFT,size:f.size||9,font,color:INK}); };
+  const tick=(f)=>{ if(!f)return; const pg=pages[f.page]; if(!pg)return; pg.drawText("X",{x:f.x,y:pg.getHeight()-f.y,size:f.size||9,font,color:INK}); };
   // Multi-line, word-wrapped special-condition text in the contract's special-conditions area.
   const drawSpecial=(sc,text)=>{ const pg=pages[sc.page]; if(!pg)return; const size=sc.size||9, lh=sc.lineHeight||12.5, maxW=sc.width||448; let y=pg.getHeight()-sc.y;
     String(text).split("\n").forEach(para=>{ const bold=/^SPECIAL CONDITION/i.test(para); const ff=bold?fontB:font; const words=para.split(/\s+/); let line="";
       words.forEach(w=>{ const t=line?line+" "+w:w; if(ff.widthOfTextAtSize(t,size)>maxW && line){ pg.drawText(line,{x:sc.x,y,size,font:ff,color:INK}); y-=lh; line=w; } else line=t; });
       if(line){ pg.drawText(line,{x:sc.x,y,size,font:ff,color:INK}); y-=lh; } y-=4; }); };
+  // Fallback: append a clean page with the special condition (contracts that already carry
+  // special conditions, or have no empty box to write into).
+  const appendSpecial=(text)=>{ const W=595.28,H=841.89,MG=56,maxW=W-2*MG,size=10,lh=14; const pg=doc.addPage([W,H]); let y=H-72;
+    pg.drawText("ADDITIONAL SPECIAL CONDITION",{x:MG,y,size:11,font:fontB,color:INK}); y-=24;
+    String(text).split("\n").forEach(para=>{ const bold=/^SPECIAL CONDITION/i.test(para); const ff=bold?fontB:font; const words=para.split(/\s+/); let line="";
+      words.forEach(w=>{ const t=line?line+" "+w:w; if(ff.widthOfTextAtSize(t,size)>maxW && line){ pg.drawText(line,{x:MG,y,size,font:ff,color:INK}); y-=lh; line=w; } else line=t; });
+      if(line){ pg.drawText(line,{x:MG,y,size,font:ff,color:INK}); y-=lh; } y-=6; }); };
   const names=v.purchaserName||[v.p1,v.p2].filter(Boolean).join(" & ");
   put(T.purchaserName, names);
   put(T.purchaserAddr, v.purchaserAddr);
@@ -2895,6 +2902,7 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
     if((B.building||B.pest) && d==="14"){ tick(B.building); tick(B.pest); }
     else if(map.specialConditions){ drawSpecial(map.specialConditions, bpSpecialConditionText(v.bpDays||"14")); }
     else if(B.building||B.pest){ tick(B.building); tick(B.pest); }
+    else { appendSpecial(bpSpecialConditionText(v.bpDays||"14")); }
   }
   return await doc.save();
 }
