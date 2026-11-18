@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v104-bpdays-share-btn";
+const BUILD = "v105-offer-conveyancer";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2802,7 +2802,7 @@ function parseOffer(buyer){
     price, depPct, depAmt, balance:(price!=null&&depAmt!=null)?price-depAmt:null,
     settlement:f.settlement||"", finance:/^y/i.test(f.finance||""), bp:/^y/i.test(f["b&p"]||f.bp||""),
     finDays, lender, purchasers:(f.purchasers||"").split(";").map(s=>s.trim()).filter(Boolean),
-    buyerAddress:f.address||"", conditions,
+    buyerAddress:f.address||"", conveyancer:(f.conveyancer||"").trim(), conditions,
   };
 }
 // Fill an accepted offer onto its listing's Contract of Sale. The field POSITIONS are
@@ -2904,6 +2904,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
           <div><label style={fl}>Purchaser 1 (full legal name)</label><input style={fi} value={p1} onChange={e=>setP1(e.target.value)}/></div>
           <div><label style={fl}>Purchaser 2 (if any)</label><input style={fi} value={p2} onChange={e=>setP2(e.target.value)} placeholder="—"/></div>
           <div><label style={fl}>Purchaser address</label><input style={fi} value={padr} onChange={e=>setPadr(e.target.value)} placeholder="Street, suburb, state, postcode"/></div>
+          <div><label style={fl}>Conveyancer (from buyer's offer)</label><input style={{...fi,background:LINEN}} value={parsed.conveyancer||"Not provided"} readOnly/></div>
         </div>
         <div style={sectn}>Payment</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
