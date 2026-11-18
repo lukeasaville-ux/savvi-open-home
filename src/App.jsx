@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v110-contract-autofill-editions";
+const BUILD = "v111-contract-pagebox-fix";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2860,10 +2860,13 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
   const INK=rgb(0,0,0);          // black ink
   const LIFT=3.5;                // sit values just ABOVE the dotted line, not on it
   const T=map.text||{}, B=map.boxes||{};
-  const put=(f,text)=>{ if(!f||text==null||text==="")return; const pg=pages[f.page]; if(!pg)return; pg.drawText(String(text),{x:f.x,y:pg.getHeight()-f.y+LIFT,size:f.size||10,font,color:INK}); };
-  const tick=(f)=>{ if(!f)return; const pg=pages[f.page]; if(!pg)return; pg.drawText("X",{x:f.x,y:pg.getHeight()-f.y,size:f.size||9,font,color:INK}); };
+  // Some contract PDFs have a MediaBox pdf-lib can't parse, so prefer the page height the
+  // mapper recorded (map.pageSizes) and only fall back to pdf-lib / A4.
+  const pageH=(idx,pg)=>{ const ps=(map.pageSizes||{})[String(idx)]; if(ps&&ps[1]) return ps[1]; try{ return pg.getHeight(); }catch(e){ return 841.89; } };
+  const put=(f,text)=>{ if(!f||text==null||text==="")return; const pg=pages[f.page]; if(!pg)return; pg.drawText(String(text),{x:f.x,y:pageH(f.page,pg)-f.y+LIFT,size:f.size||10,font,color:INK}); };
+  const tick=(f)=>{ if(!f)return; const pg=pages[f.page]; if(!pg)return; pg.drawText("X",{x:f.x,y:pageH(f.page,pg)-f.y,size:f.size||9,font,color:INK}); };
   // Multi-line, word-wrapped special-condition text in the contract's special-conditions area.
-  const drawSpecial=(sc,text)=>{ const pg=pages[sc.page]; if(!pg)return; const size=sc.size||9, lh=sc.lineHeight||12.5, maxW=sc.width||448; let y=pg.getHeight()-sc.y;
+  const drawSpecial=(sc,text)=>{ const pg=pages[sc.page]; if(!pg)return; const size=sc.size||9, lh=sc.lineHeight||12.5, maxW=sc.width||448; let y=pageH(sc.page,pg)-sc.y;
     String(text).split("\n").forEach(para=>{ const bold=/^SPECIAL CONDITION/i.test(para); const ff=bold?fontB:font; const words=para.split(/\s+/); let line="";
       words.forEach(w=>{ const t=line?line+" "+w:w; if(ff.widthOfTextAtSize(t,size)>maxW && line){ pg.drawText(line,{x:sc.x,y,size,font:ff,color:INK}); y-=lh; line=w; } else line=t; });
       if(line){ pg.drawText(line,{x:sc.x,y,size,font:ff,color:INK}); y-=lh; } y-=4; }); };
