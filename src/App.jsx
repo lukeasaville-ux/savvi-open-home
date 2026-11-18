@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v120-esign-preview-conveyancers";
+const BUILD = "v121-esign-authority-dist";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5421,7 +5421,9 @@ function AuthoritySheet({ open, onClose, agentName }){
       const submitters=named.map((v,i)=>({ role:"Vendor "+(i+1), name:v.name.trim(), email:v.email.trim() }));
       submitters.push({ role:"Agent", name:(agentName||"Savvi"), email:AGENT_EMAIL[agentName]||"hello@getsavvi.com.au" });
       const typeName = authType==="auction" ? "Exclusive Auction Authority" : "Exclusive Sale Authority";
-      const r=await call("sendToSign",{ name:`${typeName} - ${propertyAddr||"property"}`, typeName, propertyAddr:propertyAddr||"", pdfBase64:b64, fields, submitters });
+      // Once signed, email the executed authority to the owner(s).
+      const distribution={ kind:"authority", authTypeName:typeName, address:propertyAddr||"property", agentName:(AGENT_FULL[agentName]||agentName||""), agentEmail:(AGENT_EMAIL[AGENT_FULL[agentName]||agentName]||""), vendorName:(named[0]?.name||""), vendorEmails:named.map(v=>v.email.trim()).filter(Boolean) };
+      const r=await call("sendToSign",{ name:`${typeName} - ${propertyAddr||"property"}`, typeName, propertyAddr:propertyAddr||"", pdfBase64:b64, fields, submitters, kind:"authority", distribution });
       if(r&&r.ok){ setSendState("sent"); }
       else { setSendState("idle"); setErr("Could not send to sign. "+(r?.error||"please try again")); }
     }catch(e){ setSendState("idle"); setErr("Could not send to sign. "+(e?.message||"")); }
