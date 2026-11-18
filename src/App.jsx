@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v114-esign-dates-single-purchaser";
+const BUILD = "v115-esign-send-button-sent-state";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3064,8 +3064,12 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
         <div style={{padding:"0 16px 14px"}}>
           {signStep==="sent" ? (
             <div>
-              <div style={{background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:11,padding:"13px 14px",fontSize:13.5,color:ESPRESSO,fontWeight:600,lineHeight:1.5}}>✓ Sent to {(p1||"the purchaser").split(" ")[0]} to sign. Once they've signed, it goes to the vendor{venName?` (${venName.split(" ")[0]})`:""} automatically. Both receive an email from Savvi with their signing link.</div>
-              <button className="btn-cream" style={{marginTop:12}} onClick={()=>{setSignOpen(false);onClose();}}>Done</button>
+              <div style={{textAlign:"center",padding:"6px 0 2px"}}>
+                <div style={{width:56,height:56,borderRadius:"50%",background:GRN,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:30,fontWeight:700,margin:"0 auto 10px",boxShadow:`0 4px 16px ${GRN}55`}}>✓</div>
+                <div style={{fontSize:18,fontWeight:800,color:ESPRESSO,marginBottom:8}}>Sent for signing</div>
+              </div>
+              <div style={{background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:11,padding:"13px 14px",fontSize:13.5,color:ESPRESSO,fontWeight:600,lineHeight:1.5}}>The contract has gone to {(p1||"the purchaser").split(" ")[0]} to sign. The moment they sign, it's sent to the vendor{venName?` (${venName.split(" ")[0]})`:""} automatically. Both get an email from Savvi with their own signing link.</div>
+              <button className="btn-grn" style={{width:"100%",marginTop:12}} onClick={()=>{setSignOpen(false);onClose();}}>Done</button>
             </div>
           ) : (<>
             <div style={{fontSize:11,fontWeight:800,letterSpacing:1,textTransform:"uppercase",color:ESPRESSO,margin:"2px 0 8px"}}>Send for digital signing</div>
@@ -3077,12 +3081,13 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
                 <div><label style={fl}>Vendor email (signs after)</label><input style={fi} value={venEmail} onChange={e=>setVenEmail(e.target.value)} inputMode="email" placeholder={venLoading?"Looking up…":"vendor@email.com"}/></div>
               </div>
             </div>
-            {signDetected&&signDetected.fields.length>0&&<div style={{fontSize:11.5,color:BROWN_L,marginTop:8}}>Found {signDetected.fields.filter(f=>f.role==="Purchaser").length} purchaser + {signDetected.fields.filter(f=>f.role==="Vendor").length} vendor signing {signDetected.fields.length===1?"spot":"spots"} in this contract.</div>}
+            {signDetected&&signDetected.fields.length>0&&(()=>{ const ps=signDetected.fields.filter(f=>f.role==="Purchaser"&&f.type==="signature").length; const vs=signDetected.fields.filter(f=>f.role==="Vendor"&&f.type==="signature").length; return <div style={{fontSize:11.5,color:BROWN_L,marginTop:8}}>Found {ps} purchaser + {vs} vendor signature {ps+vs===1?"spot":"spots"} in this contract. Dates stamp automatically where indicated.</div>; })()}
             {signErr&&<div style={{margin:"10px 0 0",background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{signErr}</div>}
             <div style={{display:"flex",gap:8,marginTop:12}}>
-              <button className="btn-cream" style={{flex:"0 0 auto",padding:"13px 16px"}} onClick={()=>{setSignOpen(false);setSignErr("");}}>Back</button>
-              <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} disabled={signStep==="sending"||venLoading||!(signDetected&&signDetected.fields.length)} onClick={doSign}>{signStep==="sending"?"Sending…":"Send for signing →"}</button>
+              <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 18px",whiteSpace:"nowrap"}} onClick={()=>{setSignOpen(false);setSignErr("");}}>Back</button>
+              <button className="btn-grn" style={{flex:"1 1 0",minWidth:0,whiteSpace:"nowrap"}} disabled={signStep==="sending"||venLoading||!(signDetected&&signDetected.fields.length)} onClick={doSign}>{signStep==="sending"?"Sending…":"Send for signing →"}</button>
             </div>
+            {signStep==="sending"&&<div style={{fontSize:11.5,color:BROWN_L,marginTop:9,textAlign:"center"}}>Preparing and sending the contract… this can take a few seconds.</div>}
           </>)}
         </div>
       ) : (
