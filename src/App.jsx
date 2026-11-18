@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v113-offer-contract-esign";
+const BUILD = "v114-esign-dates-single-purchaser";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2966,7 +2966,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
     setPurEmail(buyer?.email||""); setVenName(""); setVenEmail(""); setVenLoading(true);
     try{ const vr=await call("getVendor",{propertyId:openHome?.propertyId}); if(vr&&vr.ok&&vr.vendor){ setVenName(vr.vendor.name||""); setVenEmail(vr.vendor.email||""); } }catch(e){}
     setVenLoading(false);
-    try{ const mod=await import("./contractDetect.js"); const res=await mod.detectContractFields(filledFile.bytes.slice(0)); setSignDetected(res);
+    try{ const mod=await import("./contractDetect.js"); const purCount=(p2&&p2.trim())?2:1; const res=await mod.detectContractFields(filledFile.bytes.slice(0), undefined, { purchasers:purCount, vendors:1 }); setSignDetected(res);
       if(!res.fields.length) setSignErr("No standard signing blocks were found in this contract, so it can't be sent for e-signing. You can still download the PDF and send it manually.");
     }catch(e){ setSignErr("Couldn't scan the contract for signing spots. "+(e?.message||"")); }
   };
@@ -2981,10 +2981,12 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
       if(!stash||!stash.ok||!stash.url){ setSignStep("prep"); setSignErr("Couldn't prepare the contract for signing. "+((stash&&stash.error)||"")); return; }
       const subs=[ {role:"Purchaser",name:([p1,p2].filter(Boolean).join(" & "))||"Purchaser",email:purEmail.trim()}, {role:"Vendor",name:venName.trim()||"Vendor",email:venEmail.trim()} ];
       const roles=subs.map(s=>s.role);
-      const flds=signDetected.fields.filter(f=>roles.includes(f.role)).map((f,i)=>({ name:`${f.role} ${f.type} ${i+1}`, role:f.role, type:f.type, required:true, readonly:f.type==="date", areas:[f.area] }));
+      // dates use DocuSeal's "datenow" type → auto-stamped with each party's signing date (DD/MM/YYYY).
+      const flds=signDetected.fields.filter(f=>roles.includes(f.role)).map((f,i)=>{ const isDate=f.type==="date"; return { name:`${f.role} ${isDate?"date":f.type} ${i+1}`, role:f.role, type:isDate?"datenow":f.type, required:true, areas:[f.area], ...(isDate?{preferences:{format:"DD/MM/YYYY"}}:{}) }; });
       if(!flds.length){ setSignStep("prep"); setSignErr("No signing fields for the purchaser/vendor were found in this contract."); return; }
       const addr=openHome?.address||"property";
-      const payload={ name:`Contract of Sale - ${addr}`, typeName:"Contract of Sale", propertyAddr:addr, docName:filledFile.name, fileUrl:stash.url, fields:flds, submitters:subs, order:"preserved" };
+      const agentFull=AGENT_FULL[agentName]||agentName||"";
+      const payload={ name:`Contract of Sale - ${addr}`, typeName:"Contract of Sale", propertyAddr:addr, docName:filledFile.name, fileUrl:stash.url, fields:flds, submitters:subs, order:"preserved", agentName:agentFull };
       const r=await call("sendToSign",payload);
       if(r&&r.ok) setSignStep("sent");
       else { setSignStep("prep"); setSignErr("Could not send to sign. "+((r&&r.error)||"please try again")); }
@@ -4857,7 +4859,7 @@ function signFields(hasSchedule, nVendors, authType, vendorType, hasAdvocate){
   const a=(x,y,w,h,page,W,H)=>({x:x/W,y:y/H,w:w/W,h:h/H,page});
   const schedPage = authType==="auction" ? 8 : 7;   // schedule = (authority pages + 1): sale 6→7, auction 7→8
   const sig=(name,role,x,y,w,h)=>({name,role,type:"signature",required:true,areas:[a(x,y,w,h,2,AW,AH)]});
-  const dte=(name,role,x,y,w,h)=>({name,role,type:"date",required:true,readonly:true,areas:[a(x,y,w,h,2,AW,AH)]}); // readonly → DocuSeal auto-fills the signing date
+  const dte=(name,role,x,y,w,h)=>({name,role,type:"datenow",required:true,preferences:{format:"DD/MM/YYYY"},areas:[a(x,y,w,h,2,AW,AH)]}); // datenow = DocuSeal auto-stamps each party's signing date
   const f=[ sig("Agent Signature","Agent",76,130,185,22), dte("Agent Date","Agent",55,180,120,14) ];
   const n=Math.max(1,nVendors||1);
   if(vendorType==="company"){
@@ -4881,7 +4883,7 @@ function signFields(hasSchedule, nVendors, authType, vendorType, hasAdvocate){
     const cavPage = authPages + (hasSchedule?1:0) + 1;
     const S=CAV_SIG_TOP, X0=CAV_SX0, X1=CAV_SX1;
     const sigP=(name,role,x,y,w,h)=>({name,role,type:"signature",required:true,areas:[a(x,y,w,h,cavPage,AW,AH)]});
-    const dteP=(name,role,x,y,w,h)=>({name,role,type:"date",required:true,readonly:true,areas:[a(x,y,w,h,cavPage,AW,AH)]});
+    const dteP=(name,role,x,y,w,h)=>({name,role,type:"datenow",required:true,preferences:{format:"DD/MM/YYYY"},areas:[a(x,y,w,h,cavPage,AW,AH)]});
     f.push(sigP("Agent CAV Signature","Agent",X0+4,S+5,X1-X0-8,24));
     f.push(dteP("Agent CAV Date","Agent",X0+6,S+40,120,16));
     const vTop=S+70, vH=44, dTop=S+124, slice=(X1-X0)/n;

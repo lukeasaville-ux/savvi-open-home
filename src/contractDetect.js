@@ -101,7 +101,10 @@ const CAP_GENERIC = /signature of (?:the |an? )?(individual|director|company|sec
 const CAP_ROLE    = /signature of (?:the )?(vendor|purchaser|transferee|transferor)/i;
 const CAP_XS      = /\b(vendor|purchaser)'?s signature\b/i;
 
-export async function detectContractFields(data, pdfjsOverride) {
+export async function detectContractFields(data, pdfjsOverride, opts) {
+  opts = opts || {};
+  const nPur = Math.max(1, opts.purchasers || 1);   // real party counts, so a lone
+  const nVen = Math.max(1, opts.vendors || 1);       // buyer never signs a 2nd-party row
   const { numPages, pages, doc } = await extractPages(data, pdfjsOverride);
   const fields = [];
   const push = (role, type, page, x0, y0, x1, y1) => {
@@ -128,14 +131,24 @@ export async function detectContractFields(data, pdfjsOverride) {
         .filter(it => it.x0 < 180 && /(vendor|purchaser)['’]s/i.test(it.str))
         .map(it => ({ role: /vendor/i.test(it.str) ? "Vendor" : "Purchaser", y: ctr(it) }));
       const roleAt = y => { let best = null, bd = 1e9; for (const a of anchors) { const d = Math.abs(a.y - y); if (d < bd) { bd = d; best = a.role; } } return best; };
+      // Collect every candidate cell, then keep only the first N rows per party —
+      // the printed statement has a row per possible signatory (two purchaser rows,
+      // etc.), so a single buyer must not be asked to sign the empty 2nd row.
+      const cells = [];
       for (const it of pg.items) {
         const s = it.str.replace(/\s+/g, " ").trim().toLowerCase().replace(/:/g, "");
         const y = ctr(it);
         if (it.x0 < 180 && s === "signature") {             // signature cell, to the right
-          const role = roleAt(y); if (role) push(role, "signature", pg.p, 165, y - 15, RM, y + 11);
+          const role = roleAt(y); if (role) cells.push({ role, type: "signature", y, box: [165, y - 15, RM, y + 11] });
         } else if (s === "date" && it.x0 > 380) {           // date cell, right-hand column
-          const role = roleAt(y); if (role) push(role, "date", pg.p, it.x1 + 2, y - 8, W - 45, y + 9);
+          const role = roleAt(y); if (role) cells.push({ role, type: "date", y, box: [it.x1 + 2, y - 8, W - 45, y + 9] });
         }
+      }
+      const cap = { Vendor: nVen, Purchaser: nPur };
+      for (const role of ["Vendor", "Purchaser"]) for (const type of ["signature", "date"]) {
+        cells.filter(c => c.role === role && c.type === type)
+          .sort((a, b) => a.y - b.y).slice(0, cap[role])
+          .forEach(c => push(c.role, c.type, pg.p, c.box[0], c.box[1], c.box[2], c.box[3]));
       }
       continue;
     }
@@ -184,14 +197,19 @@ export async function detectContractFields(data, pdfjsOverride) {
           const sig = dots.filter(d => d.x1 > labelEnd);
           if (sig.length) {
             push(role, "signature", pg.p, Math.min(...sig.map(d => d.x0)), ln.base - 18, Math.min(Math.max(...sig.map(d => d.x1)), pg.W - RIGHT_MARGIN), ln.base);
-            // date on this/next line: "on ……/……/20xx"
+            // date on this / next line: "on ……/……/20xx". pdf.js usually splits the
+            // "on" token from the dotted write-on run, so anchor on "on" and take the
+            // write-on space to its right rather than needing one token to hold both.
             for (let k = i; k <= i + 1 && k < lines.length; k++) {
-              const on = lines[k].items.find(it => /^on[\s.·]/i.test(it.str) && /[._·/]/.test(it.str));
-              if (on) {
-                let x1 = on.x1; const yr = lines[k].items.find(it => /\b(19|20)\d\d\b/.test(it.str) && it.x0 >= on.x0 - 2);
-                if (yr) x1 = yr.x1;
-                push(role, "date", pg.p, on.x0 + 15, lines[k].base - 13, Math.min(x1, pg.W - RIGHT_MARGIN), lines[k].base); break;
-              }
+              // on the header line the date sits right of the signature; on the next
+              // line it starts at the left margin, so only constrain x on the header.
+              const on = lines[k].items.find(it => /^on\b/i.test(it.str.trim()) && (k > i || it.x0 > labelEnd - 2));
+              if (!on) continue;
+              const after = lines[k].items.filter(it => it.x0 >= on.x1 - 2 &&
+                (isLineRun(it.str) || /[._·/]/.test(it.str) || /\b(19|20)\d\d\b/.test(it.str)));
+              if (!after.length) continue;
+              const x1 = Math.max(on.x1 + 45, ...after.map(a => a.x1));
+              push(role, "date", pg.p, on.x1 + 2, lines[k].base - 13, Math.min(x1, pg.W - RIGHT_MARGIN), lines[k].base); break;
             }
           }
         }
