@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v112-contract-mapguard";
+const BUILD = "v113-offer-contract-esign";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -49,7 +49,7 @@ function _releaseSlot() { _inflight = Math.max(0, _inflight - 1); const next = _
 function _timeoutFor(action) {
   if (action === "aiVendorSummary" || action === "aiBuyerProfile" || action === "aiListingAsk" || action === "aiAddressLookup") return 120000;
   if (action === "listRecords" || action === "getBuyersFor") return 45000;
-  if (action === "sendToSign") return 60000;
+  if (action === "sendToSign" || action === "stashSignPdf") return 60000;
   return 12000;
 }
 async function call(action, params = {}) {
@@ -2920,12 +2920,16 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   const [bpDays,setBpDays]=useState("14");
   const [depUpfront,setDepUpfront]=useState("");
   const [filling,setFilling]=useState(false),[fillErr,setFillErr]=useState(""),[filledFile,setFilledFile]=useState(null);
+  // Digital-signing (DocuSeal) sub-flow: purchaser signs first, then the vendor automatically.
+  const [signOpen,setSignOpen]=useState(false),[signStep,setSignStep]=useState("prep"),[signErr,setSignErr]=useState("");
+  const [purEmail,setPurEmail]=useState(""),[venName,setVenName]=useState(""),[venEmail,setVenEmail]=useState(""),[venLoading,setVenLoading]=useState(false),[signDetected,setSignDetected]=useState(null);
   useEffect(()=>{ if(open&&parsed){
     setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||""); setPadr(parsed.buyerAddress||"");
     setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); setDepWhen(parsed.depositBy||"on signing"); setDepUpfront(parsed.depositPaid||"");
     // Settlement period ("60 days") becomes a real date from today; the agent can still edit it.
     setSettle(computeSettleDate(parsed.settlement, new Date())); setFin(!!parsed.finance); setLender(parsed.lender||"An approved lending institution"); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setBpDays(parsed.bpDays||"14"); setVacant(true); setCopied(false);
     setFilling(false); setFillErr(""); setFilledFile(null);
+    setSignOpen(false); setSignStep("prep"); setSignErr(""); setPurEmail(""); setVenName(""); setVenEmail(""); setVenLoading(false); setSignDetected(null);
   } /* eslint-disable-next-line */ },[open,parsed]);
   const fileName=()=>`Contract - ${String(openHome?.address||"property").replace(/[\\/:*?"<>|]/g,"")} - ${(p1||"purchaser").split(" ")[0]}.pdf`;
   const doFill=async()=>{
@@ -2954,6 +2958,38 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
       else downloadFilled();
     }catch(e){ /* user cancelled */ } };
   const canShareFiles=()=>{ try{ return typeof navigator!=="undefined"&&!!navigator.canShare&&navigator.canShare({files:[new File([new Uint8Array([37,80])],"t.pdf",{type:"application/pdf"})]}); }catch(e){ return false; } };
+  // Open the e-sign step: prefill purchaser email from the buyer + vendor from Attio, and scan the
+  // filled PDF for the signing blocks (same detector as the "Sign a contract" flow).
+  const openSign=async()=>{
+    if(!filledFile) return;
+    setSignErr(""); setSignOpen(true); setSignStep("prep"); setSignDetected(null);
+    setPurEmail(buyer?.email||""); setVenName(""); setVenEmail(""); setVenLoading(true);
+    try{ const vr=await call("getVendor",{propertyId:openHome?.propertyId}); if(vr&&vr.ok&&vr.vendor){ setVenName(vr.vendor.name||""); setVenEmail(vr.vendor.email||""); } }catch(e){}
+    setVenLoading(false);
+    try{ const mod=await import("./contractDetect.js"); const res=await mod.detectContractFields(filledFile.bytes.slice(0)); setSignDetected(res);
+      if(!res.fields.length) setSignErr("No standard signing blocks were found in this contract, so it can't be sent for e-signing. You can still download the PDF and send it manually.");
+    }catch(e){ setSignErr("Couldn't scan the contract for signing spots. "+(e?.message||"")); }
+  };
+  const doSign=async()=>{
+    if(!purEmail.trim()){ setSignErr("Add the purchaser's email — they sign first."); return; }
+    if(!venEmail.trim()){ setSignErr("Add the vendor's email — it goes to them once the purchaser signs."); return; }
+    if(!signDetected||!signDetected.fields.length){ setSignErr("No signing spots detected in this contract."); return; }
+    setSignErr(""); setSignStep("sending");
+    try{
+      const b64=u8ToB64(filledFile.bytes);
+      const stash=await call("stashSignPdf",{ dataBase64:b64, propertyId:openHome?.propertyId });
+      if(!stash||!stash.ok||!stash.url){ setSignStep("prep"); setSignErr("Couldn't prepare the contract for signing. "+((stash&&stash.error)||"")); return; }
+      const subs=[ {role:"Purchaser",name:([p1,p2].filter(Boolean).join(" & "))||"Purchaser",email:purEmail.trim()}, {role:"Vendor",name:venName.trim()||"Vendor",email:venEmail.trim()} ];
+      const roles=subs.map(s=>s.role);
+      const flds=signDetected.fields.filter(f=>roles.includes(f.role)).map((f,i)=>({ name:`${f.role} ${f.type} ${i+1}`, role:f.role, type:f.type, required:true, readonly:f.type==="date", areas:[f.area] }));
+      if(!flds.length){ setSignStep("prep"); setSignErr("No signing fields for the purchaser/vendor were found in this contract."); return; }
+      const addr=openHome?.address||"property";
+      const payload={ name:`Contract of Sale - ${addr}`, typeName:"Contract of Sale", propertyAddr:addr, docName:filledFile.name, fileUrl:stash.url, fields:flds, submitters:subs, order:"preserved" };
+      const r=await call("sendToSign",payload);
+      if(r&&r.ok) setSignStep("sent");
+      else { setSignStep("prep"); setSignErr("Could not send to sign. "+((r&&r.error)||"please try again")); }
+    }catch(e){ setSignStep("prep"); setSignErr("Could not send to sign. "+(e?.message||"")); }
+  };
   const num=v=>{const n=parseFloat(String(v).replace(/[^0-9.]/g,""));return isNaN(n)?null:n;};
   const priceN=num(price), depN=num(depAmt), balance=(priceN!=null&&depN!=null)?priceN-depN:null;
   const depPct=(priceN&&depN)?Math.round(depN/priceN*1000)/10:null;
@@ -3022,16 +3058,43 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
         </div>}
       </div>
       {fillErr&&<div style={{margin:"0 16px 10px",background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{fillErr}</div>}
-      {filledFile ? (
+      {filledFile ? ( signOpen ? (
+        <div style={{padding:"0 16px 14px"}}>
+          {signStep==="sent" ? (
+            <div>
+              <div style={{background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:11,padding:"13px 14px",fontSize:13.5,color:ESPRESSO,fontWeight:600,lineHeight:1.5}}>✓ Sent to {(p1||"the purchaser").split(" ")[0]} to sign. Once they've signed, it goes to the vendor{venName?` (${venName.split(" ")[0]})`:""} automatically. Both receive an email from Savvi with their signing link.</div>
+              <button className="btn-cream" style={{marginTop:12}} onClick={()=>{setSignOpen(false);onClose();}}>Done</button>
+            </div>
+          ) : (<>
+            <div style={{fontSize:11,fontWeight:800,letterSpacing:1,textTransform:"uppercase",color:ESPRESSO,margin:"2px 0 8px"}}>Send for digital signing</div>
+            <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"10px 12px",fontSize:12.5,color:BROWN_M,lineHeight:1.5,marginBottom:12}}>The purchaser signs first. The moment they sign, the contract is sent to the vendor to sign. Both get an email from Savvi with their own signing link.</div>
+            <div style={{display:"grid",gap:9}}>
+              <div><label style={fl}>Purchaser email (signs first)</label><input style={fi} value={purEmail} onChange={e=>setPurEmail(e.target.value)} inputMode="email" placeholder="purchaser@email.com"/></div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <div><label style={fl}>Vendor name</label><input style={fi} value={venName} onChange={e=>setVenName(e.target.value)} placeholder={venLoading?"Looking up…":"Vendor"}/></div>
+                <div><label style={fl}>Vendor email (signs after)</label><input style={fi} value={venEmail} onChange={e=>setVenEmail(e.target.value)} inputMode="email" placeholder={venLoading?"Looking up…":"vendor@email.com"}/></div>
+              </div>
+            </div>
+            {signDetected&&signDetected.fields.length>0&&<div style={{fontSize:11.5,color:BROWN_L,marginTop:8}}>Found {signDetected.fields.filter(f=>f.role==="Purchaser").length} purchaser + {signDetected.fields.filter(f=>f.role==="Vendor").length} vendor signing {signDetected.fields.length===1?"spot":"spots"} in this contract.</div>}
+            {signErr&&<div style={{margin:"10px 0 0",background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{signErr}</div>}
+            <div style={{display:"flex",gap:8,marginTop:12}}>
+              <button className="btn-cream" style={{flex:"0 0 auto",padding:"13px 16px"}} onClick={()=>{setSignOpen(false);setSignErr("");}}>Back</button>
+              <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} disabled={signStep==="sending"||venLoading||!(signDetected&&signDetected.fields.length)} onClick={doSign}>{signStep==="sending"?"Sending…":"Send for signing →"}</button>
+            </div>
+          </>)}
+        </div>
+      ) : (
         <div style={{padding:"0 16px 14px"}}>
           <div style={{background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:11,padding:"11px 13px",fontSize:13.5,color:ESPRESSO,fontWeight:600,marginBottom:10}}>✓ Contract filled for {(p1||"the purchaser").split(" ")[0]} — {filledFile.name}</div>
-          <div style={{display:"flex",gap:8}}>
-            {canShareFiles()&&<button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} onClick={shareFilled}>Send / share →</button>}
+          <button className="btn-grn" style={{width:"100%"}} onClick={openSign}>✍︎ Send for digital signing →</button>
+          <div style={{fontSize:11.5,color:BROWN_L,textAlign:"center",margin:"9px 0 2px"}}>or send the PDF draft for a conveyancer to review first</div>
+          <div style={{display:"flex",gap:8,marginTop:5}}>
+            {canShareFiles()&&<button className="btn-cream" style={{flex:"1 1 0",minWidth:0}} onClick={shareFilled}>Send / share PDF</button>}
             <button className="btn-cream" style={{flex:canShareFiles()?"0 0 auto":"1 1 0",width:canShareFiles()?"auto":undefined,padding:"13px 18px",whiteSpace:"nowrap"}} onClick={downloadFilled}>Download</button>
           </div>
           <button onClick={()=>setFilledFile(null)} style={{width:"100%",marginTop:8,padding:"9px",borderRadius:10,border:"none",background:"transparent",color:BROWN_L,fontSize:12.5,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Change details & fill again</button>
         </div>
-      ) : (
+      )) : (
       <div className="cpy-row" style={{padding:"0 16px 14px",display:"flex",gap:8}}>
         <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 16px",fontSize:13,whiteSpace:"nowrap"}} onClick={()=>{navigator.clipboard?.writeText(particulars()).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),2000);}}>{copied?"✓ Copied":"Copy particulars"}</button>
         <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} disabled={filling} onClick={doFill}>{filling?"Filling…":"Fill contract →"}</button>
