@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v107-offer-condition-days";
+const BUILD = "v108-offer-generate-filter";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2242,7 +2242,7 @@ function SendCard({ buyer, propId, hasContract, onSendContract, onTextContract, 
   </div>;
 }
 
-function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink,onCheckIn,onRemoveFromOpen,onPrivateInspect}){
+function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink,onCheckIn,onRemoveFromOpen,onPrivateInspect,onPrepareContract}){
   const [checkin,setCheckin]=useState("");       // per-add status: "" | busy | done | err
   const [checkinId,setCheckinId]=useState("");   // id of the open currently being added to
   const [removingId,setRemovingId]=useState(""); // id of the open currently being removed from
@@ -2338,6 +2338,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
   if(!buyer)return null;
   const hist=buyer.contactId?DEMO_HISTORY[buyer.contactId]||[]:[];
   const days=daysSince(buyer.firstSeen);
+  const hasOffer=(buyer.notes||[]).some(n=>/^\s*\[Offer\]/i.test(n.text||""));
 
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
     <div className="sh dv2" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}} {...drag.handlers}>
@@ -2399,6 +2400,12 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
         </div>
       </div>}
       </>)}
+
+      {/* Buyer has submitted an offer → one tap to open the Contract-of-Sale fill sheet,
+          prefilled from their offer (price, deposit, settlement, finance/B&P days, conveyancer). */}
+      {hasOffer&&onPrepareContract&&<div style={{padding:"2px 16px 12px"}}>
+        <button onClick={()=>onPrepareContract(buyer)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:GRN,border:"none",color:"#fff",fontSize:15,fontWeight:800,cursor:"pointer",fontFamily:"inherit",borderRadius:12,padding:"14px 18px",boxShadow:"0 3px 10px rgba(45,138,94,.3)"}}><span style={{fontSize:17}}>📄</span> Prepare contract from offer →</button>
+      </div>}
 
       {/* A buyer already on the listing (earlier open / enquiry) who inspected again — add them to
           a scheduled open, OR log a PRIVATE inspection on a chosen date (Savvi runs privates daily). */}
@@ -3794,7 +3801,7 @@ function BuyerFacetFilter({ filter, setFilter, opens }){
           </div>
           <Lbl>Status</Lbl>
           <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:opens.length?14:2}}>
-            <Chip k="contract" l="Contract sent"/>
+            <Chip k="offer" l="Offers & bids"/><Chip k="contract" l="Contract sent"/>
           </div>
           {opens.length>0&&<>
             <Lbl>Came through</Lbl>
@@ -5670,7 +5677,7 @@ export default function App(){
   const[showDetail,setShowDetail]=useState(false);
   const[bFilters,setBFilters]=useState([]); // active keys: hot|watching|cool|contract|repeat (empty = all) — desktop CRM
   const[bView,setBView]=useState("interest"); // phone buyer-list view: interest|inspections|contracts|enquiries
-  const[pFilter,setPFilter]=useState({}); // phone open-screen multi-select filter: {hot,watching,cool,none,contract,open:<id>}
+  const[pFilter,setPFilter]=useState({}); // phone open-screen multi-select filter: {hot,watching,cool,none,contract,offer,open:<id>}
   const[propOpens,setPropOpens]=useState([]);   // all opens for the current property (for the Inspections view grouping)
   const[propOpensFor,setPropOpensFor]=useState(null); // which propertyId propOpens was fetched for
   const[active,setActive]=useState(null);
@@ -5763,9 +5770,11 @@ export default function App(){
   const _pfInt=_pfK.filter(k=>k==="hot"||k==="watching"||k==="cool"||k==="none");
   const _pfOpen=_pfK.filter(k=>k.startsWith("open:")).map(k=>k.slice(5));
   const _pfContract=_pfK.includes("contract");
+  const _pfOffer=_pfK.includes("offer");
   const matchesPFilter=(b)=>{
     if(_pfInt.length && !_pfInt.includes(b.interest?b.interest:"none")) return false;
     if(_pfContract && !b.contractSent) return false;
+    if(_pfOffer && !(b.notes||[]).some(n=>/^\s*\[(Offer|Bid registration)\]/i.test(n.text||""))) return false;
     if(_pfOpen.length && !_pfOpen.some(o=>(b.openHomeIds||[]).includes(o))) return false;
     return true;
   };
