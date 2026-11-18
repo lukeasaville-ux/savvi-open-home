@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v111-contract-pagebox-fix";
+const BUILD = "v112-contract-mapguard";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2851,6 +2851,9 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
   if(!mapR.ok){ const e=new Error("NO_MAP"); e.code="NO_MAP"; throw e; }
   if(!pdfR.ok) throw new Error("Couldn't load the contract PDF ("+pdfR.status+").");
   const map=await mapR.json();
+  // An incomplete / not-ready map (auto-mapper couldn't find the core fields) must not
+  // produce a half-filled legal document — treat it as unmapped.
+  if(map.ok===false || !map.text || !map.text.purchaserName || !map.text.price){ const e=new Error("NO_MAP"); e.code="NO_MAP"; throw e; }
   const bytes=new Uint8Array(await pdfR.arrayBuffer());
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
   const doc=await PDFDocument.load(bytes);
