@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v119-esign-date-right-of-sig";
+const BUILD = "v120-esign-preview-conveyancers";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2923,6 +2923,11 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   // Digital-signing (DocuSeal) sub-flow: purchaser signs first, then the vendor automatically.
   const [signOpen,setSignOpen]=useState(false),[signStep,setSignStep]=useState("prep"),[signErr,setSignErr]=useState(""),[sendState,setSendState]=useState("idle");
   const [purEmail,setPurEmail]=useState(""),[venName,setVenName]=useState(""),[venEmail,setVenEmail]=useState(""),[venLoading,setVenLoading]=useState(false),[signDetected,setSignDetected]=useState(null);
+  // Conveyancer emails (the executed contract is auto-sent to these on completion, cc the client).
+  // Purchaser's comes from the offer; vendor's is read from the contract's Particulars of Sale.
+  const [convPur,setConvPur]=useState(""),[convVen,setConvVen]=useState("");
+  // First 10 sends show a placement preview to confirm; after that it sends straight through.
+  const [esignCount,setEsignCount]=useState(0),[previewImgs,setPreviewImgs]=useState(null),[previewing,setPreviewing]=useState(false);
   useEffect(()=>{ if(open&&parsed){
     setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||""); setPadr(parsed.buyerAddress||"");
     setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); setDepWhen(parsed.depositBy||"on signing"); setDepUpfront(parsed.depositPaid||"");
@@ -2930,6 +2935,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
     setSettle(computeSettleDate(parsed.settlement, new Date())); setFin(!!parsed.finance); setLender(parsed.lender||"An approved lending institution"); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setBpDays(parsed.bpDays||"14"); setVacant(true); setCopied(false);
     setFilling(false); setFillErr(""); setFilledFile(null);
     setSignOpen(false); setSignStep("prep"); setSignErr(""); setSendState("idle"); setPurEmail(""); setVenName(""); setVenEmail(""); setVenLoading(false); setSignDetected(null);
+    setConvPur(""); setConvVen(""); setPreviewImgs(null); setPreviewing(false);
   } /* eslint-disable-next-line */ },[open,parsed]);
   const fileName=()=>`Contract - ${String(openHome?.address||"property").replace(/[\\/:*?"<>|]/g,"")} - ${(p1||"purchaser").split(" ")[0]}.pdf`;
   const doFill=async()=>{
@@ -2962,13 +2968,21 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   // filled PDF for the signing blocks (same detector as the "Sign a contract" flow).
   const openSign=async()=>{
     if(!filledFile) return;
-    setSignErr(""); setSignOpen(true); setSignStep("prep"); setSendState("idle"); setSignDetected(null);
+    setSignErr(""); setSignOpen(true); setSignStep("prep"); setSendState("idle"); setSignDetected(null); setPreviewImgs(null);
     setPurEmail(buyer?.email||""); setVenName(""); setVenEmail(""); setVenLoading(true);
-    try{ const vr=await call("getVendor",{propertyId:openHome?.propertyId}); if(vr&&vr.ok&&vr.vendor){ setVenName(vr.vendor.name||""); setVenEmail(vr.vendor.email||""); } }catch(e){}
+    setConvPur(parsed?.convEmail||""); setConvVen("");
+    try{ const vr=await call("getVendor",{propertyId:openHome?.propertyId}); if(vr&&vr.ok){ if(vr.vendor){ setVenName(vr.vendor.name||""); setVenEmail(vr.vendor.email||""); } setEsignCount(Number(vr.esignCount)||0); } }catch(e){ setEsignCount(0); }
     setVenLoading(false);
     try{ const mod=await import("./contractDetect.js"); const purCount=(p2&&p2.trim())?2:1; const res=await mod.detectContractFields(filledFile.bytes.slice(0), undefined, { purchasers:purCount, vendors:1 }); setSignDetected(res);
+      // prefill conveyancer emails: purchaser from the offer, vendor from the contract particulars
+      const c=res.conveyancers||{}; setConvPur(prev=>prev||parsed?.convEmail||c.purchaser?.email||""); setConvVen(c.vendor?.email||"");
       if(!res.fields.length) setSignErr("No standard signing blocks were found in this contract, so it can't be sent for e-signing. You can still download the PDF and send it manually.");
     }catch(e){ setSignErr("Couldn't scan the contract for signing spots. "+(e?.message||"")); }
+  };
+  // Build the placement-preview images (pages that carry fields, with the boxes drawn on).
+  const buildPreview=async()=>{
+    if(!signDetected||!signDetected._doc) return [];
+    try{ const mod=await import("./contractDetect.js"); return await mod.renderPreviews(signDetected._doc, signDetected.fields); }catch(e){ return []; }
   };
   const doSign=async()=>{
     if(!purEmail.trim()){ setSignErr("Add the purchaser's email — they sign first."); return; }
@@ -2990,11 +3004,23 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
       if(!flds.length){ fail("No signing fields for the purchaser/vendor were found in this contract."); return; }
       const addr=openHome?.address||"property";
       const agentFull=AGENT_FULL[agentName]||agentName||"";
-      const payload={ name:`Contract of Sale - ${addr}`, typeName:"Contract of Sale", propertyAddr:addr, docName:filledFile.name, fileUrl:stash.url, fields:flds, submitters:subs, order:"preserved", agentName:agentFull };
+      // Who gets the executed contract once BOTH parties have signed (the completion webhook
+      // emails the signed PDF to each conveyancer and cc's their client).
+      const distribution={ address:addr, agentName:agentFull, purchaserName:([p1,p2].filter(Boolean).join(" & "))||"", purchaserEmail:purEmail.trim(), purchaserConvEmail:convPur.trim(), vendorName:venName.trim(), vendorEmail:venEmail.trim(), vendorConvEmail:convVen.trim() };
+      const payload={ name:`Contract of Sale - ${addr}`, typeName:"Contract of Sale", propertyAddr:addr, docName:filledFile.name, fileUrl:stash.url, fields:flds, submitters:subs, order:"preserved", agentName:agentFull, distribution };
       const r=await call("sendToSign",payload);
-      if(r&&r.ok) setSendState("done");
+      if(r&&r.ok){ setSendState("done"); setEsignCount(c=>c+1); }
       else fail("It didn't send — nothing has gone to the purchaser or vendor. "+((r&&r.error)||"Please tap Send to try again."));
     }catch(e){ fail("It didn't send — nothing has gone to anyone. "+(e?.message||"")+" Tap Send to try again."); }
+  };
+  // Tap "Send": for the first 10 contracts, show the placement preview to confirm; after that, send straight away.
+  const startSend=async()=>{
+    if(!purEmail.trim()){ setSignErr("Add the purchaser's email — they sign first."); return; }
+    if(!venEmail.trim()){ setSignErr("Add the vendor's email — it goes to them once the purchaser signs."); return; }
+    if(!signDetected||!signDetected.fields.length){ setSignErr("No signing spots detected in this contract."); return; }
+    setSignErr("");
+    if(esignCount<10){ setPreviewing(true); const imgs=await buildPreview(); setPreviewImgs(imgs); setPreviewing(false); setSignStep("preview"); }
+    else doSign();
   };
   const num=v=>{const n=parseFloat(String(v).replace(/[^0-9.]/g,""));return isNaN(n)?null:n;};
   const priceN=num(price), depN=num(depAmt), balance=(priceN!=null&&depN!=null)?priceN-depN:null;
@@ -3076,6 +3102,28 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
               <button className="btn-grn" style={{width:"100%",marginTop:12,...(sendState==="sending"?{opacity:.55}:{})}} disabled={sendState==="sending"} onClick={()=>{setSignOpen(false);onClose();}}>Done</button>
               {sendState==="sending"&&<div style={{fontSize:11.5,color:BROWN_L,marginTop:8,textAlign:"center"}}>Confirming the signing link… you can wait here or keep working.</div>}
             </div>
+          ) : signStep==="preview" ? (
+            <div>
+              <div style={{fontSize:11,fontWeight:800,letterSpacing:1,textTransform:"uppercase",color:ESPRESSO,margin:"2px 0 6px"}}>Check before it sends</div>
+              <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"9px 11px",fontSize:12,color:BROWN_M,lineHeight:1.5,marginBottom:10}}>Confirm the signing spots land in the right place on this contract. <b style={{color:"#2563eb"}}>Blue</b> = signature, <b style={{color:"#dc2626"}}>red</b> = date. You'll check this for the first few contracts, then it sends automatically.</div>
+              <div style={{maxHeight:"44vh",overflowY:"auto",border:`1px solid ${SAND_D}`,borderRadius:10,padding:8,background:"#fff"}}>
+                {(previewImgs||[]).map(pg=>(<div key={pg.page} style={{marginBottom:10}}>
+                  <div style={{fontSize:10.5,fontWeight:800,color:BROWN_L,marginBottom:3}}>Page {pg.page}</div>
+                  <img src={pg.url} style={{width:"100%",display:"block",borderRadius:6,border:`1px solid ${SAND_D}`}} alt={`Page ${pg.page}`}/>
+                </div>))}
+                {(!previewImgs||!previewImgs.length)&&<div style={{fontSize:12,color:BROWN_L,padding:"12px 4px"}}>Couldn't render the preview here, but {signDetected?signDetected.fields.length:0} signing spots were detected and will be placed.</div>}
+              </div>
+              <div style={{background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:10,padding:"10px 12px",fontSize:12,color:ESPRESSO,lineHeight:1.55,marginTop:10}}>
+                <div style={{fontWeight:800,marginBottom:3}}>When both parties sign, the executed contract goes to:</div>
+                <div>Purchaser's conveyancer: {convPur||<span style={{color:"#A23B1E"}}>not set</span>}{convPur?<span style={{color:BROWN_L}}> · cc {purEmail}</span>:null}</div>
+                <div>Vendor's conveyancer: {convVen||<span style={{color:"#A23B1E"}}>not set</span>}{convVen?<span style={{color:BROWN_L}}> · cc {venEmail}</span>:null}</div>
+              </div>
+              {signErr&&<div style={{margin:"10px 0 0",background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{signErr}</div>}
+              <div style={{display:"flex",gap:8,marginTop:12}}>
+                <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 18px",whiteSpace:"nowrap"}} onClick={()=>{setSignStep("prep");setSignErr("");}}>Back</button>
+                <button className="btn-grn" style={{flex:"1 1 0",minWidth:0,whiteSpace:"nowrap"}} onClick={doSign}>Looks right — send →</button>
+              </div>
+            </div>
           ) : (<>
             <div style={{fontSize:11,fontWeight:800,letterSpacing:1,textTransform:"uppercase",color:ESPRESSO,margin:"2px 0 8px"}}>Send for digital signing</div>
             <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"10px 12px",fontSize:12.5,color:BROWN_M,lineHeight:1.5,marginBottom:12}}>The purchaser signs first. The moment they sign, the contract is sent to the vendor to sign. Both get an email from Savvi with their own signing link.</div>
@@ -3085,12 +3133,18 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
                 <div><label style={fl}>Vendor name</label><input style={fi} value={venName} onChange={e=>setVenName(e.target.value)} placeholder={venLoading?"Looking up…":"Vendor"}/></div>
                 <div><label style={fl}>Vendor email (signs after)</label><input style={fi} value={venEmail} onChange={e=>setVenEmail(e.target.value)} inputMode="email" placeholder={venLoading?"Looking up…":"vendor@email.com"}/></div>
               </div>
+              <div style={{height:1,background:SAND_D,margin:"3px 0 1px"}}/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <div><label style={fl}>Purchaser's conveyancer</label><input style={fi} value={convPur} onChange={e=>setConvPur(e.target.value)} inputMode="email" placeholder="from the offer"/></div>
+                <div><label style={fl}>Vendor's conveyancer</label><input style={fi} value={convVen} onChange={e=>setConvVen(e.target.value)} inputMode="email" placeholder={venLoading?"Reading contract…":"from the contract"}/></div>
+              </div>
+              <div style={{fontSize:11,color:BROWN_L,lineHeight:1.45}}>Once both parties sign, the executed contract is emailed to each conveyancer, cc'ing their client.</div>
             </div>
             {signDetected&&signDetected.fields.length>0&&(()=>{ const ps=signDetected.fields.filter(f=>f.role==="Purchaser"&&f.type==="signature").length; const vs=signDetected.fields.filter(f=>f.role==="Vendor"&&f.type==="signature").length; return <div style={{fontSize:11.5,color:BROWN_L,marginTop:8}}>Found {ps} purchaser + {vs} vendor signature {ps+vs===1?"spot":"spots"} in this contract. Dates stamp automatically where indicated.</div>; })()}
             {signErr&&<div style={{margin:"10px 0 0",background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{signErr}</div>}
             <div style={{display:"flex",gap:8,marginTop:12}}>
               <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 18px",whiteSpace:"nowrap"}} onClick={()=>{setSignOpen(false);setSignErr("");}}>Back</button>
-              <button className="btn-grn" style={{flex:"1 1 0",minWidth:0,whiteSpace:"nowrap"}} disabled={venLoading||!(signDetected&&signDetected.fields.length)} onClick={doSign}>Send for signing →</button>
+              <button className="btn-grn" style={{flex:"1 1 0",minWidth:0,whiteSpace:"nowrap"}} disabled={previewing||venLoading||!(signDetected&&signDetected.fields.length)} onClick={startSend}>{previewing?"Preparing…":(esignCount<10?"Review & send →":"Send for signing →")}</button>
             </div>
           </>)}
         </div>

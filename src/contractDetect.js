@@ -101,6 +101,31 @@ const CAP_GENERIC = /signature of (?:the |an? )?(individual|director|company|sec
 const CAP_ROLE    = /signature of (?:the )?(vendor|purchaser|transferee|transferor)/i;
 const CAP_XS      = /\b(vendor|purchaser)'?s signature\b/i;
 
+// Pull a party's legal practitioner / conveyancer (name + email) out of the
+// Particulars of Sale text. The block reads e.g. "Vendor's legal practitioner
+// or conveyancer <Firm> <address> Email: x@y Tel: ... Ref: ..." and the next
+// party's block follows. Returns {name,email}; email is what the distribution needs.
+export function grabConveyancer(text, who) {
+  const re = new RegExp(who + "[’'`]?s? legal practitioner(?: or conveyancer)?", "i");
+  const m = re.exec(text); if (!m) return { name: "", email: "" };
+  const start = m.index + m[0].length;
+  // Stop the party's block at the next party / the estate-agent block / the next
+  // section, so a blank block can't swallow the agent's own email further down.
+  const other = who.toLowerCase() === "vendor"
+    ? /purchaser[’'`]?s? (?:legal practitioner|name)\b/i
+    : /vendor[’'`]?s? (?:legal practitioner|name)\b/i;
+  const universal = /(?:estate agent|day of sale|special condition|general condition|important notice)\b/i;
+  const rest = text.slice(start);
+  let end = Math.min(rest.length, 420);
+  for (const re of [other, universal]) { const mm = re.exec(rest); if (mm && mm.index < end) end = mm.index; }
+  const seg = rest.slice(0, end);
+  const email = (seg.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/) || [""])[0];
+  let name = (seg.replace(/^[\s:]*Name[\s:]*/i, "").match(/^([^]*?)(?:\s+Address|\s+Email|\s+Tel|\s+Ref|\s{3,}|\.{4,})/i) || ["", ""])[1].trim();
+  name = name.split(/\s*(?:,|\b\d)/)[0].trim();           // cut off the street address
+  if (name.length > 60) name = name.slice(0, 60).trim();
+  return { name, email };
+}
+
 export async function detectContractFields(data, pdfjsOverride, opts) {
   opts = opts || {};
   const nPur = Math.max(1, opts.purchasers || 1);   // real party counts, so a lone
@@ -255,5 +280,8 @@ export async function detectContractFields(data, pdfjsOverride, opts) {
     return { role: f.role, type: f.type, page: f.page,
       area: { x: f.x0 / pg.W, y: f.y0 / pg.H, w: (f.x1 - f.x0) / pg.W, h: (f.y1 - f.y0) / pg.H, page: f.page } };
   });
-  return { numPages, fields: areas, roles: [...new Set(areas.map(a => a.role))], raw: uniq, _doc: doc };
+  // Legal practitioner / conveyancer for each party, from the Particulars of Sale.
+  const allText = pages.map(pg => pg.items.map(i => i.str).join(" ")).join(" ").replace(/\s+/g, " ");
+  const conveyancers = { vendor: grabConveyancer(allText, "vendor"), purchaser: grabConveyancer(allText, "purchaser") };
+  return { numPages, fields: areas, roles: [...new Set(areas.map(a => a.role))], raw: uniq, conveyancers, _doc: doc };
 }
