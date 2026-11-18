@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v117-esign-signing-date-token";
+const BUILD = "v118-esign-instant-send";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2921,7 +2921,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   const [depUpfront,setDepUpfront]=useState("");
   const [filling,setFilling]=useState(false),[fillErr,setFillErr]=useState(""),[filledFile,setFilledFile]=useState(null);
   // Digital-signing (DocuSeal) sub-flow: purchaser signs first, then the vendor automatically.
-  const [signOpen,setSignOpen]=useState(false),[signStep,setSignStep]=useState("prep"),[signErr,setSignErr]=useState("");
+  const [signOpen,setSignOpen]=useState(false),[signStep,setSignStep]=useState("prep"),[signErr,setSignErr]=useState(""),[sendState,setSendState]=useState("idle");
   const [purEmail,setPurEmail]=useState(""),[venName,setVenName]=useState(""),[venEmail,setVenEmail]=useState(""),[venLoading,setVenLoading]=useState(false),[signDetected,setSignDetected]=useState(null);
   useEffect(()=>{ if(open&&parsed){
     setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||""); setPadr(parsed.buyerAddress||"");
@@ -2929,7 +2929,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
     // Settlement period ("60 days") becomes a real date from today; the agent can still edit it.
     setSettle(computeSettleDate(parsed.settlement, new Date())); setFin(!!parsed.finance); setLender(parsed.lender||"An approved lending institution"); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setBpDays(parsed.bpDays||"14"); setVacant(true); setCopied(false);
     setFilling(false); setFillErr(""); setFilledFile(null);
-    setSignOpen(false); setSignStep("prep"); setSignErr(""); setPurEmail(""); setVenName(""); setVenEmail(""); setVenLoading(false); setSignDetected(null);
+    setSignOpen(false); setSignStep("prep"); setSignErr(""); setSendState("idle"); setPurEmail(""); setVenName(""); setVenEmail(""); setVenLoading(false); setSignDetected(null);
   } /* eslint-disable-next-line */ },[open,parsed]);
   const fileName=()=>`Contract - ${String(openHome?.address||"property").replace(/[\\/:*?"<>|]/g,"")} - ${(p1||"purchaser").split(" ")[0]}.pdf`;
   const doFill=async()=>{
@@ -2962,7 +2962,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   // filled PDF for the signing blocks (same detector as the "Sign a contract" flow).
   const openSign=async()=>{
     if(!filledFile) return;
-    setSignErr(""); setSignOpen(true); setSignStep("prep"); setSignDetected(null);
+    setSignErr(""); setSignOpen(true); setSignStep("prep"); setSendState("idle"); setSignDetected(null);
     setPurEmail(buyer?.email||""); setVenName(""); setVenEmail(""); setVenLoading(true);
     try{ const vr=await call("getVendor",{propertyId:openHome?.propertyId}); if(vr&&vr.ok&&vr.vendor){ setVenName(vr.vendor.name||""); setVenEmail(vr.vendor.email||""); } }catch(e){}
     setVenLoading(false);
@@ -2974,23 +2974,27 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
     if(!purEmail.trim()){ setSignErr("Add the purchaser's email — they sign first."); return; }
     if(!venEmail.trim()){ setSignErr("Add the vendor's email — it goes to them once the purchaser signs."); return; }
     if(!signDetected||!signDetected.fields.length){ setSignErr("No signing spots detected in this contract."); return; }
-    setSignErr(""); setSignStep("sending");
+    // Optimistic: show the "sent" screen the instant the button is tapped — no waiting on the
+    // round-trip. The real send runs in the background. These are legal documents, so a failure
+    // is loud: we flip straight back to the form with a red error and nothing is left half-sent.
+    setSignErr(""); setSignStep("sent"); setSendState("sending");
+    const fail=(msg)=>{ setSignStep("prep"); setSendState("idle"); setSignErr(msg); };
     try{
       const b64=u8ToB64(filledFile.bytes);
       const stash=await call("stashSignPdf",{ dataBase64:b64, propertyId:openHome?.propertyId });
-      if(!stash||!stash.ok||!stash.url){ setSignStep("prep"); setSignErr("Couldn't prepare the contract for signing. "+((stash&&stash.error)||"")); return; }
+      if(!stash||!stash.ok||!stash.url){ fail("It didn't send — nothing has gone to anyone. "+((stash&&stash.error)||"Couldn't prepare the contract.")+" Tap Send to try again."); return; }
       const subs=[ {role:"Purchaser",name:([p1,p2].filter(Boolean).join(" & "))||"Purchaser",email:purEmail.trim()}, {role:"Vendor",name:venName.trim()||"Vendor",email:venEmail.trim()} ];
       const roles=subs.map(s=>s.role);
       // date fields are readonly; the backend sets default_value to DocuSeal's {{date}} token, which resolves to each signer's ACTUAL signing date at completion (legal: the true per-signer date).
       const flds=signDetected.fields.filter(f=>roles.includes(f.role)).map((f,i)=>{ const isDate=f.type==="date"; return { name:`${f.role} ${f.type} ${i+1}`, role:f.role, type:f.type, required:true, areas:[f.area], ...(isDate?{readonly:true,preferences:{format:"DD/MM/YYYY"}}:{}) }; });
-      if(!flds.length){ setSignStep("prep"); setSignErr("No signing fields for the purchaser/vendor were found in this contract."); return; }
+      if(!flds.length){ fail("No signing fields for the purchaser/vendor were found in this contract."); return; }
       const addr=openHome?.address||"property";
       const agentFull=AGENT_FULL[agentName]||agentName||"";
       const payload={ name:`Contract of Sale - ${addr}`, typeName:"Contract of Sale", propertyAddr:addr, docName:filledFile.name, fileUrl:stash.url, fields:flds, submitters:subs, order:"preserved", agentName:agentFull };
       const r=await call("sendToSign",payload);
-      if(r&&r.ok) setSignStep("sent");
-      else { setSignStep("prep"); setSignErr("Could not send to sign. "+((r&&r.error)||"please try again")); }
-    }catch(e){ setSignStep("prep"); setSignErr("Could not send to sign. "+(e?.message||"")); }
+      if(r&&r.ok) setSendState("done");
+      else fail("It didn't send — nothing has gone to the purchaser or vendor. "+((r&&r.error)||"Please tap Send to try again."));
+    }catch(e){ fail("It didn't send — nothing has gone to anyone. "+(e?.message||"")+" Tap Send to try again."); }
   };
   const num=v=>{const n=parseFloat(String(v).replace(/[^0-9.]/g,""));return isNaN(n)?null:n;};
   const priceN=num(price), depN=num(depAmt), balance=(priceN!=null&&depN!=null)?priceN-depN:null;
@@ -3068,8 +3072,9 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
                 <div style={{width:56,height:56,borderRadius:"50%",background:GRN,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:30,fontWeight:700,margin:"0 auto 10px",boxShadow:`0 4px 16px ${GRN}55`}}>✓</div>
                 <div style={{fontSize:18,fontWeight:800,color:ESPRESSO,marginBottom:8}}>Sent for signing</div>
               </div>
-              <div style={{background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:11,padding:"13px 14px",fontSize:13.5,color:ESPRESSO,fontWeight:600,lineHeight:1.5}}>The contract has gone to {(p1||"the purchaser").split(" ")[0]} to sign. The moment they sign, it's sent to the vendor{venName?` (${venName.split(" ")[0]})`:""} automatically. Both get an email from Savvi with their own signing link.</div>
-              <button className="btn-grn" style={{width:"100%",marginTop:12}} onClick={()=>{setSignOpen(false);onClose();}}>Done</button>
+              <div style={{background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:11,padding:"13px 14px",fontSize:13.5,color:ESPRESSO,fontWeight:600,lineHeight:1.5}}>The contract is on its way to {(p1||"the purchaser").split(" ")[0]} to sign. The moment they sign, it's sent to the vendor{venName?` (${venName.split(" ")[0]})`:""} automatically. Both get an email from Savvi with their own signing link.</div>
+              <button className="btn-grn" style={{width:"100%",marginTop:12,...(sendState==="sending"?{opacity:.55}:{})}} disabled={sendState==="sending"} onClick={()=>{setSignOpen(false);onClose();}}>Done</button>
+              {sendState==="sending"&&<div style={{fontSize:11.5,color:BROWN_L,marginTop:8,textAlign:"center"}}>Confirming the signing link… you can wait here or keep working.</div>}
             </div>
           ) : (<>
             <div style={{fontSize:11,fontWeight:800,letterSpacing:1,textTransform:"uppercase",color:ESPRESSO,margin:"2px 0 8px"}}>Send for digital signing</div>
@@ -3085,9 +3090,8 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
             {signErr&&<div style={{margin:"10px 0 0",background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{signErr}</div>}
             <div style={{display:"flex",gap:8,marginTop:12}}>
               <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 18px",whiteSpace:"nowrap"}} onClick={()=>{setSignOpen(false);setSignErr("");}}>Back</button>
-              <button className="btn-grn" style={{flex:"1 1 0",minWidth:0,whiteSpace:"nowrap"}} disabled={signStep==="sending"||venLoading||!(signDetected&&signDetected.fields.length)} onClick={doSign}>{signStep==="sending"?"Sending…":"Send for signing →"}</button>
+              <button className="btn-grn" style={{flex:"1 1 0",minWidth:0,whiteSpace:"nowrap"}} disabled={venLoading||!(signDetected&&signDetected.fields.length)} onClick={doSign}>Send for signing →</button>
             </div>
-            {signStep==="sending"&&<div style={{fontSize:11.5,color:BROWN_L,marginTop:9,textAlign:"center"}}>Preparing and sending the contract… this can take a few seconds.</div>}
           </>)}
         </div>
       ) : (
