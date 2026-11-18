@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v116-esign-date-render-fix";
+const BUILD = "v117-esign-signing-date-token";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2981,7 +2981,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
       if(!stash||!stash.ok||!stash.url){ setSignStep("prep"); setSignErr("Couldn't prepare the contract for signing. "+((stash&&stash.error)||"")); return; }
       const subs=[ {role:"Purchaser",name:([p1,p2].filter(Boolean).join(" & "))||"Purchaser",email:purEmail.trim()}, {role:"Vendor",name:venName.trim()||"Vendor",email:venEmail.trim()} ];
       const roles=subs.map(s=>s.role);
-      // date fields are readonly; the backend stamps today's date (DD/MM/YYYY) as default_value so they render automatically.
+      // date fields are readonly; the backend sets default_value to DocuSeal's {{date}} token, which resolves to each signer's ACTUAL signing date at completion (legal: the true per-signer date).
       const flds=signDetected.fields.filter(f=>roles.includes(f.role)).map((f,i)=>{ const isDate=f.type==="date"; return { name:`${f.role} ${f.type} ${i+1}`, role:f.role, type:f.type, required:true, areas:[f.area], ...(isDate?{readonly:true,preferences:{format:"DD/MM/YYYY"}}:{}) }; });
       if(!flds.length){ setSignStep("prep"); setSignErr("No signing fields for the purchaser/vendor were found in this contract."); return; }
       const addr=openHome?.address||"property";
@@ -4864,7 +4864,7 @@ function signFields(hasSchedule, nVendors, authType, vendorType, hasAdvocate){
   const a=(x,y,w,h,page,W,H)=>({x:x/W,y:y/H,w:w/W,h:h/H,page});
   const schedPage = authType==="auction" ? 8 : 7;   // schedule = (authority pages + 1): sale 6→7, auction 7→8
   const sig=(name,role,x,y,w,h)=>({name,role,type:"signature",required:true,areas:[a(x,y,w,h,2,AW,AH)]});
-  const dte=(name,role,x,y,w,h)=>({name,role,type:"date",required:true,readonly:true,preferences:{format:"DD/MM/YYYY"},areas:[a(x,y,w,h,2,AW,AH)]}); // readonly date; backend stamps today's date as default_value
+  const dte=(name,role,x,y,w,h)=>({name,role,type:"date",required:true,readonly:true,preferences:{format:"DD/MM/YYYY"},areas:[a(x,y,w,h,2,AW,AH)]}); // readonly date; backend sets default_value {{date}} so DocuSeal fills each signer's real signing date
   const f=[ sig("Agent Signature","Agent",76,130,185,22), dte("Agent Date","Agent",55,180,120,14) ];
   const n=Math.max(1,nVendors||1);
   if(vendorType==="company"){
