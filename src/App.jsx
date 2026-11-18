@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v105-offer-conveyancer";
+const BUILD = "v106-instant-listings";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5697,7 +5697,10 @@ export default function App(){
   const[showCtr,setShowCtr]=useState(false);
   const[ctrBuyer,setCtrBuyer]=useState(null);
   const[ctrChannel,setCtrChannel]=useState("email");
-  const[allListings,setAllListings]=useState([]);
+  // Seed listings from the last-known cache so the DESKTOP CRM shows them instantly on
+  // load instead of waiting on the ~1-3s getListings round-trip (the mount effect then
+  // refreshes + re-caches). Mirrors the savvi_opens instant-render on the phone home.
+  const[allListings,setAllListings]=useState(()=>{ try{ const c=localStorage.getItem("savvi_listings"); if(c){ const a=JSON.parse(c); if(Array.isArray(a)&&a.length) return a; } }catch(e){} return []; });
   const[showPast,setShowPast]=useState(false); // reveal sold/under-offer/past listings on the home screen
   const[pastQ,setPastQ]=useState("");
   // Synthetic open context for the searched contact (their most-recent inspection's property),
@@ -5855,7 +5858,7 @@ export default function App(){
       }
       setLoading(false);
       Attio.getAllActiveListings()
-        .then(lr=>{ if(lr.ok) setAllListings(lr.data); })
+        .then(lr=>{ if(lr.ok){ setAllListings(lr.data); try{ localStorage.setItem("savvi_listings",JSON.stringify(lr.data)); }catch(e){} } })
         .catch(()=>{});
       // Warm the buyer-records + property-meta caches so the first open-tap is instant.
       Attio.prefetchBuyerRecords();
@@ -5876,7 +5879,7 @@ export default function App(){
       try{
         const [r,lr]=await Promise.all([Attio.getOpenHomesThisWeek(),Attio.getAllActiveListings()]);
         if(r.ok&&r.data.length){ setOpenHomes(r.data); try{ localStorage.setItem("savvi_opens",JSON.stringify(r.data)); }catch(e){} setOpenHome(cur=>{ if(!cur) return cur; const f=r.data.find(o=>o.id===cur.id); return f?{...cur,...f}:cur; }); }
-        if(lr.ok){ setAllListings(lr.data); setOpenHome(cur=>{ if(!cur||!cur._listing) return cur; const p=lr.data.find(x=>(x.propertyId||x.id)===cur.propertyId); return p?{...cur,contractUrl:p.contractUrl||cur.contractUrl,igUrl:p.igUrl||cur.igUrl,price:p.price||cur.price,auctionDate:p.auctionDate||cur.auctionDate}:cur; }); }
+        if(lr.ok){ setAllListings(lr.data); try{ localStorage.setItem("savvi_listings",JSON.stringify(lr.data)); }catch(e){} setOpenHome(cur=>{ if(!cur||!cur._listing) return cur; const p=lr.data.find(x=>(x.propertyId||x.id)===cur.propertyId); return p?{...cur,contractUrl:p.contractUrl||cur.contractUrl,igUrl:p.igUrl||cur.igUrl,price:p.price||cur.price,auctionDate:p.auctionDate||cur.auctionDate}:cur; }); }
       }catch(e){}
     };
     document.addEventListener("visibilitychange",refresh); window.addEventListener("focus",refresh);
