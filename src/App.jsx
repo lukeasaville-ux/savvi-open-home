@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v106-instant-listings";
+const BUILD = "v107-offer-condition-days";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2796,12 +2796,13 @@ function parseOffer(buyer){
   const price=money(f.price);
   const dm=(f.deposit||"").match(/([\d.]+)/); const depPct=dm?parseFloat(dm[1]):null;
   const depAmt=(price&&depPct)?Math.round(price*depPct/100):null;
-  const finDays=(conditions.match(/(\d+)\s*(?:business\s*)?days?\s*(?:for\s*)?finance/i)||conditions.match(/finance[^.\d]{0,40}?(\d+)\s*(?:business\s*)?days?/i)||[])[1]||"";
+  const finDays=(conditions.match(/(\d+)\s*(?:business\s*)?days?\s*(?:for\s*)?finance/i)||conditions.match(/finance[^.\d]{0,40}?(\d+)\s*(?:business\s*)?days?/i)||(f.finance||"").match(/(\d+)\s*days?/i)||[])[1]||"";
+  const bpDays=((f["b&p"]||f.bp||"").match(/(\d+)\s*days?/i)||conditions.match(/(\d+)\s*(?:business\s*)?days?[^.\d]{0,24}?(?:building|pest|b&p|inspection)/i)||[])[1]||"";
   const lender=(conditions.match(/with\s+(?:the\s+)?([A-Z][A-Za-z .&'-]*?(?:Bank|Banking|CBA|ANZ|NAB|Westpac|Macquarie|ING|Bendigo|BOQ|Suncorp)[A-Za-z .]*)/)||[])[1]||"";
   return {
     price, depPct, depAmt, balance:(price!=null&&depAmt!=null)?price-depAmt:null,
     settlement:f.settlement||"", finance:/^y/i.test(f.finance||""), bp:/^y/i.test(f["b&p"]||f.bp||""),
-    finDays, lender, purchasers:(f.purchasers||"").split(";").map(s=>s.trim()).filter(Boolean),
+    finDays, bpDays, lender, purchasers:(f.purchasers||"").split(";").map(s=>s.trim()).filter(Boolean),
     buyerAddress:f.address||"", conveyancer:(f.conveyancer||"").trim(), conditions,
   };
 }
@@ -2847,7 +2848,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   useEffect(()=>{ if(open&&parsed){
     setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||""); setPadr(parsed.buyerAddress||"");
     setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); setDepWhen("on signing the contract");
-    setSettle(parsed.settlement||""); setFin(!!parsed.finance); setLender(parsed.lender||""); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setBpDays("14"); setVacant(true); setCopied(false);
+    setSettle(parsed.settlement||""); setFin(!!parsed.finance); setLender(parsed.lender||""); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setBpDays(parsed.bpDays||"14"); setVacant(true); setCopied(false);
     setFilling(false); setFillErr(""); setFilledFile(null);
   } /* eslint-disable-next-line */ },[open,parsed]);
   const fileName=()=>`Contract - ${String(openHome?.address||"property").replace(/[\\/:*?"<>|]/g,"")} - ${(p1||"purchaser").split(" ")[0]}.pdf`;
