@@ -196,20 +196,29 @@ export async function detectContractFields(data, pdfjsOverride, opts) {
           const labelEnd = labelItem ? labelItem.x1 : Math.min(...dots.map(d => d.x0));
           const sig = dots.filter(d => d.x1 > labelEnd);
           if (sig.length) {
-            push(role, "signature", pg.p, Math.min(...sig.map(d => d.x0)), ln.base - 18, Math.min(Math.max(...sig.map(d => d.x1)), pg.W - RIGHT_MARGIN), ln.base);
-            // date on this / next line: "on ……/……/20xx". pdf.js usually splits the
-            // "on" token from the dotted write-on run, so anchor on "on" and take the
-            // write-on space to its right rather than needing one token to hold both.
-            for (let k = i; k <= i + 1 && k < lines.length; k++) {
-              // on the header line the date sits right of the signature; on the next
-              // line it starts at the left margin, so only constrain x on the header.
-              const on = lines[k].items.find(it => /^on\b/i.test(it.str.trim()) && (k > i || it.x0 > labelEnd - 2));
-              if (!on) continue;
-              const after = lines[k].items.filter(it => it.x0 >= on.x1 - 2 &&
-                (isLineRun(it.str) || /[._·/]/.test(it.str) || /\b(19|20)\d\d\b/.test(it.str)));
-              if (!after.length) continue;
-              const x1 = Math.max(on.x1 + 45, ...after.map(a => a.x1));
-              push(role, "date", pg.p, on.x1 + 2, lines[k].base - 13, Math.min(x1, pg.W - RIGHT_MARGIN), lines[k].base); break;
+            // The signature write-line runs from just after the label to the right
+            // margin. Put the signature on the LEFT of it and the DATE to the RIGHT
+            // of the signature, on the same clean dotted line. The preprinted
+            // "on __/__/20__" blanks below are too cramped to stamp a DD/MM/YYYY
+            // date into without it overlapping the slashes and the printed "20".
+            const runX0 = Math.min(...sig.map(d => d.x0));
+            const runX1 = Math.min(Math.max(...sig.map(d => d.x1)), pg.W - RIGHT_MARGIN);
+            if (runX1 - runX0 >= 220) {                        // wide line: split it
+              const dateW = Math.max(96, Math.min(120, (runX1 - runX0) * 0.34));
+              const dateX0 = runX1 - dateW;
+              push(role, "signature", pg.p, runX0, ln.base - 18, dateX0 - 14, ln.base);
+              push(role, "date", pg.p, dateX0, ln.base - 16, runX1, ln.base);
+            } else {                                           // narrow: sig full width,
+              push(role, "signature", pg.p, runX0, ln.base - 18, runX1, ln.base);
+              for (let k = i; k <= i + 1 && k < lines.length; k++) {  // date on "on __/__" line
+                const on = lines[k].items.find(it => /^on\b/i.test(it.str.trim()) && (k > i || it.x0 > labelEnd - 2));
+                if (!on) continue;
+                const after = lines[k].items.filter(it => it.x0 >= on.x1 - 2 &&
+                  (isLineRun(it.str) || /[._·/]/.test(it.str) || /\b(19|20)\d\d\b/.test(it.str)));
+                if (!after.length) continue;
+                const x1 = Math.max(on.x1 + 45, ...after.map(a => a.x1));
+                push(role, "date", pg.p, on.x1 + 2, lines[k].base - 13, Math.min(x1, pg.W - RIGHT_MARGIN), lines[k].base); break;
+              }
             }
           }
         }
