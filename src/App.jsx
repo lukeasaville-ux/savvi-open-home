@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v122-vendor-greeting";
+const BUILD = "v123-keysafe-access";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -173,7 +173,7 @@ async function loadPropMeta() {
     (j?.data || []).forEach(p => {
       const id = p?.id?.record_id; if (!id) return;
       const v = f => p?.values?.[f]?.[0]?.value;
-      map[id] = { address: v("address") || "", suburb: v("suburb") || "", price: v("price_guide") || v("price") || v("display_price") || "", beds: v("beds") ?? null, baths: v("baths") ?? null, car: v("car_spaces") ?? v("car") ?? null, vendorIds: (p?.values?.vendor || []).map(x => x.target_record_id).filter(Boolean), statusText: (v("status_text") || "").toLowerCase(), settlementDate: v("settlement_date") || null, soldPrice: (p?.values?.sold_price?.[0]?.currency_value ?? null), campaignStart: v("campaign_start") || null, auctionDate: v("auction_date") || null, listingNotes: v("listing_notes") || "", vendorNames: v("vendor_names") || "" };
+      map[id] = { address: v("address") || "", suburb: v("suburb") || "", price: v("price_guide") || v("price") || v("display_price") || "", beds: v("beds") ?? null, baths: v("baths") ?? null, car: v("car_spaces") ?? v("car") ?? null, vendorIds: (p?.values?.vendor || []).map(x => x.target_record_id).filter(Boolean), statusText: (v("status_text") || "").toLowerCase(), settlementDate: v("settlement_date") || null, soldPrice: (p?.values?.sold_price?.[0]?.currency_value ?? null), campaignStart: v("campaign_start") || null, auctionDate: v("auction_date") || null, listingNotes: v("listing_notes") || "", vendorNames: v("vendor_names") || "", accessNotes: v("access_notes") || "" };
     });
     _propMetaCache = { t: Date.now(), map };
   } catch (e) {}
@@ -1988,7 +1988,7 @@ function AiAssistantSheet({ open, onClose, openHome, onRegister }){
 
 // Panel-only quick reference: the contract link + access notes (keysafe/door codes).
 // The App owns the toggle button so it can sit in a row next to the AI assistant.
-const listingHasInfo = oh => !!((oh?.contractUrl) || (oh?.listingNotes||"").trim());
+const listingHasInfo = oh => { const pm = propMetaGet(oh?.propertyId||oh?.id) || {}; return !!((oh?.contractUrl) || (oh?.listingNotes||pm.listingNotes||"").trim() || (oh?.accessNotes||pm.accessNotes||"").trim()); };
 // "Add contract PDF" — picks a PDF, uploads it through the backend, and hands the new URL
 // back so every screen can flip from "Request" to Text/Email immediately.
 function ContractUpload({ propertyId, onUploaded, compact=false, label="Add contract PDF" }){
@@ -2005,9 +2005,11 @@ const STATUS_BADGE = { "sold":["Sold","#3E8E5A","#EAF5EE"], "under offer":["Unde
 const statusBadge = s => STATUS_BADGE[String(s||"").toLowerCase()] || null;
 
 function OpenListingInfo({ openHome, onContractUploaded }){
-  const notes=(openHome?.listingNotes||"").trim();
-  const contractUrl=openHome?.contractUrl||"";
   const pid=openHome?.propertyId||openHome?.id;
+  const _pm=propMetaGet(pid)||{};            // fall back to cached CRM meta (backend opens don't carry these)
+  const notes=(openHome?.listingNotes||_pm.listingNotes||"").trim();
+  const access=(openHome?.accessNotes||_pm.accessNotes||"").trim();  // AGENT-ONLY keysafe/door codes — never shown to buyers
+  const contractUrl=openHome?.contractUrl||"";
   const sb=statusBadge(openHome?.statusText);
   // For a sold / under-offer listing, pull the purchaser + sale details on demand.
   const [parties,setParties]=useState(null);
@@ -2030,6 +2032,10 @@ function OpenListingInfo({ openHome, onContractUploaded }){
           {purch.mobile&&<a href={`tel:${purch.mobile}`} style={{color:BLUE_D,textDecoration:"none"}}>{purch.mobile}</a>}
           {purch.email&&<a href={`mailto:${purch.email}`} style={{color:BLUE_D,textDecoration:"none"}}>{purch.email}</a>}
         </div>}
+      </div>}
+      {access&&<div style={{background:"#FBF0DC",border:`1px solid ${SAND_D}`,borderRadius:10,padding:"10px 13px",marginBottom:10}}>
+        <div style={{fontSize:10.5,fontWeight:800,color:"#B7770D",textTransform:"uppercase",letterSpacing:.6,marginBottom:3}}>🔑 Keysafe / access</div>
+        <div style={{fontSize:13.5,fontWeight:700,color:ESPRESSO,lineHeight:1.45,whiteSpace:"pre-wrap"}}>{access}</div>
       </div>}
       {!contractUrl&&onContractUploaded&&pid&&<div style={{marginBottom:10}}><div style={{fontSize:12,color:BROWN_L,marginBottom:6}}>No contract on this listing yet. Add the PDF and it's ready to send straight away.</div><ContractUpload propertyId={pid} onUploaded={onContractUploaded}/></div>}
       {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none",marginBottom:notes?8:0}}>Open / read the full contract</a>}
@@ -4536,7 +4542,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   // ⌘K → search, Esc → clear.
   useEffect(()=>{ const k=e=>{ if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="k"){ e.preventDefault(); gqRef.current?.focus(); gqRef.current?.select(); } }; window.addEventListener("keydown",k); return ()=>window.removeEventListener("keydown",k); },[]);
 
-  const listingOh=(p)=>{ const pid=p.propertyId||p.id; return { id:`listing_${pid}`, propertyId:pid, address:p.address||"Unknown", suburb:p.suburb||"", beds:p.beds,baths:p.baths,car:p.car, price:p.price||"", contractUrl:p.contractUrl||"", igUrl:p.igUrl||"", auctionDate:p.auctionDate||"", access:p.access||"", notes:p.notes||"", listingNotes:p.listingNotes||"", statusText:p.statusText||"", settlementDate:p.settlementDate||"", soldPrice:p.soldPrice||null, _listing:true }; };
+  const listingOh=(p)=>{ const pid=p.propertyId||p.id; return { id:`listing_${pid}`, propertyId:pid, address:p.address||"Unknown", suburb:p.suburb||"", beds:p.beds,baths:p.baths,car:p.car, price:p.price||"", contractUrl:p.contractUrl||"", igUrl:p.igUrl||"", auctionDate:p.auctionDate||"", access:p.access||"", notes:p.notes||"", listingNotes:p.listingNotes||"", accessNotes:(propMetaGet(pid)||{}).accessNotes||"", statusText:p.statusText||"", settlementDate:p.settlementDate||"", soldPrice:p.soldPrice||null, _listing:true }; };
   const specOf=(o)=>[o.beds&&`${o.beds}b`,o.baths&&`${o.baths}ba`,o.car&&`${o.car}c`].filter(Boolean).join(" · ")||"Apartment";
   const select=(oh)=>{ setSel(oh); setTq(""); setTf("all"); setShowInfo(false); crm.enterOpenHome(oh); };
   const auctionByProp=useMemo(()=>{ const m={}; [...(allListings||[]),...(opens||[])].forEach(o=>{ const pid=o.propertyId||o.id; if(o.auctionDate&&pid&&!m[pid]) m[pid]=o.auctionDate; }); return m; },[allListings,opens]);
