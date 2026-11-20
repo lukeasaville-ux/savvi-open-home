@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v121-esign-authority-dist";
+const BUILD = "v122-vendor-greeting";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -173,12 +173,15 @@ async function loadPropMeta() {
     (j?.data || []).forEach(p => {
       const id = p?.id?.record_id; if (!id) return;
       const v = f => p?.values?.[f]?.[0]?.value;
-      map[id] = { address: v("address") || "", suburb: v("suburb") || "", price: v("price_guide") || v("price") || v("display_price") || "", beds: v("beds") ?? null, baths: v("baths") ?? null, car: v("car_spaces") ?? v("car") ?? null, vendorIds: (p?.values?.vendor || []).map(x => x.target_record_id).filter(Boolean), statusText: (v("status_text") || "").toLowerCase(), settlementDate: v("settlement_date") || null, soldPrice: (p?.values?.sold_price?.[0]?.currency_value ?? null), campaignStart: v("campaign_start") || null, auctionDate: v("auction_date") || null, listingNotes: v("listing_notes") || "" };
+      map[id] = { address: v("address") || "", suburb: v("suburb") || "", price: v("price_guide") || v("price") || v("display_price") || "", beds: v("beds") ?? null, baths: v("baths") ?? null, car: v("car_spaces") ?? v("car") ?? null, vendorIds: (p?.values?.vendor || []).map(x => x.target_record_id).filter(Boolean), statusText: (v("status_text") || "").toLowerCase(), settlementDate: v("settlement_date") || null, soldPrice: (p?.values?.sold_price?.[0]?.currency_value ?? null), campaignStart: v("campaign_start") || null, auctionDate: v("auction_date") || null, listingNotes: v("listing_notes") || "", vendorNames: v("vendor_names") || "" };
     });
     _propMetaCache = { t: Date.now(), map };
   } catch (e) {}
   return map;
 }
+// Read one property's cached meta synchronously (propMeta is loaded on the home screen,
+// so it's warm by the time a vendor update opens). Used to greet vendors by first name.
+const propMetaGet = (id) => (id && _propMetaCache && _propMetaCache.map && _propMetaCache.map[id]) || null;
 
 // Parse the inspection's contract_opens text field — a newline list of
 // "opened <ISO>" / "clicked <ISO>" written by the Resend webhook — into
@@ -2557,7 +2560,7 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
 /* ════════════════════════════════════════════
    VENDOR SUMMARY SHEET
 ════════════════════════════════════════════ */
-function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentName,selIds,initStats,startMode,tableSelect,mktStats}){
+function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentName,selIds,initStats,startMode,tableSelect,mktStats,vendorNames}){
   const[sumText,setSumText]=useState("");
   const[loading,setLoading]=useState(false);
   const[copied,setCopied]=useState(false);
@@ -2571,6 +2574,9 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
   const genSeq=useRef(0); // ignore a slower in-flight generation once you've switched mode
   const drag=useSheetDrag(onClose);
   const agentFirst=String(agentName||"Luke").trim().split(/\s+/)[0]||"Luke";
+  // Greet every vendor by first name (from the hourly Box+Dice sweep); fall back to the
+  // manual [Vendor] placeholder if names aren't known yet.
+  const greet=String(vendorNames||"").trim()||"[Vendor]";
 
   // Campaign report runs over the WHOLE campaign (allBuyers); post-open over today's lot.
   const campSrc=(allBuyers&&allBuyers.length)?allBuyers:buyers;
@@ -2622,7 +2628,7 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
   // POST-OPEN quick wrap — casual recap + a line per buyer (same voice as before).
   const buildOpen=useCallback(()=>{
     const src=buyers;
-    if(!openHome||!src.length){setSumText(`Hi [Vendor],\n\nNo groups have come through ${openHome?.address||"the open"} just yet. I'll send the wrap-up as soon as we've had some numbers.\n\n— ${agentFirst}, Savvi`);return;}
+    if(!openHome||!src.length){setSumText(`Hi ${greet},\n\nNo groups have come through ${openHome?.address||"the open"} just yet. I'll send the wrap-up as soon as we've had some numbers.\n\n— ${agentFirst}, Savvi`);return;}
     const nw=n=>["","one","two","three","four","five","six","seven","eight","nine","ten"][n]||String(n);
     const joinNat=a=>a.length<=1?(a[0]||""):`${a.slice(0,-1).join(", ")} and ${a[a.length-1]}`;
     const keen=src.filter(b=>b.interest==="hot"||b.interest==="watching");
@@ -2634,8 +2640,8 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
     if(repeats.length) extra.push(`${nw(repeats.length)} came back for a repeat look`);
     const recap=`We had ${src.length} ${src.length===1?"group":"groups"} through${extra.length?`, ${joinNat(extra)}`:""}.`;
     const lines=src.map(b=>`${firstName(b.name)} — ${buyerDetail(b)}`);
-    setSumText(`Hi [Vendor],\n\nQuick wrap from today's open at ${openHome?.address||"the property"}. ${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow these buyers up and be in touch early next week.\n\n— ${agentFirst}, Savvi`);
-  /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[openHome,buyers,agentFirst]);
+    setSumText(`Hi ${greet},\n\nQuick wrap from today's open at ${openHome?.address||"the property"}. ${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow these buyers up and be in touch early next week.\n\n— ${agentFirst}, Savvi`);
+  /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[openHome,buyers,agentFirst,greet]);
 
   // FULL CAMPAIGN report — plain text (pastes cleanly into email + WhatsApp, no asterisks),
   // chosen buyers grouped by interest with a blank line between each for readability,
@@ -2646,11 +2652,11 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
     const named=chosen.filter(b=>!isLowValue(b));
     const low=chosen.filter(b=>isLowValue(b));
     if(!named.length&&!low.length&&!enquiryCount){
-      setSumText(`Hi [Vendor],\n\nNo buyers to report on ${openHome?.address||"the property"} just yet. I'll send the full update as soon as we've had some through.\n\n— ${agentFirst}, Savvi`);return;
+      setSumText(`Hi ${greet},\n\nNo buyers to report on ${openHome?.address||"the property"} just yet. I'll send the full update as soon as we've had some through.\n\n— ${agentFirst}, Savvi`);return;
     }
     const nw=n=>["","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve"][n]||String(n);
     const joinNat=a=>a.length<=1?(a[0]||""):`${a.slice(0,-1).join(", ")} and ${a[a.length-1]}`;
-    const blocks=[`Hi [Vendor],`]; // each block is separated by a blank line
+    const blocks=[`Hi ${greet},`]; // each block is separated by a blank line
     CAMP_GROUPS.forEach(g=>{
       const gb=named.filter(b=>groupOf(b)===g.key);
       if(!gb.length) return;
@@ -2684,7 +2690,7 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
     }
     blocks.push(`— ${agentFirst}, Savvi`);
     setSumText(blocks.join("\n\n"));
-  /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[campNamed,enquiryCount,openHome,agentFirst,mktStats]);
+  /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[campNamed,enquiryCount,openHome,agentFirst,mktStats,greet]);
 
   // Post-open: instant client draft, then quietly upgrade to the AI-polished version.
   const genOpen=useCallback(async()=>{
@@ -4498,7 +4504,7 @@ function GciPanel(){
 
 /* ── The desktop shell ── */
 function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allListings, listingsOnly, propIndex, onOpenContact, onLogout, searchLoadingId, crm }){
-  const [tab,setTabRaw]=useState(()=>{ try{ return localStorage.getItem("savvi_crm_tab")||"today"; }catch(e){ return "today"; } });
+  const [tab,setTabRaw]=useState(()=>{ try{ const t=localStorage.getItem("savvi_crm_tab")||"today"; return t==="owners"?"today":t; }catch(e){ return "today"; } });
   const setTab=(t)=>{ setTabRaw(t); try{ localStorage.setItem("savvi_crm_tab",t); }catch(e){} };
   const [sel,setSel]=useState(null);              // selected open/listing (synthetic oh)
   const [index,setIndex]=useState(null);          // whole-CRM index (contacts + inspections)
@@ -6986,7 +6992,7 @@ export default function App(){
       onUpdateDetails={(pid,id,d)=>{ setSearchProfile(a=>a&&{...a,name:d.name,mobile:d.mobile,email:d.email}); if(!isDemo&&searchProfile?.contactId) Attio.updatePerson({id:searchProfile.contactId,name:d.name,email:d.email,mobile:d.mobile}).catch(()=>{}); }}
       onSendContract={()=>{}} onTextContract={()=>{}} onRequestContract={()=>{}} onOpenContact={openContact}
       onSendLink={(kind,channel,b)=>{ if(!b?._attioInspectionId) return false; const url=formLinkUrl(kind,b._attioInspectionId,agentName); const first=(b.name||"").split(" ")[0]||"there"; const addr=streetLine(searchOpenHome?.address||searchProfile?._primAddr||"","")||"the property"; const logSearch=(text)=>{ const note={id:"n"+Date.now(),text,ts:new Date().toISOString(),agent:AGENT_FULL[agentName]||agentName||""}; setSearchProfile(a=>{ if(!a) return a; const notes=[...(a.notes||[]),note]; if(!isDemo&&a._attioInspectionId){ const enc=n=>(n.ts&&/^\d{4}-/.test(n.ts))?`${n.ts}\t${n.agent||""}\t${n.text}`:n.text; Attio.updateInspection(a._attioInspectionId,{notes:notes.map(enc).join("\n---\n")}).catch(()=>{}); } return {...a,notes}; }); }; if(channel==="text"){ if(!b.mobile) return false; const msg=formLinkMsg(kind,first,addr,url,smsSig(agentName)); MM.sendMessage({toPhone:b.mobile,agent:agentName,message:msg}).catch(()=>{}); logSearch(formSentNote(kind,"text")); return true; } if(channel==="email"){ if(!b.email) return false; Resend.sendFormLink({toEmail:b.email,toName:b.name,agentName,address:searchOpenHome?.address||addr,url,kind}).catch(()=>{}); logSearch(formSentNote(kind,"email")); return true; } return false; }}/>
-    <SummarySheet open={showSum} onClose={()=>{setShowSum(false);setSumSel([]);setSumStart("open");}} openHome={openHome} buyers={pb} allBuyers={propAll} precomputed={openHome?vendorReport.current[openHome.id]:null} agentName={agentName} selIds={sumSel} initStats={sumStats} startMode={sumStart} tableSelect={isDesktop} mktStats={mktStats}/>
+    <SummarySheet open={showSum} onClose={()=>{setShowSum(false);setSumSel([]);setSumStart("open");}} openHome={openHome} buyers={pb} allBuyers={propAll} precomputed={openHome?vendorReport.current[openHome.id]:null} agentName={agentName} selIds={sumSel} initStats={sumStats} startMode={sumStart} tableSelect={isDesktop} mktStats={mktStats} vendorNames={propMetaGet(openHome?.propertyId)?.vendorNames||""}/>
     <OfferContractSheet open={showOfferContract} onClose={()=>setShowOfferContract(false)} buyer={offerContractBuyer} openHome={openHome} agentName={agentName}/>
     <MatchSheet open={showMatch} onClose={()=>setShowMatch(false)} openHome={openHome} excludeIds={propAll.map(b=>b.contactId).filter(Boolean)} agentName={agentName} propIndex={propIndex}/>
     <QuickContractSheet
