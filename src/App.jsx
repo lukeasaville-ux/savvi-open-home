@@ -4510,7 +4510,7 @@ function GciPanel(){
 
 /* ── The desktop shell ── */
 function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allListings, listingsOnly, propIndex, onOpenContact, onLogout, searchLoadingId, crm }){
-  const [tab,setTabRaw]=useState(()=>{ try{ const t=localStorage.getItem("savvi_crm_tab")||"today"; return t==="owners"?"today":t; }catch(e){ return "today"; } });
+  const [tab,setTabRaw]=useState(()=>{ try{ const t=localStorage.getItem("savvi_crm_tab")||"today"; return (t==="owners"||t==="pipeline")?"today":t; }catch(e){ return "today"; } });
   const setTab=(t)=>{ setTabRaw(t); try{ localStorage.setItem("savvi_crm_tab",t); }catch(e){} };
   const [sel,setSel]=useState(null);              // selected open/listing (synthetic oh)
   const [index,setIndex]=useState(null);          // whole-CRM index (contacts + inspections)
@@ -4574,7 +4574,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   // Click-to-sort: map each column to a comparable value; default (no column picked) stays interest-then-heat.
   const _IR={hot:3,watching:2,cool:1};
   const _offerRank=(b)=>{ const ns=b.notes||[]; if(ns.some(n=>/^\s*\[Offer\]/i.test(n.text||""))) return 4; if(ns.some(n=>/^\s*\[Bid registration\]/i.test(n.text||""))) return 3; if((b.contractOpens||[]).some(o=>o.kind==="offer-opened"||o.kind==="bid-opened")) return 2; return ns.some(n=>/(Text sent:[^]*\/(bid|offer)\/|Emailed (offer form|bid registration))/i.test(n.text||""))?1:0; };
-  const _sortVal=(b,k)=> k==="buyer"?(b.name||"").toLowerCase() : k==="mobile"?(b.mobile||"") : k==="interest"?(_IR[b.interest]||0) : k==="heat"?buyerHeat(b).score : k==="contract"?((b.contractSent?1e6:0)+contractClicks(b.contractOpens,b.resendId).length) : k==="offer"?_offerRank(b) : k==="visits"?(b.isEnquiry?-1:(b.visits||1)) : k==="note"?((crmHumanNote(b)||{}).ts?Date.parse(crmHumanNote(b).ts):0) : 0;
+  const _sortVal=(b,k)=> k==="buyer"?(b.name||"").toLowerCase() : k==="mobile"?(b.mobile||"") : k==="interest"?(_IR[b.interest]||0) : k==="heat"?buyerHeat(b).score : k==="contract"?((b.contractSent?1e6:0)+(!b.contractSent&&(b.notes||[]).some(n=>/contract requested/i.test(n.text||""))?500:0)+contractClicks(b.contractOpens,b.resendId).length) : k==="offer"?_offerRank(b) : k==="visits"?(b.isEnquiry?-1:(b.visits||1)) : k==="note"?((crmHumanNote(b)||{}).ts?Date.parse(crmHumanNote(b).ts):0) : 0;
   const _defCmp=(a,b)=>(_IR[b.interest]||0)-(_IR[a.interest]||0)||buyerHeat(b).score-buyerHeat(a).score;
   const _wCmp=(a,b)=>{ if(wsort){ const va=_sortVal(a,wsort.k),vb=_sortVal(b,wsort.k); const c=typeof va==="string"?va.localeCompare(vb):(va-vb); if(c) return c*wsort.d; } return _defCmp(a,b); };
   const tRows=useMemo(()=>{ const src=tf==="enquiry"?enquiries:tf==="open"?pb.filter(b=>!b.isEnquiry):propReal; const q=tq.trim().toLowerCase(); const _of=Object.keys(wOpenF).filter(k=>wOpenF[k]); return src.filter(b=>tf==="all"||tf==="enquiry"||tf==="open"?true:tf==="contract"?!!b.contractSent:tf==="repeat"?(b.visits||1)>1:tf==="offer"?(b.notes||[]).some(n=>/^\s*\[(Offer|Bid registration)\]/i.test(n.text||"")):b.interest===tf).filter(b=>!q||(b.name||"").toLowerCase().includes(q)||(b.mobile||"").includes(q)||(b.email||"").toLowerCase().includes(q)).filter(b=>!_of.length||_of.some(id=>(b.openHomeIds||[]).includes(id))).sort(_wCmp); },[tf,tq,pb,propReal,enquiries,wOpenF,wsort]);
@@ -4587,13 +4587,13 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const allOhs=[...(opens||[]),...(allListings||[]).map(listingOh)];
   const renderWorkspace=()=>{
     const oh=sel; const loading=crm.buyersLoading;
-    const rowTr=(b)=>{ const ln=crmHumanNote(b); const fs=formStatus(b); const co=contractClicks(b.contractOpens,b.resendId).length; return <tr key={b.id} className="r" onClick={()=>openBuyer(b)}>
+    const rowTr=(b)=>{ const ln=crmHumanNote(b); const fs=formStatus(b); const co=contractClicks(b.contractOpens,b.resendId).length; const reqC=!b.contractSent&&(b.notes||[]).some(n=>/contract requested/i.test(n.text||"")); return <tr key={b.id} className="r" onClick={()=>openBuyer(b)}>
       <td onClick={e=>{ e.stopPropagation(); setWsel(s=>({...s,[b.id]:!s[b.id]})); }}><span className={`crm-ck${wsel[b.id]?" on":""}`}>{wsel[b.id]?"✓":""}</span></td>
       <td><div style={{display:"flex",alignItems:"center",gap:10}}><div className="av" style={{background:b.col||crmColor(b.name),width:30,height:30,fontSize:11}}>{b.initials||crmInitials(b.name)}</div><div><div className="nm">{b.name}</div><div className="mut">{b.email||""}</div></div></div></td>
       <td className="num">{b.mobile||<span className="mut">—</span>}</td>
       <td><IBadge v={b.interest} dash/></td>
       <td><HeatBadge b={b}/></td>
-      <td>{b.contractSent?<span className={`chip ${co?"ok":"info"}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{co?`Opened ${co}×`:"Sent"}</span>:<span className="mut">—</span>}</td>
+      <td>{b.contractSent?<span className={`chip ${co?"ok":"info"}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{co?`Opened ${co}×`:"Sent"}</span>:reqC?<span className="chip warn" style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}} title="Buyer asked for the contract — sends automatically once it's uploaded">Requested</span>:<span className="mut">—</span>}</td>
       <td>{fs?(fs.t==="Offer in"?<button className={`chip ${fs.c}`} onClick={e=>{e.stopPropagation();crm.openOfferContract(b);}} title="Prepare contract from this offer" style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100,border:"none",cursor:"pointer"}}>{fs.t} →</button>:<span className={`chip ${fs.c}`} style={{fontSize:10.5,fontWeight:800,padding:"2px 8px",borderRadius:100}}>{fs.t}</span>):<span className="mut">—</span>}</td>
       <td className="num">{b.isEnquiry?<span className="mut">enquiry</span>:(b.visits||1)}</td>
       <td className="wrap" style={{minWidth:260,maxWidth:520}}><div className="mut" style={{whiteSpace:"normal",lineHeight:1.4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{ln?ln.text:"—"}</div>{ln&&ln.ts&&<div className="mut" style={{fontSize:11,marginTop:2}}>{crmAgo(ln.ts)}{ln.agent?` · ${ln.agent}`:""}</div>}</td>
@@ -4726,7 +4726,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const feedCounts=feed.reduce((m,r)=>{ m[r.k]=(m[r.k]||0)+1; return m; },{});
   const todayOpens=(openDays||[]).map(d=>({d,list:(opensByDay[d]||[])})).filter(x=>x.list.length);
 
-  const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:activeCount},{k:"pipeline",l:"Pipeline",ic:"◧"},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"owners",l:"Owners",ic:"⌘",ct:index?index.owners.length:null},{k:"match",l:"Buyer match",ic:"◎"}];
+  const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:activeCount},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"match",l:"Buyer match",ic:"◎"}];
   const title={today:"Today",opens:"Open homes",listings:"Listings",contacts:"Contacts",owners:"Owners",match:"Buyer match"}[tab];
   const subtitle={today:new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"}),opens:`${opens.length} this week`,listings:`${activeCount} active`,contacts:contacts?`${contacts.length} people · ${hotCount} hot`:"loading…",owners:index?`${index.owners.length} people who own property with Savvi`:"loading…",match:"Describe a property, find the buyers"}[tab];
   const _q=dq.trim().toLowerCase(); const _m=o=>!_q||((o.address||"")+" "+(o.suburb||"")).toLowerCase().includes(_q);
