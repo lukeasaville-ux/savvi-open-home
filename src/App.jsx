@@ -10,20 +10,29 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v126-2fa-login";
+const BUILD = "v127-device-cookie";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
 // Stable per-device id so a verified device can skip the texted code for 30 days (set server-side).
-// Lives in localStorage so it survives app close/reopen; only this device ever knows it.
-let DEVICE_ID = null;
-try {
-  DEVICE_ID = localStorage.getItem("savvi_device_id");
-  if (!DEVICE_ID) {
-    DEVICE_ID = ((window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36))).replace(/-/g, "");
-    localStorage.setItem("savvi_device_id", DEVICE_ID);
-  }
-} catch (e) { DEVICE_ID = "nodev-" + Math.random().toString(36).slice(2); }
+// Persisted in BOTH a first-party cookie and localStorage, each guarded on its own, so the id
+// survives even when one store is blocked. iOS Home Screen (standalone) web apps routinely throw
+// on localStorage; the cookie covers that case. Re-written every launch so its lifetime refreshes.
+function _devGetCookie() {
+  try { const m = document.cookie.match(/(?:^|;\s*)savvi_device_id=([^;]+)/); return m ? decodeURIComponent(m[1]) : null; } catch (e) { return null; }
+}
+function _devSetCookie(id) {
+  try { document.cookie = "savvi_device_id=" + encodeURIComponent(id) + "; path=/; max-age=34560000; SameSite=Lax; Secure"; } catch (e) {}
+}
+function _devGetLocal() { try { return localStorage.getItem("savvi_device_id"); } catch (e) { return null; } }
+function _devSetLocal(id) { try { localStorage.setItem("savvi_device_id", id); } catch (e) {} }
+// Read from whichever store has it; never discard a good id just because one store throws.
+let DEVICE_ID = _devGetLocal() || _devGetCookie();
+if (!DEVICE_ID) {
+  DEVICE_ID = ((window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36))).replace(/-/g, "");
+}
+_devSetLocal(DEVICE_ID);
+_devSetCookie(DEVICE_ID);
 function persistSession(token, who) {
   SESSION_TOKEN = token || null;
   try {
