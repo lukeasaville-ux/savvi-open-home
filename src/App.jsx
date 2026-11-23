@@ -4724,7 +4724,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   return <div className="crm">
     <aside className="crm-side">
       <div className="crm-brand"><img src={wordmark} alt="Savvi"/><span>CRM</span></div>
-      <nav className="crm-nav">{TABS.map(t=><button key={t.k} className={tab===t.k?"on":""} onClick={()=>setTab(t.k)}><span className="ic">{t.ic}</span>{t.l}{t.ct?<span className="ct">{t.ct}</span>:null}</button>)}</nav>
+      <nav className="crm-nav">{TABS.map(t=><button key={t.k} className={tab===t.k?"on":""} onClick={()=>{ setSel(null); setTab(t.k); }}><span className="ic">{t.ic}</span>{t.l}{t.ct?<span className="ct">{t.ct}</span>:null}</button>)}</nav>
       <div style={{marginTop:14}} className="crm-nav"><button onClick={()=>crm.setShowAuthority(true)}><span className="ic">✎</span>New authority</button><button onClick={()=>crm.setShowContract(true)}><span className="ic">✍</span>Sign a contract</button><button onClick={()=>crm.setShowGeneral(true)}><span className="ic">✦</span>General enquiry</button><button onClick={()=>crm.setShowAddListing(true)}><span className="ic">+</span>Add listing</button></div>
       <div className="crm-side-foot">
         <div className="crm-agent"><div className="av" style={{background:crmColor(agentName)}}>{crmInitials(agentName)}</div><div><div className="nm">{AGENT_FULL[agentName]||agentName}</div><div className="sub">{indexing?"Syncing CRM…":index?`Synced ${crmAgo(new Date(indexAt).toISOString())}`:"Loading CRM…"}</div></div></div>
