@@ -4565,10 +4565,19 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const [wview,setWview]=useState("list");   // "list" | "insp" — group the buyer table by inspection session
   const [wOpenF,setWOpenF]=useState({});      // multi-select "came through which open" filter {openId:true}
   const [reportMode,setReportMode]=useState(false); // selecting buyers ON the table for a campaign report
-  useEffect(()=>{ setWsel({}); setWOpenF({}); setWview("list"); setReportMode(false); },[sel?.id]);
+  const [wsort,setWsort]=useState(null);      // click-to-sort on the buyer table columns: {k,d}; null = default (interest then heat)
+  const WSORT_DIR={buyer:1,mobile:1,interest:-1,heat:-1,contract:-1,offer:-1,visits:-1,note:-1}; // first-click direction per column (names A→Z, everything else best-first)
+  const toggleSort=(k)=>setWsort(s=> s&&s.k===k ? {k,d:-s.d} : {k,d:WSORT_DIR[k]||-1});
+  useEffect(()=>{ setWsel({}); setWOpenF({}); setWview("list"); setReportMode(false); setWsort(null); },[sel?.id]);
   // This property's opens (past + upcoming), newest first — powers the Inspections view + came-through filter.
   const wsOpens=useMemo(()=>(crm.propOpens||[]).slice().sort((a,b)=>{const da=openStartAt(a),db=openStartAt(b);return (db?db.getTime():0)-(da?da.getTime():0);}),[crm.propOpens]);
-  const tRows=useMemo(()=>{ const src=tf==="enquiry"?enquiries:tf==="open"?pb.filter(b=>!b.isEnquiry):propReal; const q=tq.trim().toLowerCase(); const _of=Object.keys(wOpenF).filter(k=>wOpenF[k]); return src.filter(b=>tf==="all"||tf==="enquiry"||tf==="open"?true:tf==="contract"?!!b.contractSent:tf==="repeat"?(b.visits||1)>1:tf==="offer"?(b.notes||[]).some(n=>/^\s*\[(Offer|Bid registration)\]/i.test(n.text||"")):b.interest===tf).filter(b=>!q||(b.name||"").toLowerCase().includes(q)||(b.mobile||"").includes(q)||(b.email||"").toLowerCase().includes(q)).filter(b=>!_of.length||_of.some(id=>(b.openHomeIds||[]).includes(id))).sort((a,b)=>(({hot:3,watching:2,cool:1})[b.interest]||0)-(({hot:3,watching:2,cool:1})[a.interest]||0)||buyerHeat(b).score-buyerHeat(a).score); },[tf,tq,pb,propReal,enquiries,wOpenF]);
+  // Click-to-sort: map each column to a comparable value; default (no column picked) stays interest-then-heat.
+  const _IR={hot:3,watching:2,cool:1};
+  const _offerRank=(b)=>{ const ns=b.notes||[]; if(ns.some(n=>/^\s*\[Offer\]/i.test(n.text||""))) return 4; if(ns.some(n=>/^\s*\[Bid registration\]/i.test(n.text||""))) return 3; if((b.contractOpens||[]).some(o=>o.kind==="offer-opened"||o.kind==="bid-opened")) return 2; return ns.some(n=>/(Text sent:[^]*\/(bid|offer)\/|Emailed (offer form|bid registration))/i.test(n.text||""))?1:0; };
+  const _sortVal=(b,k)=> k==="buyer"?(b.name||"").toLowerCase() : k==="mobile"?(b.mobile||"") : k==="interest"?(_IR[b.interest]||0) : k==="heat"?buyerHeat(b).score : k==="contract"?((b.contractSent?1e6:0)+contractClicks(b.contractOpens,b.resendId).length) : k==="offer"?_offerRank(b) : k==="visits"?(b.isEnquiry?-1:(b.visits||1)) : k==="note"?((crmHumanNote(b)||{}).ts?Date.parse(crmHumanNote(b).ts):0) : 0;
+  const _defCmp=(a,b)=>(_IR[b.interest]||0)-(_IR[a.interest]||0)||buyerHeat(b).score-buyerHeat(a).score;
+  const _wCmp=(a,b)=>{ if(wsort){ const va=_sortVal(a,wsort.k),vb=_sortVal(b,wsort.k); const c=typeof va==="string"?va.localeCompare(vb):(va-vb); if(c) return c*wsort.d; } return _defCmp(a,b); };
+  const tRows=useMemo(()=>{ const src=tf==="enquiry"?enquiries:tf==="open"?pb.filter(b=>!b.isEnquiry):propReal; const q=tq.trim().toLowerCase(); const _of=Object.keys(wOpenF).filter(k=>wOpenF[k]); return src.filter(b=>tf==="all"||tf==="enquiry"||tf==="open"?true:tf==="contract"?!!b.contractSent:tf==="repeat"?(b.visits||1)>1:tf==="offer"?(b.notes||[]).some(n=>/^\s*\[(Offer|Bid registration)\]/i.test(n.text||"")):b.interest===tf).filter(b=>!q||(b.name||"").toLowerCase().includes(q)||(b.mobile||"").includes(q)||(b.email||"").toLowerCase().includes(q)).filter(b=>!_of.length||_of.some(id=>(b.openHomeIds||[]).includes(id))).sort(_wCmp); },[tf,tq,pb,propReal,enquiries,wOpenF,wsort]);
   const openBuyer=(b)=>{ crm.setActive(b); crm.setShowDetail(true); };
   const wselected=tRows.filter(b=>wsel[b.id]);
   const wAllOn=tRows.length>0&&tRows.every(b=>wsel[b.id]);
@@ -4589,9 +4598,10 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
       <td className="num">{b.isEnquiry?<span className="mut">enquiry</span>:(b.visits||1)}</td>
       <td className="wrap" style={{minWidth:260,maxWidth:520}}><div className="mut" style={{whiteSpace:"normal",lineHeight:1.4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{ln?ln.text:"—"}</div>{ln&&ln.ts&&<div className="mut" style={{fontSize:11,marginTop:2}}>{crmAgo(ln.ts)}{ln.agent?` · ${ln.agent}`:""}</div>}</td>
     </tr>; };
+    const sTh=(k,label)=><th className="ns" onClick={()=>toggleSort(k)} title="Click to sort by this column" style={{cursor:"pointer",userSelect:"none",whiteSpace:"nowrap"}}>{label}<span style={{opacity:wsort&&wsort.k===k?0.65:0,marginLeft:3,fontSize:9}}>{wsort&&wsort.k===k&&wsort.d>0?"▲":"▼"}</span></th>;
     const thead=<thead><tr>
       <th className="ns" style={{width:34}}><span className={`crm-ck${wAllOn?" on":""}`} onClick={()=>{ const s={}; if(!wAllOn) tRows.forEach(b=>{ s[b.id]=true; }); setWsel(s); }}>{wAllOn?"✓":""}</span></th>
-      <th className="ns">Buyer</th><th className="ns">Mobile</th><th className="ns">Interest</th><th className="ns">Heat</th><th className="ns">Contract</th><th className="ns">Offer / bid</th><th className="ns">Visits</th><th className="ns">Last note</th>
+      {sTh("buyer","Buyer")}{sTh("mobile","Mobile")}{sTh("interest","Interest")}{sTh("heat","Heat")}{sTh("contract","Contract")}{sTh("offer","Offer / bid")}{sTh("visits","Visits")}{sTh("note","Last note")}
     </tr></thead>;
     const inspGroups=()=>{ const shown=new Set(); const gs=[]; for(const o of wsOpens){ const bs=tRows.filter(b=>(b.openHomeIds||[]).includes(o.id)); if(bs.length){ bs.forEach(b=>shown.add(b.id)); gs.push({o,bs}); } } const orphans=tRows.filter(b=>!shown.has(b.id)); return {gs,orphans}; };
     return <div className="ws">
