@@ -10,10 +10,20 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v123-keysafe-access";
+const BUILD = "v126-2fa-login";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
+// Stable per-device id so a verified device can skip the texted code for 30 days (set server-side).
+// Lives in localStorage so it survives app close/reopen; only this device ever knows it.
+let DEVICE_ID = null;
+try {
+  DEVICE_ID = localStorage.getItem("savvi_device_id");
+  if (!DEVICE_ID) {
+    DEVICE_ID = ((window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36))).replace(/-/g, "");
+    localStorage.setItem("savvi_device_id", DEVICE_ID);
+  }
+} catch (e) { DEVICE_ID = "nodev-" + Math.random().toString(36).slice(2); }
 function persistSession(token, who) {
   SESSION_TOKEN = token || null;
   try {
@@ -81,16 +91,31 @@ async function call(action, params = {}) {
 }
 
 async function login(pin) {
-  const j = await call("login", { pin });
+  const j = await call("login", { pin, deviceId: DEVICE_ID });
   if (j?.ok && j.token) { persistSession(j.token, j.who); return { who: j.who }; }
+  // Correct PIN on an un-trusted device: the backend has texted a one-time code and is
+  // holding a short challenge. Hand the screen what it needs to collect the code.
+  if (j?.ok && j.need2fa) { return { need2fa: true, challengeId: j.challengeId, phoneHint: j.phoneHint }; }
   // Distinguish a wrong code from a connection/server problem so the login
   // screen can show the real reason (a failed fetch is NOT a wrong PIN).
   const err = j && j.error;
   const kind = err === "invalid_pin" ? "pin"
              : err === "too_many_attempts" ? "locked"
+             : err === "sms_failed" ? "sms"
              : (!j || err === "unauthorized") ? "pin"
              : "network";
   return { error: kind };
+}
+// Second step: verify the texted code. On success a session is issued; `remember` trusts this device.
+async function verifyCode(challengeId, code, remember) {
+  const j = await call("verify2fa", { challengeId, code, deviceId: DEVICE_ID, remember: !!remember });
+  if (j?.ok && j.token) { persistSession(j.token, j.who); return { who: j.who }; }
+  const err = j && j.error;
+  const kind = err === "code_expired" ? "expired"
+             : err === "too_many_attempts" ? "locked"
+             : err === "bad_code" ? "code"
+             : "network";
+  return { error: kind, left: j && j.left };
 }
 function logout() { persistSession(null); }
 
@@ -1412,6 +1437,12 @@ function PinScreen({ onUnlock }) {
   const [error,  setError]  = useState(false);
   const [shake,  setShake]  = useState(false);
   const [errMsg, setErrMsg] = useState("Incorrect PIN — try again");
+  const [stage, setStage]   = useState("pin");   // "pin" | "2fa"
+  const [chal,  setChal]    = useState(null);     // { id, hint, pin }
+  const [code,  setCode]    = useState("");
+  const [remember, setRemember] = useState(true);
+  const [otpErr, setOtpErr] = useState("");
+  const [busy,  setBusy]    = useState(false);
 
   // Wake the n8n backend while the agent is typing their PIN, so the login +
   // opens calls hit a warm container instead of paying a cold-start each.
@@ -1426,9 +1457,13 @@ function PinScreen({ onUnlock }) {
       const r = await login(next);
       if (r && r.who) {
         onUnlock(r.who);
+      } else if (r && r.need2fa) {
+        setChal({ id: r.challengeId, hint: r.phoneHint, pin: next });
+        setCode(""); setOtpErr(""); setStage("2fa"); setDigits("");
       } else {
         setErrMsg(
           r && r.error === "locked"  ? "Too many tries — wait a few minutes, then try again" :
+          r && r.error === "sms"     ? "Couldn't text your code — check signal, then try again" :
           r && r.error === "network" ? "Can't reach the server — check your internet, then close and reopen the app" :
           "Incorrect PIN — try again"
         );
@@ -1438,6 +1473,31 @@ function PinScreen({ onUnlock }) {
     }
   };
   const del = () => setDigits(d => d.slice(0, -1));
+  const submitCode = async (c) => {
+    const cc = (c != null ? c : code).replace(/\D/g, "").slice(0, 6);
+    if (cc.length !== 6 || busy || !chal) return;
+    setBusy(true); setOtpErr("");
+    const r = await verifyCode(chal.id, cc, remember);
+    setBusy(false);
+    if (r && r.who) { onUnlock(r.who); return; }
+    setOtpErr(
+      r && r.error === "code"    ? ("That code didn't match" + (r.left != null ? ` — ${r.left} ${r.left === 1 ? "try" : "tries"} left` : "")) :
+      r && r.error === "expired" ? "That code expired — tap Resend for a new one" :
+      r && r.error === "locked"  ? "Too many tries — tap Resend for a new code" :
+      "Couldn't reach the server — try again"
+    );
+    setCode("");
+  };
+  const resend = async () => {
+    if (busy || !chal) return;
+    setBusy(true); setOtpErr("");
+    const r = await login(chal.pin);
+    setBusy(false);
+    if (r && r.need2fa) { setChal({ id: r.challengeId, hint: r.phoneHint, pin: chal.pin }); setCode(""); setOtpErr("New code sent."); }
+    else if (r && r.who) { onUnlock(r.who); }
+    else setOtpErr("Couldn't resend — try again");
+  };
+  const backToPin = () => { setStage("pin"); setChal(null); setCode(""); setOtpErr(""); setError(false); setDigits(""); };
 
   const PCSS = `
     .pw{height:100%;min-height:100dvh;background:#311E10;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:calc(32px + env(safe-area-inset-top,0)) 24px calc(32px + env(safe-area-inset-bottom,0));}
@@ -1455,27 +1515,58 @@ function PinScreen({ onUnlock }) {
     .pe{font-size:13px;color:#E86A5C;margin-top:16px;font-weight:500;}
     @keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
     .shk{animation:shake .5s ease;}
+    .otp-sub{font-size:13px;color:#8A7A5E;margin-bottom:30px;}
+    .otp-in{width:100%;max-width:280px;background:rgba(255,244,213,.07);border:1px solid rgba(255,244,213,.22);border-radius:16px;padding:16px;font-family:'Newsreader',serif;font-size:30px;font-weight:700;letter-spacing:10px;color:#FFF4D5;text-align:center;caret-color:#FE5310;box-sizing:border-box;}
+    .otp-in:focus{outline:none;border-color:#FE5310;}
+    .otp-in::placeholder{color:rgba(201,183,154,.35);letter-spacing:8px;}
+    .otp-btn{width:100%;max-width:280px;margin-top:16px;background:#FE5310;border:none;border-radius:16px;padding:16px;font-family:'Neue Haas Unica Pro',sans-serif;font-size:16px;font-weight:700;color:#311E10;cursor:pointer;transition:opacity .15s;}
+    .otp-btn:disabled{opacity:.45;cursor:default;}
+    .otp-rem{display:flex;align-items:center;gap:9px;margin-top:18px;color:#C9B79A;font-size:13.5px;cursor:pointer;user-select:none;}
+    .otp-rem .bx{width:20px;height:20px;border-radius:6px;border:1.5px solid rgba(255,244,213,.3);display:flex;align-items:center;justify-content:center;font-size:13px;color:#311E10;transition:all .12s;}
+    .otp-rem .bx.on{background:#FE5310;border-color:#FE5310;}
+    .otp-msg{font-size:13px;color:#E86A5C;margin-top:14px;font-weight:500;min-height:18px;text-align:center;}
+    .otp-links{display:flex;gap:20px;margin-top:20px;}
+    .otp-lk{background:none;border:none;color:#8AACE3;font-size:13.5px;cursor:pointer;font-weight:500;padding:4px;}
+    .otp-lk:disabled{opacity:.5;cursor:default;}
   `;
 
   return (
     <div className="pw">
       <style>{PCSS}</style>
       <img className="pl-img" src={wordmark} alt="Savvi"/>
-      <div className="ps">Enter your PIN to continue</div>
-      <div className={`pd ${shake ? "shk" : ""}`}>
-        {[0,1,2,3].map(i => (
-          <div key={i} className={`pdot ${digits.length > i ? (error ? "e" : "f") : ""}`}/>
-        ))}
-      </div>
-      <div className="pg">
-        {[1,2,3,4,5,6,7,8,9].map(n => (
-          <button key={n} className="pb" onClick={() => press(String(n))}>{n}</button>
-        ))}
-        <button className="pb empty" disabled/>
-        <button className="pb" onClick={() => press("0")}>0</button>
-        <button className="pb del" onClick={del}>⌫</button>
-      </div>
-      {error && <div className="pe">{errMsg}</div>}
+      {stage === "pin" ? (<>
+        <div className="ps">Enter your PIN to continue</div>
+        <div className={`pd ${shake ? "shk" : ""}`}>
+          {[0,1,2,3].map(i => (
+            <div key={i} className={`pdot ${digits.length > i ? (error ? "e" : "f") : ""}`}/>
+          ))}
+        </div>
+        <div className="pg">
+          {[1,2,3,4,5,6,7,8,9].map(n => (
+            <button key={n} className="pb" onClick={() => press(String(n))}>{n}</button>
+          ))}
+          <button className="pb empty" disabled/>
+          <button className="pb" onClick={() => press("0")}>0</button>
+          <button className="pb del" onClick={del}>⌫</button>
+        </div>
+        {error && <div className="pe">{errMsg}</div>}
+      </>) : (<>
+        <div className="ps" style={{marginBottom:10}}>Enter the code we just texted you</div>
+        <div className="otp-sub">Sent to the mobile ending ••{chal ? chal.hint : ""}</div>
+        <input className="otp-in" type="text" inputMode="numeric" autoFocus maxLength={6} placeholder="••••••"
+          value={code}
+          onChange={e => { const v = e.target.value.replace(/\D/g, "").slice(0, 6); setCode(v); setOtpErr(""); if (v.length === 6) submitCode(v); }}/>
+        <button className="otp-btn" disabled={code.length !== 6 || busy} onClick={() => submitCode()}>{busy ? "Checking…" : "Verify"}</button>
+        <div className="otp-rem" onClick={() => setRemember(r => !r)}>
+          <span className={`bx ${remember ? "on" : ""}`}>{remember ? "✓" : ""}</span>
+          Trust this device for 30 days
+        </div>
+        <div className="otp-msg">{otpErr}</div>
+        <div className="otp-links">
+          <button className="otp-lk" onClick={resend} disabled={busy}>Resend code</button>
+          <button className="otp-lk" onClick={backToPin}>Use a different PIN</button>
+        </div>
+      </>)}
     </div>
   );
 }
