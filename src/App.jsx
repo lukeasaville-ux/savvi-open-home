@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v143-tools-sign-anything";
+const BUILD = "v144-duty-collapse-listings";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5912,6 +5912,7 @@ function ToolsSheet({ open, onClose, crm }){
     { k:"cal", ic:"▦", t:"Calendar of Events", d:"A one-off campaign calendar PDF", go:()=>crm.setShowCalendar(true) },
     { k:"sched", ic:"▦", t:"Advertising schedule", d:"A one-off marketing schedule PDF", go:()=>crm.setShowSchedule(true) },
     { k:"sign", ic:"✒", t:"Sign anything", d:"Upload any document, place fields, send to sign", go:()=>crm.setShowSign(true) },
+    { k:"duty", ic:"$", t:"Stamp duty (VIC)", d:"Estimate land transfer duty for a purchaser", go:()=>crm.setShowDuty(true) },
   ];
   return (
     <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
@@ -5931,6 +5932,98 @@ function ToolsSheet({ open, onClose, crm }){
               <span style={{marginLeft:"auto",color:BROWN_L,fontSize:18}}>›</span>
             </button>
           ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============ Victorian stamp duty calculator (Tools) ============
+// Land transfer (stamp) duty, VIC. General + PPR concessional scales confirmed against the SRO
+// current-rates pages (Nov 2026). First home buyer: exempt to $600k dutiable value, then a sliding
+// concession to $750k = general duty × (value − 600,000) / 150,000 (validated vs the SRO calculator:
+// $650k→$11,357, $700k→$24,713). Off-the-plan reduces the dutiable value by the post-contract
+// construction cost (temporary concession: all buyers, no cap, contracts before ~21 Apr 2027).
+// Foreign purchaser additional duty = 8% of the dutiable value. ESTIMATE ONLY.
+function dutyGeneral(v){
+  v=Math.max(0,Number(v)||0);
+  if(v<=25000) return v*0.014;
+  if(v<=130000) return 350+(v-25000)*0.024;
+  if(v<=960000) return 2870+(v-130000)*0.06;
+  if(v<=2000000) return v*0.055;
+  return 110000+(v-2000000)*0.065;
+}
+function dutyPPR(v){ // owner-occupier (principal place of residence) concession, valid $130k–$550k
+  v=Math.max(0,Number(v)||0);
+  if(v<130000) return dutyGeneral(v);
+  if(v<=440000) return 2870+(v-130000)*0.05;
+  if(v<=550000) return 18370+(v-440000)*0.06;
+  return dutyGeneral(v);
+}
+function dutyFHB(v){ // first home buyer
+  v=Math.max(0,Number(v)||0);
+  if(v<=600000) return 0;
+  if(v<=750000) return dutyGeneral(v)*(v-600000)/150000;
+  return dutyGeneral(v);
+}
+function StampDutySheet({ open, onClose }){
+  const [price,setPrice]=useState("");
+  const [buyer,setBuyer]=useState("fhb");   // fhb | occupier | investor
+  const [otp,setOtp]=useState(false);
+  const [construction,setConstruction]=useState("");
+  const [foreign,setForeign]=useState(false);
+  const p=Number(String(price).replace(/[^0-9]/g,""))||0;
+  const c=otp?(Number(String(construction).replace(/[^0-9]/g,""))||0):0;
+  const dv=Math.max(0,p-c);
+  const base = buyer==="fhb"?dutyFHB(dv):buyer==="occupier"?dutyPPR(dv):dutyGeneral(dv);
+  const surcharge=foreign?dv*0.08:0;
+  const total=base+surcharge;
+  const money=v=>"$"+Math.round(v).toLocaleString("en-AU");
+  const seg=(active)=>({ flex:1, padding:"9px 6px", border:`1.5px solid ${active?BROWN:SAND_D}`, borderRadius:10, cursor:"pointer", fontFamily:"inherit", fontWeight:700, fontSize:12.5, background:active?BROWN:"#fff", color:active?"#fff":BROWN });
+  const notes=[];
+  if(buyer==="fhb"){ if(p>0&&dv<=600000) notes.push("First home buyer: exempt up to $600,000 dutiable value."); else if(dv>600000&&dv<=750000) notes.push("First home buyer concession tapers from $600,000 to $750,000."); else if(dv>750000) notes.push("Above $750,000 the first home buyer concession no longer applies."); }
+  if(buyer==="occupier"&&dv>550000) notes.push("Owner-occupier concession only applies up to $550,000; the general rate applies above it.");
+  if(otp) notes.push("Off the plan: duty is charged on the price minus the construction still to be done after the contract date. The concession applies to contracts before 21 April 2027.");
+  return (
+    <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
+        <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:10,right:12,width:32,height:32,borderRadius:16,border:"none",background:SAND,color:BROWN,fontSize:17,fontWeight:700,cursor:"pointer",lineHeight:"32px",zIndex:5}}>×</button>
+        <div className="hndl"/>
+        <div className="sh-ttl">Stamp duty (VIC)</div>
+        <div className="sh-sub">Land transfer duty estimate for a purchaser</div>
+        <div style={{padding:"4px 16px 16px"}}>
+          <label className="fl">Purchase price</label>
+          <MoneyInput value={price} onChange={setPrice} placeholder="$750,000"/>
+          <label className="fl" style={{marginTop:14}}>Buyer</label>
+          <div style={{display:"flex",gap:6}}>
+            <button style={seg(buyer==="fhb")} onClick={()=>setBuyer("fhb")}>First home</button>
+            <button style={seg(buyer==="occupier")} onClick={()=>setBuyer("occupier")}>Owner-occupier</button>
+            <button style={seg(buyer==="investor")} onClick={()=>setBuyer("investor")}>Investor</button>
+          </div>
+          <label style={{display:"flex",alignItems:"center",gap:9,marginTop:14,fontSize:13.5,color:BROWN,cursor:"pointer"}}>
+            <input type="checkbox" checked={otp} onChange={e=>setOtp(e.target.checked)} style={{width:18,height:18,accentColor:BLUE_D}}/>
+            Buying off the plan
+          </label>
+          {otp&&<div style={{marginTop:8}}>
+            <label className="fl">Construction still to be done after contract</label>
+            <MoneyInput value={construction} onChange={setConstruction} placeholder="$ remaining build cost"/>
+            <div style={{fontSize:11.5,color:BROWN_L,marginTop:5}}>The builder or developer provides this figure. Duty is charged on the price minus this amount.</div>
+          </div>}
+          <label style={{display:"flex",alignItems:"center",gap:9,marginTop:12,fontSize:13.5,color:BROWN,cursor:"pointer"}}>
+            <input type="checkbox" checked={foreign} onChange={e=>setForeign(e.target.checked)} style={{width:18,height:18,accentColor:BLUE_D}}/>
+            Foreign purchaser (adds 8%)
+          </label>
+          <div style={{marginTop:16,border:`1px solid ${SAND_D}`,borderRadius:12,overflow:"hidden"}}>
+            {otp&&c>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"10px 14px",fontSize:12.5,color:BROWN_L,borderBottom:`1px solid ${LINEN}`}}><span>Dutiable value</span><span>{money(dv)}</span></div>}
+            <div style={{display:"flex",justifyContent:"space-between",padding:"10px 14px",fontSize:13,color:BROWN}}><span>Land transfer duty</span><span style={{fontWeight:700}}>{p>0?money(base):"—"}</span></div>
+            {surcharge>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"10px 14px",fontSize:13,color:BROWN,borderTop:`1px solid ${LINEN}`}}><span>Foreign purchaser duty (8%)</span><span style={{fontWeight:700}}>{money(surcharge)}</span></div>}
+            <div style={{background:BROWN,padding:"13px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{color:"#fff",fontWeight:700,fontSize:14}}>Estimated duty</span>
+              <span style={{color:"#fff",fontWeight:800,fontSize:20}}>{p>0?money(total):"—"}</span>
+            </div>
+          </div>
+          {notes.map((n,i)=><div key={i} style={{fontSize:11.5,color:BROWN_L,marginTop:8,lineHeight:1.45}}>{n}</div>)}
+          <div style={{fontSize:11,color:BROWN_L,marginTop:12,lineHeight:1.45,fontStyle:"italic"}}>Estimate only, for guidance. It excludes the pensioner concession and any first home owner grant, and the purchaser should confirm the figure with their conveyancer.</div>
         </div>
       </div>
     </div>
@@ -7152,6 +7245,10 @@ export default function App(){
     else { root.style.maxWidth=""; root.style.boxShadow=""; root.style.background=""; }
   },[isDesktop,agentName]);
   const[homeTab,setHomeTab]=useState("opens"); // opens | match — swipeable tabs on the home screen
+  // Active listings under the opens collapse by default (Luke: they're rarely needed and push the
+  // authority/contract buttons far down). Choice persists per device; a search force-expands them.
+  const[showActive,setShowActive]=useState(()=>{ try{ return localStorage.getItem("savvi_show_active")==="1"; }catch(e){ return false; } });
+  useEffect(()=>{ try{ localStorage.setItem("savvi_show_active", showActive?"1":"0"); }catch(e){} },[showActive]);
   const[listingQ,setListingQ]=useState(""); // search box to jump to a listing/open without scrolling
   const swipeRef=useRef(null);
   const onHomeTouchStart=e=>{const t=e.touches[0];swipeRef.current={x:t.clientX,y:t.clientY};};
@@ -7222,6 +7319,7 @@ export default function App(){
   const[showTools,setShowTools]=useState(false);
   const[showSchedule,setShowSchedule]=useState(false);
   const[showSign,setShowSign]=useState(false);
+  const[showDuty,setShowDuty]=useState(false);
   const[showContract,setShowContract]=useState(false);
   const[showAssistant,setShowAssistant]=useState(false);
   const[showGeneral,setShowGeneral]=useState(false);
@@ -7976,7 +8074,7 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, sumStats, setSumStats, setSumStart, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setShowCalendar, setShowProposal, setShowTools, setShowSchedule, setShowSign, setBFilters, fmtDay, addNote, openOfferContract:(b)=>{ setOfferContractBuyer(b); setShowOfferContract(true); }, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
+  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, sumStats, setSumStats, setSumStart, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setShowCalendar, setShowProposal, setShowTools, setShowSchedule, setShowSign, setShowDuty, setBFilters, fmtDay, addNote, openOfferContract:(b)=>{ setOfferContractBuyer(b); setShowOfferContract(true); }, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
@@ -8047,10 +8145,15 @@ export default function App(){
 
         {/* ── ALL LISTINGS: active properties not in opens ── */}
         {!isDemo&&<>
-          {listingsOnly.filter(_lMatch).length>0&&<><div className="sec-lbl" style={{paddingTop:22}}>All Active Listings</div>
-          <div style={{padding:"0 20px 10px",fontSize:12,color:BROWN_L}}>Register walk-ins and phone enquiries, or send contracts any time</div></>}
-          {!_lq&&listingsOnly.length===0&&<div style={{padding:"0 20px 16px",fontSize:13,color:BROWN_L}}>All active listings are already in this week's opens.</div>}
-          {listingsOnly.filter(_lMatch).map(p => {
+          {listingsOnly.length>0&&(()=>{ const _actOpen=showActive||!!_lq; const _rows=listingsOnly.filter(_lMatch); return <>
+          <div className="sec-lbl" style={{paddingTop:22,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>setShowActive(v=>!v)}>
+            <span>All Active Listings · {_lq?_rows.length:listingsOnly.length}</span>
+            <span style={{fontSize:12,color:BLUE_D,fontWeight:800}}>{_actOpen?"Hide":"Show"}</span>
+          </div>
+          {_actOpen&&<>
+          <div style={{padding:"0 20px 10px",fontSize:12,color:BROWN_L}}>Register walk-ins and phone enquiries, or send contracts any time</div>
+          {_rows.length===0&&<div style={{padding:"0 20px 16px",fontSize:13,color:BROWN_L}}>No active listing matches your search.</div>}
+          {_rows.map(p => {
             const addr   = p.address || "Unknown";
             const suburb = p.suburb || "";
             const beds   = p.beds;
@@ -8090,6 +8193,9 @@ export default function App(){
               </div>
             );
           })}
+          </>}
+          </>; })()}
+          {!_lq&&listingsOnly.length===0&&<div style={{padding:"0 20px 16px",fontSize:13,color:BROWN_L}}>All active listings are already in this week's opens.</div>}
 
           {/* ── SOLD & PAST LISTINGS: still openable to review buyers + settlement dates ── */}
           {pastListings.length>0&&(()=>{
@@ -8303,6 +8409,7 @@ export default function App(){
     <ToolsSheet open={showTools} onClose={()=>setShowTools(false)} crm={crm}/>
     <ScheduleSheet open={showSchedule} onClose={()=>setShowSchedule(false)} agentName={agentName}/>
     <SignAnythingSheet open={showSign} onClose={()=>setShowSign(false)} agentName={agentName}/>
+    <StampDutySheet open={showDuty} onClose={()=>setShowDuty(false)}/>
     <ProposalSheet open={showProposal} onClose={()=>setShowProposal(false)} agentName={agentName}/>
     <ContractSheet open={showContract} onClose={()=>setShowContract(false)} agentName={agentName} listings={allListings}/>
 
