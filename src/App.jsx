@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v127-device-cookie";
+const BUILD = "v128-hot-live-only";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -631,16 +631,17 @@ const Attio = {
     const rank = { hot: 3, watching: 2, cool: 1 };
     const people = {}; ppl.forEach(p => { const id = rid(p); if (id) people[id] = p; });
     const byC = {};
-    ppl.forEach(p => { const id = rid(p); if (!id) return; byC[id] = { id, contactId: id, name: pnm(p) || "Unknown", mobile: p?.values?.phone_numbers?.[0]?.phone_number || "", email: p?.values?.email_addresses?.[0]?.email_address || "", interest: "", insps: [], notes: [], contractSent: false, lastActivity: 0, contractOpens: [] }; });
+    ppl.forEach(p => { const id = rid(p); if (!id) return; byC[id] = { id, contactId: id, name: pnm(p) || "Unknown", mobile: p?.values?.phone_numbers?.[0]?.phone_number || "", email: p?.values?.email_addresses?.[0]?.email_address || "", interest: "", liveInterest: "", insps: [], notes: [], contractSent: false, lastActivity: 0, contractOpens: [] }; });
     insp.forEach(i => {
       const cid = rref(i, "contact"); const c = cid && byC[cid]; if (!c) return;
       const notes = normBuyer({ id: rid(i), notes: rval(i, "notes") || "" }).notes || [];
       const pr = rref(i, "property"); const m = propMeta[pr] || {};
       const it = (rval(i, "interest") || "").toLowerCase();
       const opens = parseContractOpens(rval(i, "contract_opens") || "");
-      const rec = { id: rid(i), propertyRef: pr, openHomeRef: rref(i, "open_home"), interest: it, notes, contractSent: !!rval(i, "contract_sent"), contractSentTime: rval(i, "contract_sent_time") || null, contractOpens: opens, resendId: rval(i, "resend_id") || null, createdAt: i?.created_at || null, isEnquiry: classifyEnquiry(notes), address: m.address || "", suburb: m.suburb || "", price: m.price || "" };
+      const rec = { id: rid(i), propertyRef: pr, openHomeRef: rref(i, "open_home"), interest: it, notes, contractSent: !!rval(i, "contract_sent"), contractSentTime: rval(i, "contract_sent_time") || null, contractOpens: opens, resendId: rval(i, "resend_id") || null, createdAt: i?.created_at || null, isEnquiry: classifyEnquiry(notes), address: m.address || "", suburb: m.suburb || "", price: m.price || "", statusText: m.statusText || "" };
       c.insps.push(rec); c.notes.push(...notes); c.contractOpens.push(...opens);
       if ((rank[it] || 0) > (rank[c.interest] || 0)) c.interest = it;
+      if (!isDeadListing(rec.statusText) && (rank[it] || 0) > (rank[c.liveInterest] || 0)) c.liveInterest = it;
       if (rec.contractSent) c.contractSent = true;
       const last = Math.max(new Date(rec.createdAt || 0).getTime(), ...notes.map(n => new Date(n.ts || 0).getTime() || 0), ...opens.map(o => new Date(o.at || 0).getTime() || 0));
       if (last > c.lastActivity) c.lastActivity = last;
@@ -813,6 +814,12 @@ function toE164AU(raw) {
   else s = "+" + s;                                    // fallback: assume already has country code
   return s;
 }
+
+// A listing is "dead" for buyer-surfacing once it's sold/settled/withdrawn/off-market/leased.
+// Blank or unknown status counts as LIVE, so we never hide a buyer we're unsure about.
+// (Deliberately NOT treating "under offer" as dead — backup buyers on an under-offer
+// property are still live prospects; flip this if Luke wants them hidden too.)
+function isDeadListing(s){ return ["sold","settled","withdrawn","off-market","off market","leased","rented"].includes(String(s||"").toLowerCase().trim()); }
 
 // Compose a new email in Outlook (the app if installed, otherwise Outlook on the
 // web) instead of the OS default handler (Apple Mail). Never falls back to mailto:.
@@ -4410,6 +4417,7 @@ function crmBuildFeed(index, auctionByProp){
   const after=(ts,cmp)=>ts&&cmp&&new Date(ts)>new Date(cmp);
   index.contacts.forEach(c=>{
     c.insps.forEach(i=>{
+      if(isDeadListing(i.statusText)) return; // a sold/settled/withdrawn listing needs no follow-up
       const notes=i.notes||[];
       const human=notes.filter(n=>!isAutoNote(n.text));
       const lastHuman=human.length?human[human.length-1].ts:null;
@@ -4649,7 +4657,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const activeCount=(allListings||[]).filter(p=>!["sold","withdrawn","off-market","under offer"].includes(String(p.statusText||"").toLowerCase())).length;
   const feed=useMemo(()=>crmBuildFeed(index,auctionByProp),[index,auctionByProp]);
   const contacts=index?index.contacts:null;
-  const hotCount=(contacts||[]).filter(c=>c.interest==="hot").length;
+  const hotCount=(contacts||[]).filter(c=>c.liveInterest==="hot").length;
 
   // ── Global search (contacts + listings) ──
   const gres=useMemo(()=>{ const q=gq.trim().toLowerCase(); if(q.length<2) return {people:[],props:[]}; const pk=phoneKey(gq); const people=(contacts||[]).filter(c=>(c.name||"").toLowerCase().includes(q)||(c.email||"").toLowerCase().includes(q)||(pk.length>=3&&phoneKey(c.mobile||"").includes(pk))).slice(0,7); const props=[...(allListings||[])].filter(p=>((p.address||"")+" "+(p.suburb||"")).toLowerCase().includes(q)).slice(0,4); return {people,props}; },[gq,contacts,allListings]);
@@ -4811,7 +4819,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
 
   // ── Contacts table ──
   const cfilters=[["all","Everyone"],["hot","Hot"],["watching","Watching"],["cool","Cool"],["contract","Contract sent"],["enquired","Enquired"],["nomobile","No mobile"]];
-  const cRows=useMemo(()=>{ if(!contacts) return []; const q=cq.trim().toLowerCase(); const pk=phoneKey(cq); let r=contacts.filter(c=>cf==="all"||(cf==="contract"?c.contractSent:cf==="enquired"?c.insps.some(i=>i.isEnquiry):cf==="nomobile"?!c.mobile:c.interest===cf)); if(q) r=r.filter(c=>(c.name||"").toLowerCase().includes(q)||(c.email||"").toLowerCase().includes(q)||(pk.length>=3&&phoneKey(c.mobile||"").includes(pk))||c.insps.some(i=>(i.address||"").toLowerCase().includes(q))); const ir={hot:3,watching:2,cool:1}; const key=c=>csort.k==="name"?(c.name||"").toLowerCase():csort.k==="interest"?(ir[c.interest]||0):csort.k==="heat"?buyerHeat(c).score:csort.k==="props"?c.insps.length:(c.lastActivity||0); return r.sort((a,b)=>{ const x=key(a),y=key(b); return (x<y?-1:x>y?1:0)*csort.d; }); },[contacts,cq,cf,csort]);
+  const cRows=useMemo(()=>{ if(!contacts) return []; const q=cq.trim().toLowerCase(); const pk=phoneKey(cq); let r=contacts.filter(c=>cf==="all"||(cf==="contract"?c.contractSent:cf==="enquired"?c.insps.some(i=>i.isEnquiry):cf==="nomobile"?!c.mobile:c.liveInterest===cf)); if(q) r=r.filter(c=>(c.name||"").toLowerCase().includes(q)||(c.email||"").toLowerCase().includes(q)||(pk.length>=3&&phoneKey(c.mobile||"").includes(pk))||c.insps.some(i=>(i.address||"").toLowerCase().includes(q))); const ir={hot:3,watching:2,cool:1}; const key=c=>csort.k==="name"?(c.name||"").toLowerCase():csort.k==="interest"?(ir[c.interest]||0):csort.k==="heat"?buyerHeat(c).score:csort.k==="props"?c.insps.length:(c.lastActivity||0); return r.sort((a,b)=>{ const x=key(a),y=key(b); return (x<y?-1:x>y?1:0)*csort.d; }); },[contacts,cq,cf,csort]);
   const csortBy=(k)=>setCsort(s=>s.k===k?{k,d:-s.d}:{k,d:k==="name"?1:-1});
   const cselected=cRows.filter(c=>csel[c.contactId]);
   const dupes=useMemo(()=>{ if(!contacts) return []; const byKey={}; contacts.forEach(c=>{ const keys=[]; const pk=phoneKey(c.mobile||""); if(pk.length>=8) keys.push("m:"+pk.slice(-9)); if(c.email) keys.push("e:"+c.email.toLowerCase().trim()); keys.forEach(k=>(byKey[k]=byKey[k]||[]).push(c)); }); const groups=[]; const seen=new Set(); Object.values(byKey).forEach(g=>{ if(g.length<2) return; const ids=g.map(c=>c.contactId).sort().join("|"); if(seen.has(ids)) return; seen.add(ids); groups.push(g); }); return groups; },[contacts]);
@@ -4927,7 +4935,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
                 <div className="crm-card">
                   <div className="h">Hot right now<span className="ct">{hotCount}</span></div>
                   <div style={{padding:"4px 8px 10px"}}>
-                    {(contacts||[]).filter(c=>c.interest==="hot").sort((a,b)=>buyerHeat(b).score-buyerHeat(a).score).slice(0,8).map(c=><div key={c.contactId} className="crm-row" onClick={()=>onOpenContact(c.contactId,c.insps[0]?.propertyRef||null)}><div className="av" style={{background:crmColor(c.name),width:28,height:28,fontSize:11}}>{crmInitials(c.name)}</div><div style={{minWidth:0}}><div className="t">{c.name}</div><div className="s">{c.insps.filter(i=>i.interest==="hot").map(i=>streetLine(i.address,i.suburb)).filter(Boolean).slice(0,2).join(" · ")||"—"}</div></div><div className="r"><HeatBadge b={c}/></div></div>)}
+                    {(contacts||[]).filter(c=>c.liveInterest==="hot").sort((a,b)=>buyerHeat(b).score-buyerHeat(a).score).slice(0,8).map(c=><div key={c.contactId} className="crm-row" onClick={()=>onOpenContact(c.contactId,c.insps[0]?.propertyRef||null)}><div className="av" style={{background:crmColor(c.name),width:28,height:28,fontSize:11}}>{crmInitials(c.name)}</div><div style={{minWidth:0}}><div className="t">{c.name}</div><div className="s">{c.insps.filter(i=>i.interest==="hot"&&!isDeadListing(i.statusText)).map(i=>streetLine(i.address,i.suburb)).filter(Boolean).slice(0,2).join(" · ")||"—"}</div></div><div className="r"><HeatBadge b={c}/></div></div>)}
                     {contacts&&hotCount===0&&<div className="crm-empty">No hot buyers yet.</div>}
                   </div>
                 </div>
