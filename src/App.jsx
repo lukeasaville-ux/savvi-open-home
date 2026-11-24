@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v137-calendar-date-font";
+const BUILD = "v138-proposal-builder";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4851,7 +4851,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
     <aside className="crm-side">
       <div className="crm-brand"><img src={wordmark} alt="Savvi"/><span>CRM</span></div>
       <nav className="crm-nav">{TABS.map(t=><button key={t.k} className={tab===t.k?"on":""} onClick={()=>{ setSel(null); setTab(t.k); }}><span className="ic">{t.ic}</span>{t.l}{t.ct?<span className="ct">{t.ct}</span>:null}</button>)}</nav>
-      <div style={{marginTop:14}} className="crm-nav"><button onClick={()=>crm.setShowAuthority(true)}><span className="ic">✎</span>New authority</button><button onClick={()=>crm.setShowContract(true)}><span className="ic">✍</span>Sign a contract</button><button onClick={()=>crm.setShowGeneral(true)}><span className="ic">✦</span>General enquiry</button><button onClick={()=>crm.setShowAddListing(true)}><span className="ic">+</span>Add listing</button><button onClick={()=>crm.setShowCalendar(true)}><span className="ic">▦</span>Calendar of Events</button></div>
+      <div style={{marginTop:14}} className="crm-nav"><button onClick={()=>crm.setShowAuthority(true)}><span className="ic">✎</span>New authority</button><button onClick={()=>crm.setShowContract(true)}><span className="ic">✍</span>Sign a contract</button><button onClick={()=>crm.setShowGeneral(true)}><span className="ic">✦</span>General enquiry</button><button onClick={()=>crm.setShowAddListing(true)}><span className="ic">+</span>Add listing</button><button onClick={()=>crm.setShowCalendar(true)}><span className="ic">▦</span>Calendar of Events</button><button onClick={()=>crm.setShowProposal(true)}><span className="ic">◈</span>New proposal</button></div>
       <div className="crm-side-foot">
         <div className="crm-agent"><div className="av" style={{background:crmColor(agentName)}}>{crmInitials(agentName)}</div><div><div className="nm">{AGENT_FULL[agentName]||agentName}</div><div className="sub">{indexing?"Syncing CRM…":index?`Synced ${crmAgo(new Date(indexAt).toISOString())}`:"Loading CRM…"}</div></div></div>
         <div style={{display:"flex",gap:4}}><button className="crm-linkbtn" onClick={()=>loadIndex(true)}>↻ Sync now</button><button className="crm-linkbtn" style={{marginLeft:"auto"}} onClick={onLogout}>Log out</button></div>
@@ -6119,6 +6119,443 @@ function ContractSheet({ open, onClose, agentName, listings }){
 }
 
 
+// ============ Proposal (vendor-facing landing page) ============
+// The proposal is the front door to the authority and reuses its inputs (address, price,
+// commission %/$, campaign/schedule, method/auction) so "accept" can prefill the authority.
+// Rendered as a branded landing page the vendor opens on a link (Stage B: ?p=<token> served
+// by n8n, with open tracking + accept→authority). This builds the copy model, the live
+// renderer (ProposalView) and the agent-facing builder (ProposalSheet).
+const PROP_METHODS=[
+  {id:"twostage-private",label:"Two-stage: off-market into private sale",cal:"offmkt-private",twostage:true,final:"private sale"},
+  {id:"twostage-auction",label:"Two-stage: off-market into auction",cal:"offmkt-auction",twostage:true,final:"auction"},
+  {id:"twostage-eoi",label:"Two-stage: off-market into expressions of interest",cal:"offmkt-private",twostage:true,final:"expressions of interest"},
+  {id:"private",label:"Standard private sale",cal:"private-sale",twostage:false,final:"private sale"},
+  {id:"auction",label:"Standard auction",cal:"auction",twostage:false,final:"auction"},
+  {id:"eoi",label:"Standard expressions of interest",cal:"private-sale",twostage:false,final:"expressions of interest"},
+];
+// Recommended-method body copy, from Madeline's refined template. Company voice ("we"), so it
+// reads for either agent; the personal/company tone lives in the voice-specific sections below.
+const PROP_METHOD_COPY={
+  "twostage-private":[
+    "We'd recommend a two-stage approach, beginning with a two-week off-market campaign through our social media channels and Soft Launch Club on Instagram.",
+    "Our Soft Launch Club now has over 3,000 registered buyers and has generated 15 direct property sales in the past four months.",
+    "This gives us the opportunity to introduce the property to thousands of genuine buyers before committing to the expense of a full advertising campaign.",
+    "If we don't achieve the right result off-market, we'd then move into a full private sale campaign across realestate.com.au and Domain alongside our social channels, with scheduled inspections and direct negotiation to the strongest outcome.",
+  ],
+  "twostage-auction":[
+    "We'd recommend a two-stage approach, beginning with a two-week off-market campaign through our social media channels and Soft Launch Club on Instagram.",
+    "Our Soft Launch Club now has over 3,000 registered buyers and has generated 15 direct property sales in the past four months.",
+    "This gives us an opportunity to introduce the property to thousands of genuine buyers and potentially secure a result before committing to a full advertising campaign.",
+    "If we don't secure the right result, we'd move into a full auction campaign across realestate.com.au, Domain and our social channels, with a structured inspection schedule leading towards auction day to create urgency and competition.",
+  ],
+  "twostage-eoi":[
+    "We'd recommend a two-stage approach, beginning with a two-week off-market campaign through our social media channels and Soft Launch Club on Instagram.",
+    "Our Soft Launch Club now has over 3,000 registered buyers and has generated 15 direct property sales in the past four months.",
+    "This gives us the opportunity to introduce the property to our established buyer audience and potentially secure a result before investing in a full public campaign.",
+    "If we don't achieve the right result off-market, we'd launch a formal Expressions of Interest campaign, with broad advertising, scheduled inspections and a nominated closing date for offers, so buyers can put forward their strongest terms.",
+  ],
+  "private":[
+    "We'd recommend launching the property directly to the market through a structured private sale campaign, combining realestate.com.au, Domain and our targeted social media channels.",
+    "We'll create a strong first impression through professional photography, engaging copy and one of our walkthrough videos, before launching with a clear price guide and scheduled inspections.",
+    "Throughout the campaign we'll follow up every enquiry, provide regular feedback and negotiate directly with interested buyers to achieve the strongest possible outcome.",
+    "The benefit of private sale is its flexibility. We can respond to buyer interest as it develops and consider offers as they come through, without being tied to an auction date.",
+  ],
+  "auction":[
+    "We'd recommend taking the property directly to auction, with a structured marketing campaign designed to build buyer interest and competition towards a set auction date.",
+    "We'd launch across realestate.com.au, Domain and our targeted social media channels, supported by professional photography, a walkthrough video and a consistent schedule of open homes.",
+    "The advantage of an auction is the clear timeframe it creates. It encourages buyers to make decisions, brings interested parties together and lets competitive bidding establish the property's market value.",
+    "Our social media campaigns are particularly valuable here, reaching buyers who weren't actively searching but become interested once they see the property.",
+  ],
+  "eoi":[
+    "We'd recommend launching through a formal Expressions of Interest campaign, a structured way to generate buyer competition while keeping flexibility around the final sale terms.",
+    "We'd undertake a comprehensive campaign across realestate.com.au, Domain and our social channels, supported by professional photography, a walkthrough video and scheduled inspections.",
+    "Interested buyers would submit their offers by a nominated closing date, letting us assess price, settlement terms and conditions together.",
+    "By combining this structure with our social reach, we attract both active and passive buyers and encourage them to put forward their strongest offer.",
+  ],
+};
+const PROP_VOICE={
+  luke:{
+    name:"Luke Saville", role:"Director", phone:"0437 720 806", email:"lukesaville@getsavvi.com.au",
+    ig:"https://www.instagram.com/lukesaville_/", igLabel:"@lukesaville_", showProfile:true,
+    intro:"Thanks again for the opportunity to present my thoughts on the sale. Everything you need is on this page.",
+    whyHead:"Apartments aren't part of what I do. They're all I do.",
+    whyBody:["For over 15 years I've specialised exclusively in apartments across Hawthorn and the surrounding suburbs. I don't list a $3m house one week and an entry-level apartment the next, so all of my attention stays in one market."],
+    feeManage:"I personally project manage the entire campaign: marketing, every buyer enquiry, detailed reports, negotiation and auctioneering, right through to settlement.",
+    closing:"Please don't underestimate how eager I am to represent you with this sale. I'd love to get started.",
+    team:[
+      {nm:"Luke",ro:"Director. Your main contact, across every inspection, all buyer communication and negotiation."},
+      {nm:"Madeline",ro:"Head of Operations & Marketing. Behind-the-scenes admin, marketing and preparation for sale."},
+      {nm:"Sam",ro:"Assists at open homes and on auction day."},
+    ],
+  },
+  sam:{
+    name:"Sam Robinson", role:"Savvi Real Estate", phone:"", email:"samrobinson@getsavvi.com.au",
+    ig:"https://www.instagram.com/savvi.apartments/", igLabel:"@savvi.apartments", showProfile:false,
+    intro:"Thanks again for the opportunity to present our thoughts on the sale. Everything you need is on this page.",
+    whyHead:"Apartments aren't part of what we do. They're all we do.",
+    whyBody:["Savvi specialises exclusively in apartments across Hawthorn and the surrounding suburbs. We don't list a $3m house one week and an entry-level apartment the next, so all of our attention stays in one market.","It's a focus that has made Savvi the number one agency for apartment sales in Hawthorn, three years running."],
+    feeManage:"We project manage the entire campaign end to end: marketing, every buyer enquiry, detailed reports, negotiation and auctioneering, right through to settlement.",
+    closing:"Please don't underestimate how eager we are to represent you with this sale. We'd love to get started.",
+    team:[
+      {nm:"Sam",ro:"Your agent through the campaign, across inspections and buyer communication."},
+      {nm:"Luke",ro:"Director. Oversees strategy and negotiation across every Savvi campaign."},
+      {nm:"Madeline",ro:"Head of Operations & Marketing. Behind-the-scenes admin, marketing and preparation for sale."},
+    ],
+  },
+};
+const PP_CSS=`
+.pp{--bg:#FFF4D5;--panel:#FFFCF3;--panel2:#F7E8C2;--ink:#311E10;--soft:#7A5C48;--accent:#FE5310;--blue:#8AACE3;--line:rgba(49,30,16,.14);
+  --serif:"Newsreader",Georgia,serif;--sans:"Hanken Grotesk",-apple-system,system-ui,"Segoe UI",Arial,sans-serif;
+  background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55;font-size:16px;-webkit-font-smoothing:antialiased}
+.pp *{box-sizing:border-box}
+.pp .wrap{max-width:720px;margin:0 auto;padding:0 20px}
+.pp h1,.pp h2,.pp h3{font-family:var(--serif);font-weight:500;margin:0;letter-spacing:-.01em;text-wrap:balance}
+.pp p{margin:0 0 1em}
+.pp a{color:inherit}
+.pp .eyebrow{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--soft);font-weight:700;margin:0 0 .6em}
+.pp .bar{position:sticky;top:0;z-index:5;background:rgba(255,244,213,.9);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.pp .bar .wrap{display:flex;align-items:center;justify-content:space-between;padding:12px 20px}
+.pp .mark{font-family:var(--serif);font-weight:600;font-size:22px;letter-spacing:-.02em}
+.pp .mark b{color:var(--accent)}
+.pp .btn{font-family:var(--sans);font-weight:600;font-size:14px;border:0;border-radius:999px;padding:11px 20px;background:var(--accent);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
+.pp .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.pp .hero{padding:40px 0 34px}
+.pp .hero .kicker{color:var(--accent);font-weight:600;letter-spacing:.14em;text-transform:uppercase;font-size:12.5px}
+.pp .hero h1{font-size:clamp(32px,8vw,54px);line-height:1.03;margin:.35em 0 .45em}
+.pp .hero .sub{font-size:18px;color:var(--soft);max-width:46ch}
+.pp .meta{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:22px;font-size:14px;color:var(--soft)}
+.pp .meta b{color:var(--ink);font-weight:600}
+.pp section{padding:32px 0;border-top:1px solid var(--line)}
+.pp section h2{font-size:clamp(24px,5.4vw,33px);line-height:1.1;margin-bottom:.5em}
+.pp .lead{font-size:18px}
+.pp .price{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:24px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 24px;box-shadow:0 10px 30px rgba(49,30,16,.07)}
+.pp .price .fig{font-family:var(--serif);font-size:clamp(32px,8vw,46px);line-height:1}
+.pp .price .note{color:var(--soft);font-size:15px;flex:1 1 220px;min-width:0}
+.pp .stage{display:flex;gap:16px;align-items:flex-start;padding:15px 0}
+.pp .stage+.stage{border-top:1px dashed var(--line)}
+.pp .dot{flex:0 0 auto;width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-family:var(--serif);font-size:17px;background:var(--panel2);border:1px solid var(--line)}
+.pp .dot.hot{background:var(--accent);color:#fff;border-color:transparent}
+.pp .stage h3{font-size:18px;margin-bottom:.2em}
+.pp .stage p{margin:0;color:var(--soft);font-size:15px}
+.pp .tag{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--accent);display:block;margin-bottom:3px}
+.pp .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:4px 0}
+.pp .stat{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px}
+.pp .stat .n{font-family:var(--serif);font-size:29px;line-height:1}
+.pp .stat .l{font-size:12.5px;color:var(--soft);margin-top:7px;line-height:1.3}
+.pp .reel{display:flex;gap:20px;align-items:center;flex-wrap:wrap;margin-top:18px}
+.pp .phone{flex:0 0 auto;width:140px;aspect-ratio:9/16;border-radius:22px;padding:7px;background:var(--ink)}
+.pp .screen{width:100%;height:100%;border-radius:15px;position:relative;background:linear-gradient(150deg,#5a3d2a,#28303f 55%,#1b222e);display:grid;place-items:center}
+.pp .play{width:48px;height:48px;border-radius:50%;background:rgba(255,255,255,.92);display:grid;place-items:center}
+.pp .play::after{content:"";border-left:15px solid var(--ink);border-top:9px solid transparent;border-bottom:9px solid transparent;margin-left:4px}
+.pp .screen .cap{position:absolute;left:10px;right:10px;bottom:10px;color:#fff;font-size:11px;text-shadow:0 1px 6px rgba(0,0,0,.6)}
+.pp .reel .copy{flex:1 1 230px;min-width:0}
+.pp .reel .copy p{color:var(--soft);font-size:15px}
+.pp .tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:16px;background:var(--panel)}
+.pp table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:420px}
+.pp th,.pp td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--line)}
+.pp th{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--soft);font-weight:700}
+.pp td.num,.pp th.num{text-align:right;font-variant-numeric:tabular-nums}
+.pp tr:last-child td{border-bottom:0}
+.pp tfoot td{font-weight:700;background:var(--panel2)}
+.pp .sample{font-size:12.5px;color:var(--soft);margin-top:8px;font-style:italic}
+.pp .feegrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.pp .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:0 10px 30px rgba(49,30,16,.06)}
+.pp .card h3{font-size:19px;margin-bottom:.4em}
+.pp .card p{font-size:14.5px;color:var(--soft);margin:0}
+.pp .feebig{font-family:var(--serif);font-size:40px;color:var(--accent);line-height:1}
+.pp .member{display:flex;gap:14px;align-items:baseline;padding:7px 0}
+.pp .member .nm{font-family:var(--serif);font-size:19px;min-width:84px}
+.pp .member .ro{font-size:14px;color:var(--soft)}
+.pp .why li{margin-bottom:.6em;color:var(--soft)}
+.pp .why li b{color:var(--ink)}
+.pp .media{display:flex;flex-direction:column;margin-top:6px}
+.pp .media a{color:var(--accent);text-decoration:none;font-weight:600;font-size:14.5px;padding:7px 0;border-bottom:1px solid var(--line)}
+.pp .final{background:var(--ink);color:#FBEED3;border-radius:22px;padding:34px 26px;text-align:center;margin:12px 0}
+.pp .final h2{color:#FBEED3;font-size:clamp(23px,5.5vw,31px)}
+.pp .final p{color:#D9C7A8;max-width:44ch;margin:.5em auto 1.3em}
+.pp .final .btn{font-size:15px;padding:14px 30px}
+.pp .foot{padding:28px 0 12px;color:var(--soft);font-size:13px;text-align:center}
+.pp .hint{font-size:12.5px;color:var(--soft)}
+@media(max-width:560px){.pp .stats{grid-template-columns:repeat(2,1fr)}.pp .feegrid{grid-template-columns:1fr}}
+`;
+function ppFmt$(v){ const n=Number(String(v==null?"":v).replace(/[^0-9.]/g,"")); return n?("$"+n.toLocaleString("en-AU")):""; }
+function ProposalView({ d }){
+  const v=PROP_VOICE[d.agent]||PROP_VOICE.luke;
+  const m=PROP_METHODS.find(x=>x.id===d.method)||PROP_METHODS[0];
+  const copy=PROP_METHOD_COPY[d.method]||PROP_METHOD_COPY["twostage-private"];
+  const priceStr=d.price.mode==="range"
+    ? [ppFmt$(d.price.from),ppFmt$(d.price.to)].filter(Boolean).join(" to ")
+    : ppFmt$(d.price.single);
+  const feeStr=d.commission.mode==="fixed" ? (ppFmt$(d.commission.fixed)||"$0") : ((d.commission.pct||"").toString().replace(/[^0-9.]/g,"")+"%");
+  const stages = m.twostage ? [
+    {n:"1",hot:true,tag:"Stage one · weeks 1 to 2",h:"Off-market launch",p:"Walkthrough video plus Soft Launch Club, introducing the property to thousands of genuine buyers before it hits the portals. First private inspections by appointment."},
+    {n:"2",tag:"Decision point",h:"Sell early, or step up",p:"If we secure the right result here, you're done. If not, we roll straight into the full campaign with momentum already built."},
+    {n:"3",tag:"Stage two · "+m.final,h:"Full "+m.final+" campaign",p:"Live on realestate.com.au and Domain alongside our social channels, with scheduled open homes, weekly feedback and direct negotiation."},
+  ] : [
+    {n:"1",hot:true,tag:"Launch",h:"Live to market",p:"Professional photography, a walkthrough video and engaging copy, launched across realestate.com.au, Domain and our social channels."},
+    {n:"2",tag:"Campaign",h:"Inspections & feedback",p:"Scheduled open homes, every enquiry followed up, and regular feedback to you throughout."},
+    {n:"3",tag:m.final,h:(m.final==="auction"?"Auction day":m.final==="expressions of interest"?"Closing date":"Negotiation"),p:"Bringing interested buyers together for the strongest possible result."},
+  ];
+  const schedOn=[]; (SCHED_SECS||["internet","boards","photos","misc"]).forEach(s=>{ (d.schedule?.sched?.[s]||[]).forEach(it=>{ if(it.on!==false) schedOn.push(it); }); });
+  const schedTot=d.schedule?.total||0;
+  const comps=(d.comps||[]).filter(c=>(c.address||"").trim());
+  const money$=n=>"$"+Number(n||0).toLocaleString("en-AU");
+  const bbc=[d.beds&&(d.beds+" bed"),d.baths&&(d.baths+" bath"),d.car&&(d.car+" car")].filter(Boolean).join(" · ");
+  return (
+    <div className="pp">
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap"/>
+      <style>{PP_CSS}</style>
+      <div className="bar"><div className="wrap"><div className="mark">savvi<b>.</b></div><a className="btn" href="#accept">Accept proposal</a></div></div>
+      <div className="wrap">
+        <header className="hero">
+          <div className="kicker">Private proposal · {new Date().toLocaleDateString("en-AU",{month:"long",year:"numeric"})}</div>
+          <h1>{d.address||"Your property"}</h1>
+          <p className="sub">{v.intro}</p>
+          <div className="meta">
+            {bbc&&<span>{bbc}</span>}
+            <span>Prepared by <b>{v.name}</b></span>
+            <span>Savvi Real Estate</span>
+          </div>
+        </header>
+
+        <section>
+          <p className="eyebrow">Recent sales</p>
+          <h2>Where I see it landing</h2>
+          <p className="lead">I've pulled a selection of recent comparable apartment sales {d.suburb?("in "+d.suburb):"nearby"}. On balance, and erring on the side of caution, I feel it should sit here, with room for more under strong competition.</p>
+          {priceStr&&<div className="price"><span className="fig">{priceStr}</span><span className="note">An indicative guide, not a cap. Our job is to build the buyer depth that pushes past it.</span></div>}
+          {comps.length>0&&<><div style={{height:20}}/><div className="tblwrap"><table>
+            <thead><tr><th>Address</th><th>Type</th><th>Sold</th><th className="num">Price</th></tr></thead>
+            <tbody>{comps.map((c,i)=><tr key={i}><td>{c.address}</td><td>{c.type||""}</td><td>{c.sold||""}</td><td className="num">{ppFmt$(c.price)}</td></tr>)}</tbody>
+          </table></div></>}
+        </section>
+
+        <section>
+          <p className="eyebrow">Recommended method of sale</p>
+          <h2>{m.label.replace(/^Standard /,"").replace(/^Two-stage: /,"Two stage: ")}</h2>
+          {copy.map((p,i)=><p key={i}>{p}</p>)}
+          <div style={{marginTop:10}}>{stages.map((s,i)=>(
+            <div className="stage" key={i}><div className={"dot"+(s.hot?" hot":"")}>{s.n}</div>
+              <div><span className="tag">{s.tag}</span><h3>{s.h}</h3><p>{s.p}</p></div></div>
+          ))}</div>
+          <p className="hint" style={{marginTop:12}}>Your Calendar of Events, shown in the page. {d.calendar?.startDate?"Dated to your campaign.":"Dates to be confirmed."}</p>
+        </section>
+
+        {d.staging?.on&&<section>
+          <p className="eyebrow">Presentation</p>
+          <h2>Styled to sell</h2>
+          <p>I recommend The Apartment Brief for styling. They specialise in apartments and scale their furnishings to make the most of the space, so the property presents at its best for photography and inspections.</p>
+          {ppFmt$(d.staging.cost)&&<div className="price"><span className="fig">{ppFmt$(d.staging.cost)}</span><span className="note">Furniture hire for the campaign.</span></div>}
+        </section>}
+
+        <section>
+          <p className="eyebrow">Advertising &amp; buyer reach</p>
+          <h2>Reaching the buyers other agents miss</h2>
+          <p>Every agent runs the same playbook: realestate.com.au, Domain, and a database email that gets about a 5% click rate. Where we're getting the strongest results is targeted social video. The property comes to the buyer, on their terms.</p>
+          <div className="stats">
+            <div className="stat"><div className="n">40–60k</div><div className="l">views per walkthrough video</div></div>
+            <div className="stat"><div className="n">30–50</div><div className="l">extra enquiries per campaign</div></div>
+            <div className="stat"><div className="n">70</div><div className="l">apartments sold via social in 24 months</div></div>
+            <div className="stat"><div className="n">3,000+</div><div className="l">buyers in our Soft Launch Club</div></div>
+            <div className="stat"><div className="n">15</div><div className="l">direct sales in the last 4 months</div></div>
+            <div className="stat"><div className="n">#1</div><div className="l">for apartment sales in Hawthorn, 3 years running</div></div>
+          </div>
+          <div className="reel">
+            <a className="phone" href={v.ig} target="_blank" rel="noopener" aria-label="Watch a walkthrough video"><span className="screen"><span className="play"></span><span className="cap">Walkthrough · {d.suburb||"Hawthorn"} apartment</span></span></a>
+            <div className="copy"><p>These campaigns draw buyers from their 20s through to their 70s and 80s, finding the passive buyer who isn't actively searching on the portals yet.</p><p>Social now generates more enquiry for us than the major portals combined.</p><a className="btn ghost" href={v.ig} target="_blank" rel="noopener">Watch recent videos</a></div>
+          </div>
+        </section>
+
+        {schedOn.length>0&&<section>
+          <p className="eyebrow">Marketing schedule</p>
+          <h2>Your tailored campaign spend</h2>
+          <p>A {d.schedule?.signboard?"full":"standard"} schedule for this property, aimed at the most likely buyer groups: young professionals, buyers relocating from the Peninsula and regional areas, and local downsizers.</p>
+          <div className="tblwrap"><table>
+            <thead><tr><th>Item</th><th className="num">Cost</th></tr></thead>
+            <tbody>{schedOn.map((it,i)=><tr key={i}><td>{it.name}</td><td className="num">{Number(it.amt)>0?money$(it.amt):"Included"}</td></tr>)}</tbody>
+            <tfoot><tr><td>Total, inc GST</td><td className="num">{money$(schedTot)}</td></tr></tfoot>
+          </table></div>
+        </section>}
+
+        <section>
+          <p className="eyebrow">Agency fee</p>
+          <h2>Simple, and only if we sell</h2>
+          <div className="feegrid">
+            <div className="card"><div className="feebig">{feeStr}</div><p style={{marginTop:10}}>{d.commission.mode==="fixed"?"a fixed fee, including GST.":"of the sale price, including GST."} Payable only on a successful sale and deducted from settlement funds.</p></div>
+            <div className="card"><h3>A full end-to-end service</h3><p>{v.feeManage}</p></div>
+          </div>
+          <div style={{height:16}}/>
+          <div className="card"><h3>Your team</h3><div style={{height:8}}/>{v.team.map((t,i)=><div className="member" key={i}><span className="nm">{t.nm}</span><span className="ro">{t.ro}</span></div>)}</div>
+        </section>
+
+        <section>
+          <p className="eyebrow">Why choose us</p>
+          <h2>{v.whyHead}</h2>
+          {v.whyBody.map((p,i)=><p key={i}>{p}</p>)}
+          <ul className="why">
+            <li><b>Timing matters.</b> We plan photos, video and inspections around weather and light, for the property's aspect.</li>
+            <li><b>Transparency matters.</b> We advertise OC fees, rates, building size and dimensions in every campaign. Buyers tell us it builds trust.</li>
+            <li><b>Copy matters.</b> Around 12% of buyers read our copy against a 3% industry average, because it tells a story they can picture themselves in.</li>
+            <li><b>Honesty matters.</b> Walkthrough videos give a genuine feel for the property, not 8 to 10 overly processed images.</li>
+          </ul>
+          <div style={{height:8}}/>
+          <p className="hint">As featured in</p>
+          <div className="media">
+            <a href="https://9now.nine.com.au/a-current-affair/real-estate-agents-taking-to-tiktok-to-sell-properties/c8c868d2-4c16-4328-9b6f-8c0e5d15b8a3" target="_blank" rel="noopener">A Current Affair · Agents turning to TikTok</a>
+            <a href="https://www.afr.com/property/residential/tiktok-video-rather-than-official-listing-sells-523-000-unit-20241104-p5knky" target="_blank" rel="noopener">AFR · TikTok video sells a $523,000 unit</a>
+            {v.showProfile&&<a href="https://www.realestate.com.au/agent/luke-saville-3900564" target="_blank" rel="noopener">173 five-star reviews on realestate.com.au</a>}
+          </div>
+        </section>
+
+        <section id="accept" style={{borderTop:0}}>
+          <div className="final"><h2>Ready when you are</h2><p>{v.closing}</p><a className="btn" href={v.email?("mailto:"+v.email):"#"}>Accept this proposal</a></div>
+          <p className="hint" style={{textAlign:"center"}}>Prefer to talk first? {v.phone?<>Call {v.name.split(" ")[0]} on <b>{v.phone}</b> or </>:<>Email </>}<b>{v.email}</b></p>
+        </section>
+
+        <div className="foot">Savvi Real Estate · Level 1, 731 Glenferrie Road, Hawthorn VIC 3122 · {v.igLabel}</div>
+      </div>
+    </div>
+  );
+}
+
+function propSuburb(addr){ const a=String(addr||""); let m=a.match(/,\s*([^,]+?)\s+(?:VIC|NSW|QLD|SA|WA|TAS|NT|ACT)\b/i); if(m) return m[1].trim(); m=a.match(/,\s*([^,0-9]+?)\s+3\d{3}/); if(m) return m[1].trim(); m=a.match(/,\s*([^,]+?)\s*$/); return m?m[1].replace(/\b(VIC|NSW|QLD|SA|WA|TAS|NT|ACT)\b.*$/i,"").replace(/3\d{3}/,"").trim():""; }
+function ProposalSheet({ open, onClose, agentName }){
+  const [addr,setAddr]=useState("106/1 Cook Street, Hawthorn VIC 3122");
+  const [vendorName,setVendorName]=useState("");
+  const [beds,setBeds]=useState("2");
+  const [baths,setBaths]=useState("1");
+  const [car,setCar]=useState("1");
+  const [agent,setAgent]=useState("luke");
+  const [priceMode,setPriceMode]=useState("single"); // single | range
+  const [single,setSingle]=useState("600,000");
+  const [pFrom,setPFrom]=useState("");
+  const [pTo,setPTo]=useState("");
+  const [method,setMethod]=useState("twostage-private");
+  const [useDates,setUseDates]=useState(false);
+  const [startDate,setStartDate]=useState("");
+  const [staging,setStaging]=useState(false);
+  const [stagingCost,setStagingCost]=useState("3,500");
+  const [commType,setCommType]=useState("percent"); // percent | fixed
+  const [commPct,setCommPct]=useState("2");
+  const [commFixed,setCommFixed]=useState("");
+  const [campaign,setCampaign]=useState("noboard");
+  const [comps,setComps]=useState([
+    {address:"Grattan Street, Hawthorn",type:"2 / 1 / 1",sold:"Oct 2026",price:"615,000"},
+    {address:"Lisson Grove, Hawthorn",type:"2 / 1 / 1",sold:"Sep 2026",price:"598,000"},
+    {address:"Power Street, Hawthorn",type:"2 / 1 / 1",sold:"Sep 2026",price:"585,000"},
+  ]);
+  const [preview,setPreview]=useState(false);
+
+  const postcode=authPostcode(addr);
+  const band=domainBand(priceMode==="range"?(pFrom||pTo):single);
+  const sched=campaign==="off"?{internet:[],boards:[],photos:[],misc:[]}:defaultSched(postcode,band,campaign==="custom"?"hidc":campaign);
+  const data={
+    address:addr, suburb:propSuburb(addr), beds, baths, car, vendorName, agent,
+    price:{mode:priceMode, single, from:pFrom, to:pTo},
+    method,
+    calendar:{variant:(PROP_METHODS.find(x=>x.id===method)||{}).cal, startDate:useDates?startDate:null},
+    staging:{on:staging, cost:stagingCost},
+    commission:{mode:commType, pct:commPct, fixed:commFixed},
+    schedule:{sched, total:schedTotal(sched), campaign, itemised:true, signboard:(campaign==="hidc")},
+    comps,
+  };
+  const seg=(active)=>({ flex:1, padding:"10px 8px", border:"none", borderRadius:9, cursor:"pointer", fontFamily:"inherit", fontWeight:700, fontSize:13, background:active?BROWN:"transparent", color:active?"#fff":BROWN });
+  const segWrap={ display:"flex", gap:4, background:SAND, borderRadius:11, padding:4, flexWrap:"wrap" };
+  function setComp(i,k,val){ setComps(cs=>cs.map((c,j)=>j===i?{...c,[k]:val}:c)); }
+  function addComp(){ setComps(cs=>[...cs,{address:"",type:"",sold:"",price:""}]); }
+  function rmComp(i){ setComps(cs=>cs.filter((_,j)=>j!==i)); }
+
+  if(preview){
+    return (
+      <div className={`ov ${open?"s":"h"}`} style={{alignItems:"stretch",padding:0}} onClick={e=>e.stopPropagation()}>
+        <div style={{position:"fixed",inset:0,background:"#FFF4D5",display:"flex",flexDirection:"column",zIndex:1}}>
+          <div style={{flex:"0 0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",borderBottom:`1px solid ${SAND_D}`,background:"#FFF4D5"}}>
+            <button onClick={()=>setPreview(false)} style={{background:"transparent",border:"none",color:BROWN,fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>← Back to builder</button>
+            <span style={{fontSize:12.5,color:BROWN_L}}>Preview · the vendor sees this</span>
+          </div>
+          <div style={{flex:"1 1 auto",overflowY:"auto"}}><ProposalView d={data}/></div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
+        <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:10,right:12,width:32,height:32,borderRadius:16,border:"none",background:SAND,color:BROWN,fontSize:17,fontWeight:700,cursor:"pointer",lineHeight:"32px",zIndex:5}}>×</button>
+        <div className="hndl"/>
+        <div className="sh-ttl">New proposal</div>
+        <div className="sh-sub">Build the vendor's landing page, then preview it</div>
+        <div style={{padding:"4px 16px 16px"}}>
+          <label className="fl">Property address</label>
+          <AddressInput value={addr} onChange={setAddr} placeholder="e.g. 106/1 Cook Street, Hawthorn"/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:10}}>
+            <div><label className="fl">Beds</label><input className="fi" inputMode="numeric" value={beds} onChange={e=>setBeds(e.target.value)}/></div>
+            <div><label className="fl">Baths</label><input className="fi" inputMode="numeric" value={baths} onChange={e=>setBaths(e.target.value)}/></div>
+            <div><label className="fl">Car</label><input className="fi" inputMode="numeric" value={car} onChange={e=>setCar(e.target.value)}/></div>
+          </div>
+
+          <label className="fl" style={{marginTop:14}}>Proposal voice</label>
+          <div style={segWrap}><button style={seg(agent==="luke")} onClick={()=>setAgent("luke")}>Luke (personal)</button><button style={seg(agent==="sam")} onClick={()=>setAgent("sam")}>Sam (company)</button></div>
+
+          <label className="fl" style={{marginTop:14}}>Appraisal price</label>
+          <div style={segWrap}><button style={seg(priceMode==="single")} onClick={()=>setPriceMode("single")}>Single figure</button><button style={seg(priceMode==="range")} onClick={()=>setPriceMode("range")}>Range</button></div>
+          {priceMode==="single"
+            ? <div style={{marginTop:8}}><MoneyInput value={single} onChange={setSingle} placeholder="e.g. 600,000"/></div>
+            : <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:8}}><MoneyInput value={pFrom} onChange={setPFrom} placeholder="From"/><MoneyInput value={pTo} onChange={setPTo} placeholder="To"/></div>}
+
+          <label className="fl" style={{marginTop:14}}>Method of sale</label>
+          <select className="fi" value={method} onChange={e=>setMethod(e.target.value)}>
+            {PROP_METHODS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
+          </select>
+          <div style={{display:"flex",gap:8,marginTop:8,alignItems:"center",flexWrap:"wrap"}}>
+            <div style={{...segWrap,flex:"1 1 180px"}}><button style={seg(!useDates)} onClick={()=>setUseDates(false)}>Dates TBA</button><button style={seg(useDates)} onClick={()=>setUseDates(true)}>Real dates</button></div>
+            {useDates&&<input className="fi" style={{flex:"1 1 150px"}} type="date" value={startDate} onChange={e=>setStartDate(e.target.value)}/>}
+          </div>
+
+          <label className="fl" style={{marginTop:14}}>Commission</label>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <div style={{...segWrap,flex:"0 0 auto"}}><button style={{...seg(commType==="percent"),padding:"8px 14px"}} onClick={()=>setCommType("percent")}>%</button><button style={{...seg(commType==="fixed"),padding:"8px 14px"}} onClick={()=>setCommType("fixed")}>$</button></div>
+            <div style={{flex:1}}>{commType==="fixed"
+              ? <MoneyInput value={commFixed} onChange={setCommFixed} placeholder="e.g. 15,000"/>
+              : <input className="fi" inputMode="decimal" value={commPct} onChange={e=>setCommPct(e.target.value)} placeholder="2"/>}</div>
+          </div>
+
+          <label className="fl" style={{marginTop:14}}>Advertising schedule</label>
+          <select className="fi" value={campaign} onChange={e=>setCampaign(e.target.value)}>
+            {SCHED_CAMPAIGNS.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <div style={{fontSize:12,color:BROWN_L,marginTop:5}}>{campaign==="off"?"No advertising shown.":`Total ${"$"+schedTotal(sched).toLocaleString("en-AU")} inc GST · pulled from the schedule engine.`}</div>
+
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:14,gap:10}}>
+            <span style={{fontSize:13,fontWeight:700,color:BROWN}}>Staging furniture</span>
+            <span onClick={()=>setStaging(s=>!s)} style={{cursor:"pointer",flex:"0 0 auto",width:42,height:24,borderRadius:12,background:staging?BLUE_D:SAND_D,position:"relative",transition:"background .15s"}}><span style={{position:"absolute",top:2,left:staging?20:2,width:20,height:20,borderRadius:10,background:"#fff",boxShadow:"0 1px 2px rgba(0,0,0,.2)",transition:"left .15s"}}/></span>
+          </div>
+          {staging&&<div style={{marginTop:8}}><MoneyInput value={stagingCost} onChange={setStagingCost} placeholder="Furniture hire e.g. 3,500"/></div>}
+
+          <label className="fl" style={{marginTop:14}}>Comparable sales</label>
+          <div style={{display:"grid",gap:8}}>
+            {comps.map((c,i)=>(
+              <div key={i} style={{border:`1px solid ${SAND_D}`,borderRadius:10,padding:8,display:"grid",gap:6}}>
+                <input className="fi" value={c.address} onChange={e=>setComp(i,"address",e.target.value)} placeholder="Address"/>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr auto",gap:6,alignItems:"center"}}>
+                  <input className="fi" value={c.type} onChange={e=>setComp(i,"type",e.target.value)} placeholder="2 / 1 / 1"/>
+                  <input className="fi" value={c.sold} onChange={e=>setComp(i,"sold",e.target.value)} placeholder="Oct 2026"/>
+                  <MoneyInput value={c.price} onChange={val=>setComp(i,"price",val)} placeholder="Price"/>
+                  <button onClick={()=>rmComp(i)} aria-label="Remove" style={{border:"none",background:SAND,color:BROWN,borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:16,fontFamily:"inherit"}}>×</button>
+                </div>
+              </div>
+            ))}
+            <button onClick={addComp} style={{border:`1px dashed ${SAND_D}`,background:"transparent",color:BROWN,borderRadius:10,padding:"10px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,fontSize:13}}>+ Add a comparable sale</button>
+          </div>
+
+          <button className="btn-dark" style={{width:"100%",marginTop:18}} onClick={()=>setPreview(true)}>Preview proposal →</button>
+          <div style={{fontSize:11.5,color:BROWN_L,marginTop:8,textAlign:"center"}}>Next step: a shareable tracked link + the covering email, wired through the backend.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 export default function App(){
   const[agentName,setAgentName]=useState(()=>{ try { return SESSION_TOKEN ? (sessionStorage.getItem("savvi_who")||"") : ""; } catch(e){ return ""; } });
   const[screen,setScreen]=useState("home");
@@ -6206,6 +6643,7 @@ export default function App(){
   const[showAddListing,setShowAddListing]=useState(false);
   const[showAuthority,setShowAuthority]=useState(false);
   const[showCalendar,setShowCalendar]=useState(false);
+  const[showProposal,setShowProposal]=useState(false);
   const[showContract,setShowContract]=useState(false);
   const[showAssistant,setShowAssistant]=useState(false);
   const[showGeneral,setShowGeneral]=useState(false);
@@ -6959,7 +7397,7 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, sumStats, setSumStats, setSumStart, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setShowCalendar, setBFilters, fmtDay, addNote, openOfferContract:(b)=>{ setOfferContractBuyer(b); setShowOfferContract(true); }, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
+  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, sumStats, setSumStats, setSumStart, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setShowCalendar, setShowProposal, setBFilters, fmtDay, addNote, openOfferContract:(b)=>{ setOfferContractBuyer(b); setShowOfferContract(true); }, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
@@ -7282,6 +7720,7 @@ export default function App(){
     />
     <AuthoritySheet open={showAuthority} onClose={()=>setShowAuthority(false)} agentName={agentName}/>
     <CalendarSheet open={showCalendar} onClose={()=>setShowCalendar(false)}/>
+    <ProposalSheet open={showProposal} onClose={()=>setShowProposal(false)} agentName={agentName}/>
     <ContractSheet open={showContract} onClose={()=>setShowContract(false)} agentName={agentName} listings={allListings}/>
 
     {/* ── SUCCESS: BUYER ADDED ── */}
