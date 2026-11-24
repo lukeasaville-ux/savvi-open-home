@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v131-every-open";
+const BUILD = "v132-feed-signals";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4422,26 +4422,24 @@ function crmBuildFeed(index, auctionByProp){
     c.insps.forEach(i=>{
       if(isDeadListing(i.statusText)) return; // a sold/settled/withdrawn listing needs no follow-up
       const notes=i.notes||[];
-      const human=notes.filter(n=>!isAutoNote(n.text));
-      const lastHuman=human.length?human[human.length-1].ts:null;
       // 1) Contract opened (genuine link clicks only) — EVERY recent open is logged here live,
       //    whether or not a call has been logged since. A note "Called since" just annotates it.
       const opens=contractClicks(i.contractOpens,i.resendId);
       if(opens.length){ const last=opens[opens.length-1]; if(now-new Date(last)<30*day){ const calledSince=notes.some(n=>after(n.ts,last)&&/^(Called|Spoke|Call)/i.test(n.text||"")); out.push({k:"contract",c,i,when:last,calledSince,reason:`Opened the contract${opens.length>1?` ${opens.length}×`:""}${calledSince?" · called since":""}`}); } }
-      // 2) Offer / bid form opened but never submitted.
-      ["offer","bid"].forEach(kind=>{ const fo=(i.contractOpens||[]).filter(o=>o.kind===kind+"-opened").map(o=>o.at).sort(); if(!fo.length) return; const last=fo[fo.length-1]; const done=notes.some(n=>after(n.ts,last)&&(kind==="offer"?/^\s*\[Offer\]/i:/^\s*\[Bid registration\]/i).test(n.text||"")); if(!done&&now-new Date(last)<14*day) out.push({k:"form",c,i,when:last,reason:`Opened the ${kind==="offer"?"offer form":"bid registration"} but hasn't submitted it`}); });
-      // 3) Enquiry with nothing done since.
-      if(i.isEnquiry&&human.length<=1&&now-new Date(i.createdAt||0)<30*day) out.push({k:"enquiry",c,i,when:i.createdAt,reason:"New enquiry, not actioned yet"});
-      // 4) Registered to bid for an auction this week.
-      const bid=notes.filter(n=>/^\s*\[Bid registration\]/i.test(n.text||"")).pop(); const auct=auctionByProp[i.propertyRef]; if(bid&&auct){ const dt=new Date(auct); if(dt>now-day&&dt<now+7*day) out.push({k:"bid",c,i,when:bid.ts,reason:`Registered to bid · auction ${fmtAuction(auct)}`}); }
-      // 5) Hot buyer gone quiet.
-      if(i.interest==="hot"&&(!lastHuman||now-new Date(lastHuman)>7*day)&&now-new Date(i.createdAt||0)<90*day) out.push({k:"quiet",c,i,when:lastHuman||i.createdAt,reason:lastHuman?`Hot, but no note since ${crmAgo(lastHuman)}`:"Hot, and no notes at all yet"});
+      // 2) Offer submitted — a buyer action, logged live.
+      const offerNote=notes.filter(n=>/^\s*\[Offer\]/i.test(n.text||"")).pop();
+      if(offerNote&&offerNote.ts&&now-new Date(offerNote.ts)<30*day) out.push({k:"offer",c,i,when:offerNote.ts,reason:"Submitted an offer"});
+      // 3) Registered to bid — any recent registration; name the auction when we know it.
+      const bidNote=notes.filter(n=>/^\s*\[Bid registration\]/i.test(n.text||"")).pop();
+      if(bidNote&&bidNote.ts&&now-new Date(bidNote.ts)<30*day){ const auct=auctionByProp[i.propertyRef]; out.push({k:"bid",c,i,when:bidNote.ts,reason:auct?`Registered to bid · auction ${fmtAuction(auct)}`:"Registered to bid"}); }
+      // 4) Offer / bid form opened but never submitted (a nudge to finish it off).
+      ["offer","bid"].forEach(kind=>{ const fo=(i.contractOpens||[]).filter(o=>o.kind===kind+"-opened").map(o=>o.at).sort(); if(!fo.length) return; const last=fo[fo.length-1]; const done=notes.some(n=>after(n.ts,last)&&(kind==="offer"?/^\s*\[Offer\]/i:/^\s*\[Bid registration\]/i).test(n.text||"")); if(!done&&now-new Date(last)<30*day) out.push({k:"form",c,i,when:last,reason:`Opened the ${kind==="offer"?"offer form":"bid registration"} but hasn't submitted it`}); });
     });
   });
   // One row per contact+kind, newest first.
   const seen=new Set(); return out.filter(r=>{ const k=r.k+"|"+r.c.contactId+"|"+r.i.propertyRef; if(seen.has(k)) return false; seen.add(k); return true; }).sort((a,b)=>new Date(b.when||0)-new Date(a.when||0));
 }
-const FEED_KINDS={ contract:{t:"Contract opened",why:"they're reading it: call while it's warm",ic:"📄"}, form:{t:"Form opened, not submitted",why:"a nudge usually gets it over the line",ic:"📝"}, enquiry:{t:"New enquiries",why:"reply today, they're shopping around",ic:"✉️"}, bid:{t:"Registered to bid this week",why:"confirm they're set for auction day",ic:"🔨"}, quiet:{t:"Hot buyers gone quiet",why:"7+ days without a note",ic:"🔥"} };
+const FEED_KINDS={ contract:{t:"Contract opened",why:"they're reading it: call while it's warm",ic:"📄"}, offer:{t:"Offer submitted",why:"act on it today",ic:"✅"}, bid:{t:"Registered to bid",why:"confirm they're set for auction day",ic:"🔨"}, form:{t:"Form opened, not submitted",why:"a nudge usually gets it over the line",ic:"📝"} };
 
 /* ── The desktop buyer record (drawer). Same props as DetailSheet. ── */
 function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink,onCheckIn,onPrepareContract}){
