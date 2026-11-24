@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v130-live-feed";
+const BUILD = "v131-every-open";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4424,9 +4424,10 @@ function crmBuildFeed(index, auctionByProp){
       const notes=i.notes||[];
       const human=notes.filter(n=>!isAutoNote(n.text));
       const lastHuman=human.length?human[human.length-1].ts:null;
-      // 1) Contract opened (genuine link clicks only), and nobody has spoken to them since.
+      // 1) Contract opened (genuine link clicks only) — EVERY recent open is logged here live,
+      //    whether or not a call has been logged since. A note "Called since" just annotates it.
       const opens=contractClicks(i.contractOpens,i.resendId);
-      if(opens.length){ const last=opens[opens.length-1]; if(now-new Date(last)<14*day && !notes.some(n=>after(n.ts,last)&&/^(Called|Spoke|Call)/i.test(n.text||""))) out.push({k:"contract",c,i,when:last,reason:`Opened the contract${opens.length>1?` ${opens.length}×`:""}, no call logged since`}); }
+      if(opens.length){ const last=opens[opens.length-1]; if(now-new Date(last)<30*day){ const calledSince=notes.some(n=>after(n.ts,last)&&/^(Called|Spoke|Call)/i.test(n.text||"")); out.push({k:"contract",c,i,when:last,calledSince,reason:`Opened the contract${opens.length>1?` ${opens.length}×`:""}${calledSince?" · called since":""}`}); } }
       // 2) Offer / bid form opened but never submitted.
       ["offer","bid"].forEach(kind=>{ const fo=(i.contractOpens||[]).filter(o=>o.kind===kind+"-opened").map(o=>o.at).sort(); if(!fo.length) return; const last=fo[fo.length-1]; const done=notes.some(n=>after(n.ts,last)&&(kind==="offer"?/^\s*\[Offer\]/i:/^\s*\[Bid registration\]/i).test(n.text||"")); if(!done&&now-new Date(last)<14*day) out.push({k:"form",c,i,when:last,reason:`Opened the ${kind==="offer"?"offer form":"bid registration"} but hasn't submitted it`}); });
       // 3) Enquiry with nothing done since.
