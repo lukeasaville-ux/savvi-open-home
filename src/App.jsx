@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v135-calendar-a4";
+const BUILD = "v136-calendar-polish";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5386,6 +5386,8 @@ async function appendSchedulePage(doc,rgb,{ propertyAddr, campaignName, sched, i
 const CAL_BASE = { "auction":"/calendar-auction-base.pdf", "private-sale":"/calendar-private-sale-base.pdf", "offmkt-auction":"/calendar-offmkt-auction-base.pdf", "offmkt-private":"/calendar-offmkt-private-base.pdf" };
 const CAL_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const CAL_LABEL = { "private-sale":"Private Sale · 5 weeks", "auction":"Auction · 5 weeks", "offmkt-private":"Off Market + Private Sale · 6 weeks", "offmkt-auction":"Off Market + Auction · 6 weeks" };
+// where the auction date prints (centred x + baseline y, native pt from top) under the top-right "Auction" label
+const CAL_AUCT_LBL = { "auction":{cx:516.05,by:136}, "offmkt-auction":{cx:471.45,by:155} };
 function calVariant(method, offMarket){ return (offMarket?"offmkt-":"")+(method==="auction"?"auction":"private-sale"); }
 function calSnapMonday(iso){ if(!iso) return null; const d=new Date(iso+"T00:00:00"); if(isNaN(d)) return null; const dow=(d.getDay()+6)%7; d.setDate(d.getDate()-dow); return d; }
 let _calMeta=null;
@@ -5401,6 +5403,7 @@ async function appendCalendarPage(doc, rgb, { variant, startDate }){
   try{ doc.registerFontkit(fontkit); }catch(e){}
   const medBytes=await fetch("/fonts/NeueHaasUnicaPro-Medium.ttf").then(r=>r.arrayBuffer());
   const med=await doc.embedFont(medBytes,{ subset:true });
+  const serif=await doc.embedFont(await fetch("/fonts/Newsreader-Medium.ttf").then(r=>r.arrayBuffer()),{ subset:true });
   const baseBytes=await fetch(CAL_BASE[variant]||CAL_BASE["private-sale"]).then(r=>r.arrayBuffer());
   const src=await PDFDocument.load(baseBytes);
   const sp=src.getPage(0); const nw=sp.getWidth(), nh=sp.getHeight();
@@ -5421,6 +5424,21 @@ async function appendCalendarPage(doc, rgb, { variant, startDate }){
     let size=slot.size*s; const maxW=(meta.step-12)*s; let w=med.widthOfTextAtSize(label,size);
     if(w>maxW){ size=size*(maxW/w); w=med.widthOfTextAtSize(label,size); }
     page.drawText(label,{ x:xoff+slot.cx*s-w/2, y:yoff+(nh-slot.ty)*s, size, font:med, color:INK });
+  }
+  // cover the faint decorative top + bottom rules the masters carry (Luke flagged them), clear of the
+  // Savvi logo (~25pt) and the grid's own bottom border (~55pt native from the bottom)
+  const cream=rgb(255/255,244/255,213/255);
+  page.drawRectangle({ x:0, y:yoff+(nh-21)*s, width:CAL_A4W, height:CAL_A4H-(yoff+(nh-21)*s), color:cream });
+  page.drawRectangle({ x:0, y:0, width:CAL_A4W, height:yoff+21*s, color:cream });
+  // auction variants with real dates: the auction date (the last Saturday) under the top-right
+  // "Auction" label, in the brand serif (Newsreader) so it matches the serif label
+  const lbl=CAL_AUCT_LBL[variant];
+  if(mon && lbl){
+    const ad=new Date(mon); ad.setDate(ad.getDate()+(meta.days-2));
+    const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][ad.getDay()];
+    const txt=`${WD} ${ad.getDate()} ${CAL_MONTHS[ad.getMonth()]} ${ad.getFullYear()}`;
+    const asz=12.5; const aw=serif.widthOfTextAtSize(txt,asz);
+    page.drawText(txt,{ x:xoff+lbl.cx*s-aw/2, y:yoff+(nh-lbl.by)*s, size:asz, font:serif, color:INK });
   }
 }
 async function buildCalendarPdf({ variant, startDate }){
