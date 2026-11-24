@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v141-vendor-report-rebuild";
+const BUILD = "v142-report-colon-sep";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -893,7 +893,7 @@ async function aiBuyerProfile(buyer) {
 // Vendor updates only ever use a buyer's FIRST name (privacy — never surface a full
 // name to the vendor). When there's nothing noted for a buyer, we say we didn't get
 // a proper chat and will follow up, rather than inventing detail.
-const VENDOR_NO_NOTE = "didn't get the chance to have much of a chat on the day — we'll follow them up this week";
+const VENDOR_NO_NOTE = "didn't get the chance to have much of a chat on the day, we'll follow them up this week";
 // A buyer marked cool with no other notes — keep it honest and neutral (no invented calls).
 const OUT_NO_NOTE = "had a look through but it's not quite what they're after";
 // Signature of a buyer set for the vendor wrap — changes when interest, note count or contract
@@ -2779,7 +2779,7 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
   // POST-OPEN quick wrap — casual recap + a line per buyer (same voice as before).
   const buildOpen=useCallback(()=>{
     const src=buyers;
-    if(!openHome||!src.length){setSumText(`Hi ${greet},\n\nNo groups have come through ${openHome?.address||"the open"} just yet. I'll send the wrap-up as soon as we've had some numbers.\n\n— ${agentFirst}, Savvi`);return;}
+    if(!openHome||!src.length){setSumText(`Hi ${greet},\n\nNo groups have come through ${openHome?.address||"the open"} just yet. I'll send the wrap-up as soon as we've had some numbers.\n\n${agentFirst}, Savvi`);return;}
     const nw=n=>["","one","two","three","four","five","six","seven","eight","nine","ten"][n]||String(n);
     const joinNat=a=>a.length<=1?(a[0]||""):`${a.slice(0,-1).join(", ")} and ${a[a.length-1]}`;
     const keen=src.filter(b=>b.interest==="hot"||b.interest==="watching");
@@ -2790,8 +2790,8 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
     if(contracts.length) extra.push(`${nw(contracts.length)} asked for a contract`);
     if(repeats.length) extra.push(`${nw(repeats.length)} came back for a repeat look`);
     const recap=`We had ${src.length} ${src.length===1?"group":"groups"} through${extra.length?`, ${joinNat(extra)}`:""}.`;
-    const lines=src.map(b=>`${firstName(b.name)} — ${buyerDetail(b)}`);
-    setSumText(`Hi ${greet},\n\nQuick wrap from today's open at ${openHome?.address||"the property"}. ${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow these buyers up and be in touch early next week.\n\n— ${agentFirst}, Savvi`);
+    const lines=src.map(b=>`${firstName(b.name)}: ${buyerDetail(b)}`);
+    setSumText(`Hi ${greet},\n\nQuick wrap from today's open at ${openHome?.address||"the property"}. ${recap} See below a bit more detail.\n\n${lines.join("\n\n")}\n\nWe'll follow these buyers up and be in touch early next week.\n\n${agentFirst}, Savvi`);
   /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[openHome,buyers,agentFirst,greet]);
 
   // FULL CAMPAIGN report — plain text (pastes cleanly into email + WhatsApp, no asterisks),
@@ -2803,7 +2803,7 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
     const named=chosen.filter(b=>!isLowValue(b));
     const low=chosen.filter(b=>isLowValue(b));
     if(!named.length&&!low.length&&!enquiryCount){
-      setSumText(`Hi ${greet},\n\nNo buyers to report on ${openHome?.address||"the property"} just yet. I'll send the full update as soon as we've had some through.\n\n— ${agentFirst}, Savvi`);return;
+      setSumText(`Hi ${greet},\n\nNo buyers to report on ${openHome?.address||"the property"} just yet. I'll send the full update as soon as we've had some through.\n\n${agentFirst}, Savvi`);return;
     }
     const nw=n=>["","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve"][n]||String(n);
     const joinNat=a=>a.length<=1?(a[0]||""):`${a.slice(0,-1).join(", ")} and ${a[a.length-1]}`;
@@ -2819,13 +2819,13 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
     if(nHot) bits.push(`${nw(nHot)} ${nHot===1?"buyer we'd call genuinely engaged":"buyers we'd call genuinely engaged"}`);
     if(nContract) bits.push(`${nw(nContract)} with the contract out`);
     blocks.push(bits.length
-      ? `Quick update on where ${addr1||"the campaign"} is sitting since the weekend — ${joinNat(bits)}. Full rundown below, strongest interest first.`
+      ? `Quick update on where ${addr1||"the campaign"} is sitting since the weekend: ${joinNat(bits)}. Full rundown below, strongest interest first.`
       : `Quick update on where ${addr1||"the campaign"} is sitting since the weekend. Full rundown below.`);
     // Hottest first — the vendor reads the strongest prospects at the top. Ranked by the same
     // heat score used across the app (repeat visits, contract + opens, buying signals, interest),
     // so a genuinely engaged buyer leads regardless of which week they first came through.
     const ranked=[...named].sort((a,b)=>buyerHeat(b).score-buyerHeat(a).score);
-    ranked.forEach(b=>blocks.push(`${firstName(b.name)} — ${buyerDetail(b)}`));
+    ranked.forEach(b=>blocks.push(`${firstName(b.name)}: ${buyerDetail(b)}`));
     // Low-value buyers (only a logged call/text, nothing noted) → one honest line, never named.
     if(low.length){
       blocks.push(`We've also called ${nw(low.length)} other ${low.length===1?"buyer":"buyers"} and left ${low.length===1?"a message":"messages"} but haven't heard back as yet.`);
@@ -2848,7 +2848,7 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
         if(ls.length>1) blocks.push(ls.join("\n"));
       }
     }
-    blocks.push(`— ${agentFirst}, Savvi`);
+    blocks.push(`${agentFirst}, Savvi`);
     setSumText(blocks.join("\n\n"));
   /* eslint-disable-next-line react-hooks/exhaustive-deps */ },[campNamed,enquiryCount,openHome,agentFirst,mktStats,greet]);
 
