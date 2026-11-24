@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v139-proposal-locked-template";
+const BUILD = "v140-proposal-method-reword";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -6325,13 +6325,13 @@ function PpSpec({t}){
 // Recommended-method copy, aligned to the locked template. Stage one (off market) is shared;
 // stage two + the single-stage block vary by method. Fixed copy lives here, not the backend.
 const PP_METHOD={
-  stageOne:{label:"Off market",body:["Walkthrough video, then the Soft Launch Club and our social channels. No portal spend, no board, nobody in the street knows it is for sale.","Nine apartments have sold this way in the last couple of months."]},
-  ifStageOne:{body:["No advertising at all. No portal listing, no signboard, no brochures.","Four weeks of open homes you never have to host, and nobody in the street ever knew it was on the market."],foot:"Roughly half of everything we list ends here."},
+  stageOne:{label:"Off market",body:["We open quietly. A professionally produced walkthrough video goes to our Soft Launch Club and social channels, putting your apartment in front of thousands of qualified buyers before it is advertised anywhere. No portal listing, no signboard, and complete discretion.","Nine apartments have sold this way in the past two months, before ever reaching the open market."]},
+  ifStageOne:{body:["If it sells here, there is no advertising spend at all. No portal listing, no signboard, no brochures.","Four weeks of open homes you never have to host, and the sale handled entirely in private."],foot:"Around half of everything we list sells at this stage."},
   twoStageWeeks:["2  WEEKS","4  WEEKS"],
   stageTwo:{
-    "private sale":{label:"Private sale campaign",body:["If stage one does not get there, we go to the portals with the full campaign. You only pay the advertising if we reach this point."]},
-    "auction":{label:"Auction campaign",body:["If stage one does not get there, we launch the full campaign across the portals, building to a set auction date. You only pay the advertising if we reach this point."]},
-    "expressions of interest":{label:"Expressions of interest",body:["If stage one does not get there, we go to the portals with the full campaign and a set closing date for offers. You only pay the advertising if we reach this point."]},
+    "private sale":{label:"Private sale campaign",body:["If the first stage does not reach your result, we launch the full campaign across the portals. You only meet the advertising cost if we get to this point."]},
+    "auction":{label:"Auction campaign",body:["If the first stage does not reach your result, we launch the full campaign across the portals, building to a set auction date. You only meet the advertising cost if we get to this point."]},
+    "expressions of interest":{label:"Expressions of interest",body:["If the first stage does not reach your result, we launch the full campaign across the portals with a set closing date for offers. You only meet the advertising cost if we get to this point."]},
   },
   single:{
     "private sale":{label:"Private sale",body:["We go straight to the portals with the full campaign: realestate.com.au, Domain and our social channels, a clear price guide and scheduled open homes.","You can respond to offers as they come, without being tied to an auction date. We follow up every buyer and negotiate directly to the strongest result."]},
@@ -6421,7 +6421,7 @@ function ProposalView({ d }){
       {/* 3 — method */}
       <div className="sec espr"><div className="col">
         <h2>How we&rsquo;d<br/>sell it.</h2>
-        <p className="sub">{m.twostage?"Two stages. About half of what we list sells in the first one.":"One focused campaign, run properly from go to sold."}</p>
+        <p className="sub">{m.twostage?"Two stages. Around half of everything we list sells in the first, before it reaches the open market.":"One focused campaign, managed end to end from launch through to sale."}</p>
         {m.twostage?(<>
           <div className="stage"><div className="sl">Stage one<br/>{PP_METHOD.twoStageWeeks[0]}</div><div><h3>{PP_METHOD.stageOne.label}</h3>{PP_METHOD.stageOne.body.map((p,i)=><p key={i}>{p}</p>)}</div></div>
           <div className="stage"><div className="sl">Stage two<br/>{PP_METHOD.twoStageWeeks[1]}</div><div><h3>{PP_METHOD.stageTwo[final].label}</h3>{PP_METHOD.stageTwo[final].body.map((p,i)=><p key={i}>{p}</p>)}</div></div>
@@ -6434,7 +6434,7 @@ function ProposalView({ d }){
           <div className="shot">{d.reelShot?<img src={d.reelShot} alt=""/>:<span className="play"/>}</div>
           <div className="shot">{d.slcShot?<img src={d.slcShot} alt=""/>:<span className="ph" style={{fontSize:10}}>Soft Launch post</span>}</div>
         </div>
-        <p style={{fontSize:14.5}}>One take, every room, captioned. Our best did 324,000 views. Same day it goes to the Soft Launch Club, three thousand buyers on Instagram, with every finer detail up front: owners corporation fees, rates, how many in the building, internal size, rental appraisal. Our own system then texts the registered buyers it matches.</p>
+        <p style={{fontSize:14.5}}>One walkthrough of every room, captioned, with the detail buyers always ask for up front: owners corporation fees, council and water rates, the number of apartments in the building, internal size and a rental appraisal. It releases the same day to our Soft Launch Club and our Instagram audience of around three thousand buyers, and our system texts the registered buyers whose brief it matches. Our strongest walkthrough has reached 324,000 views.</p>
         <p style={{fontSize:14.5,marginBottom:0}} className="mut">All of that before a cent of advertising is spent.</p>
       </div></div>
 
