@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v140-proposal-method-reword";
+const BUILD = "v141-vendor-report-rebuild";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -938,7 +938,7 @@ async function aiVendorSummary(openHome, buyers, mode) {
       // Only feed the "no chat" line when there's genuinely nothing else to say —
       // a contract-taker's story is the contract, so leave that to the flag.
       const notes = noteTexts.length ? noteTexts : (b.interest === "cool" ? [OUT_NO_NOTE] : (b.contractSent ? [] : (isCampaign ? [] : [VENDOR_NO_NOTE])));
-      return { name: firstName, contactId: b.contactId || null, interest: b.interest, contractSent: !!b.contractSent, visits: b.visits || 1, notes, background: [] };
+      return { name: firstName, contactId: b.contactId || null, interest: b.interest, contractSent: !!b.contractSent, hasOffer: buyerHasOffer(b), visits: b.visits || 1, notes, background: [] };
     }),
   });
   if (j?.ok) { const t = j.data?.text || j.text || (typeof j.data === "string" ? j.data : ""); if (t) return t; }
@@ -1063,6 +1063,34 @@ function buyerHeat(b){
   if(b.interest==="hot"){ s+=20; why.push("hot"); } else if(b.interest==="watching"){ s+=8; } else if(b.interest==="cool"){ s-=12; }
   const score=Math.max(0,Math.min(100,Math.round(s)));
   return { score, score10: Math.max(0,Math.min(10,Math.round(score/10))), why };
+}
+// ---- Vendor-report buyer intel (shared by the campaign report + the AI payload) ----
+// A buyer has an offer in play if the offer flag is set OR they have a submitted offer/bid
+// note. The report NEVER states the amount or terms — just that we're working through one.
+const OFFER_TAG_RE=/^\s*\[(Offer|Bid registration)\]/i;
+const buyerHasOffer=b=>!!(b&&(b.offered||(b.notes||[]).some(n=>OFFER_TAG_RE.test(String((n&&n.text)||"")))));
+// A buyer's OWN reply to our day-after follow-up text, softened for the vendor. We never expose
+// the mechanism (Luke: not "responded to the link" / "chose X") — just that they got back to us
+// and roughly where they landed. "" when they haven't replied to a follow-up.
+function followupReply(b){
+  const fu=(b?.notes||[]).map(n=>String((n&&n.text)||"")).filter(t=>/^\s*\[Follow-?up\]/i.test(t));
+  if(!fu.length) return "";
+  const t=fu[fu.length-1].replace(/^\s*\[Follow-?up\]\s*/i,"").replace(/[—–-]+/g," ").toLowerCase();
+  if(/not proceeding|opt(ed)? out|not interested|no longer|won'?t|unsubscrib|remove/.test(t)) return "has since been in touch to let us know they won't be proceeding";
+  if(/contract|section 32|\bs32\b/.test(t)) return "has since got back in touch asking us to send through the contract";
+  if(/maybe|keep.*updat|still|interest|decid|think|consider|unsure|weigh/.test(t)) return "has since replied to say they might still be interested but are weighing it up";
+  return "has since got back in touch with us";
+}
+// Contract-open timeline, phrased with recency ("opened it once on Saturday, with none since").
+// Drives the Lulu-style line Luke wants. "" when no contract is out.
+const _vrDOW=d=>{try{return new Date(d).toLocaleDateString("en-AU",{weekday:"long"});}catch(e){return "";}};
+function contractTimelineText(b){
+  if(!b||!b.contractSent) return "";
+  const cs=contractClicks(b.contractOpens,b.resendId), n=cs.length;
+  if(n===0) return "received the contract but hasn't opened it yet";
+  const stale=Math.floor((Date.now()-new Date(cs[n-1]).getTime())/86400000)>=2;
+  if(n===1) return `received the contract and has opened it once, on ${_vrDOW(cs[0])}`+(stale?", with none since":"");
+  return `received the contract and has opened it ${n} times, the last on ${_vrDOW(cs[n-1])}`+(stale?", none since":"")+(n>=3?", which suggests they're doing their due diligence":"");
 }
 const fmtTs=()=>new Date().toLocaleTimeString("en-AU",{hour:"2-digit",minute:"2-digit",hour12:false});
 // Date + time (Melbourne), e.g. "9 Jul, 2:28pm" — used for contract-sent and open events.
@@ -2720,17 +2748,24 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
   const isGenericFollowup=t=>{ const w=String(t||"").toLowerCase().replace(/[^a-z\s]/g," ").split(/\s+/).filter(Boolean); return w.length>0 && w.every(x=>FOLLOWUP_WORDS.has(x)); };
   const realNotesOf=b=>campCleanNotes(b).map(stripNotePII).filter(t=>t&&t.trim()&&!isGenericFollowup(t));
   const contractOpened=b=>contractClicks(b.contractOpens,b.resendId).length>=1;
-  // Low-value = nothing worth naming: not hot, no real notes, and no contract engagement.
-  const isLowValue=b=>b.interest!=="hot" && realNotesOf(b).length===0 && !contractOpened(b);
+  // Low-value = nothing worth naming to a vendor: not hot, no real feedback, no contract out,
+  // no contract opens, no follow-up reply, no offer. A buyer with ANY of those is named in full
+  // (Luke: carry anyone keen, with a contract, who's opened it, or who's replied — only the
+  // "called, left a message, no answer" buyers fold into one line).
+  const isLowValue=b=>b.interest!=="hot" && realNotesOf(b).length===0 && !contractOpened(b) && !b.contractSent && !followupReply(b) && !buyerHasOffer(b);
   // Per-buyer detail line: their real notes (last few), then the contract status if sent.
   const cap=s=>s?s.charAt(0).toUpperCase()+s.slice(1):s;
+  const endDot=s=>{ s=String(s||"").trim(); return s&&!/[.!?]$/.test(s)?s+".":s; };
   const buyerDetail=b=>{
-    const notes=realNotesOf(b).slice(-3).join(" ").replace(/\s+/g," ").trim();
-    const cl=contractLine(b);
     const parts=[];
-    if(notes) parts.push(cap(notes.replace(/[.\s]+$/,"")));
-    if(cl) parts.push(cap(cl));
-    return parts.join(". ")||cap(b.interest==="cool"?OUT_NO_NOTE:VENDOR_NO_NOTE);
+    const notes=realNotesOf(b).slice(-3).join(" ").replace(/\s+/g," ").trim();
+    if(notes) parts.push(notes.replace(/[.\s]+$/,""));
+    // Offer in play → that's the headline, and the terms are NEVER disclosed to the vendor.
+    if(buyerHasOffer(b)){ parts.push("we're working through an offer with them currently"); return endDot(parts.map(cap).join(". ")); }
+    // Follow-up reply (softened) then the contract-open timeline — the Lulu-style narrative.
+    const fr=followupReply(b); if(fr) parts.push(fr);
+    const cl=contractTimelineText(b); if(cl) parts.push(cl);
+    return endDot(parts.length?parts.map(cap).join(". "):cap(b.interest==="cool"?OUT_NO_NOTE:VENDOR_NO_NOTE));
   };
 
   // Seed the chooser: honour a desktop table selection if one was passed, else everyone.
@@ -2773,18 +2808,27 @@ function SummarySheet({open,onClose,openHome,buyers,allBuyers,precomputed,agentN
     const nw=n=>["","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve"][n]||String(n);
     const joinNat=a=>a.length<=1?(a[0]||""):`${a.slice(0,-1).join(", ")} and ${a[a.length-1]}`;
     const blocks=[`Hi ${greet},`]; // each block is separated by a blank line
-    CAMP_GROUPS.forEach(g=>{
-      const gb=named.filter(b=>groupOf(b)===g.key);
-      if(!gb.length) return;
-      blocks.push(g.label);
-      gb.forEach(b=>blocks.push(`${firstName(b.name)} — ${buyerDetail(b)}`));
-    });
-    // Low-value buyers (only a logged call/text, nothing noted) → one line; name any who took a contract.
+    // Honest one-line opening read — counts, not adjectives. Framed as an update since the
+    // weekend's open (this report goes out on the Tuesday).
+    const addr1=String(openHome?.address||"").split(",")[0].trim();
+    const nOffer=named.filter(buyerHasOffer).length;
+    const nHot=named.filter(b=>b.interest==="hot"&&!buyerHasOffer(b)).length;
+    const nContract=named.filter(b=>b.contractSent&&!buyerHasOffer(b)).length;
+    const bits=[];
+    if(nOffer) bits.push(`${nw(nOffer)} ${nOffer===1?"offer":"offers"} in play`);
+    if(nHot) bits.push(`${nw(nHot)} ${nHot===1?"buyer we'd call genuinely engaged":"buyers we'd call genuinely engaged"}`);
+    if(nContract) bits.push(`${nw(nContract)} with the contract out`);
+    blocks.push(bits.length
+      ? `Quick update on where ${addr1||"the campaign"} is sitting since the weekend — ${joinNat(bits)}. Full rundown below, strongest interest first.`
+      : `Quick update on where ${addr1||"the campaign"} is sitting since the weekend. Full rundown below.`);
+    // Hottest first — the vendor reads the strongest prospects at the top. Ranked by the same
+    // heat score used across the app (repeat visits, contract + opens, buying signals, interest),
+    // so a genuinely engaged buyer leads regardless of which week they first came through.
+    const ranked=[...named].sort((a,b)=>buyerHeat(b).score-buyerHeat(a).score);
+    ranked.forEach(b=>blocks.push(`${firstName(b.name)} — ${buyerDetail(b)}`));
+    // Low-value buyers (only a logged call/text, nothing noted) → one honest line, never named.
     if(low.length){
-      let s=`There ${low.length===1?"is":"are"} ${nw(low.length)} ${low.length===1?"buyer":"buyers"} we've followed up with a call and message but are yet to hear back from`;
-      const cs=low.filter(b=>b.contractSent);
-      if(cs.length) s+=`, ${nw(cs.length)} of which ${cs.length===1?"was":"were"} ${joinNat(cs.map(b=>firstName(b.name)))} who ${cs.length===1?"":cs.length===2?"both ":"all "}asked for a contract`;
-      blocks.push(s+".");
+      blocks.push(`We've also called ${nw(low.length)} other ${low.length===1?"buyer":"buyers"} and left ${low.length===1?"a message":"messages"} but haven't heard back as yet.`);
     }
     if(enquiryCount) blocks.push(`Plus ${enquiryCount} online ${enquiryCount===1?"enquiry":"enquiries"} this week.`);
     blocks.push("Next Steps","[Add your next steps here before sending]");
@@ -3324,8 +3368,11 @@ function campCleanNotes(buyer) {
     // real note merged after it; a note that's ONLY that log then falls away below.
     t = t.replace(/^📝\s*/, "").replace(/^(offer|bid|contract|form)\s*link sent\b[.:,]?\s*/i, "").trim();
     if (!t || campIsSysNote(t)) return;
+    // Offer / bid notes carry the price, deposit and settlement terms. These must NEVER reach
+    // a vendor report (Luke: the report says only "we're working through an offer with them").
+    // The buyer still shows up via the hasOffer flag; the terms are dropped here entirely.
+    if (/^\s*\[(Offer|Bid registration)\]/i.test(t)) return;
     if (/^\s*\[[^\]]+\]/.test(t) && !CAMP_KEEP_TAG.test(t)) return; // non-allowlisted [tag] log → drop
-    t = t.replace(/^\s*\[(Offer|Bid registration)\]\s*/i, "").trim();
     if (t) out.push(t);
   });
   return out;
