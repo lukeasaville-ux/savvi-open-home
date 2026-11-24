@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v128-hot-live-only";
+const BUILD = "v129-call-outcomes";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2509,7 +2509,10 @@ function DetailSheet({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdat
       <div style={{padding:"0 16px 8px",textAlign:"right"}}><span className="qa-edit" style={{fontSize:12}} onClick={startEdit}>Edit name, mobile or email</span></div>
       {callOpen&&<div style={{margin:"0 16px 12px",padding:"12px 13px",border:`1px solid ${SAND_D}`,borderRadius:11,background:LINEN}}>
         <div style={{fontSize:12.5,fontWeight:800,color:BROWN,marginBottom:8}}>Log call with {(buyer.name||"").split(" ")[0]}</div>
-        <textarea value={callNote} onChange={e=>setCallNote(e.target.value)} placeholder="What did you discuss? (optional)" style={{width:"100%",minHeight:66,padding:10,border:`1px solid ${SAND_D}`,borderRadius:9,fontSize:14,fontFamily:"'Neue Haas Unica Pro',sans-serif",resize:"vertical",outline:"none",boxSizing:"border-box"}}/>
+        <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
+          {[["No answer","no answer"],["Left a message","left a message"]].map(([lbl,out])=><button key={out} onClick={()=>{ const first=(buyer.name||"").split(" ")[0]||""; if(onAddNote&&propId) onAddNote(propId,buyer.id,`Called ${first}, ${out}`); setCallOpen(false); setCallNote(""); }} style={{flex:1,minWidth:110,padding:"9px 10px",borderRadius:9,border:`1px solid ${SAND_D}`,background:WHITE,color:BROWN,fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>{lbl}</button>)}
+        </div>
+        <textarea value={callNote} onChange={e=>setCallNote(e.target.value)} placeholder="Or log what you discussed (optional)" style={{width:"100%",minHeight:66,padding:10,border:`1px solid ${SAND_D}`,borderRadius:9,fontSize:14,fontFamily:"'Neue Haas Unica Pro',sans-serif",resize:"vertical",outline:"none",boxSizing:"border-box"}}/>
         <div style={{display:"flex",gap:8,marginTop:8}}>
           <button onClick={()=>{setCallOpen(false);setCallNote("");}} style={{flex:1,padding:"10px",borderRadius:9,border:`1px solid ${SAND_D}`,background:WHITE,color:BROWN_L,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Cancel</button>
           <button onClick={()=>{ const first=(buyer.name||"").split(" ")[0]||""; const txt=callNote.trim()?`Called ${first}: ${callNote.trim()}`:`Called ${first}`; if(onAddNote&&propId) onAddNote(propId,buyer.id,txt); setCallOpen(false); setCallNote(""); }} style={{flex:1,padding:"10px",borderRadius:9,border:"none",background:BLUE_D,color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"'Neue Haas Unica Pro',sans-serif"}}>Log call</button>
@@ -4502,7 +4505,10 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
             </>}
             {callOpen&&<div className="rec-callbox">
               <div style={{fontSize:12.5,fontWeight:800,color:BROWN,marginBottom:8}}>Log call with {first}</div>
-              <textarea value={callNote} onChange={e=>setCallNote(e.target.value)} placeholder="What did you discuss? (optional)"/>
+              <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
+                {[["No answer","no answer"],["Left a message","left a message"]].map(([lbl,out])=><button key={out} className="crm-btn" onClick={()=>{ onAddNote(propId,buyer.id,`Called ${first}, ${out}`); setCallOpen(false); setCallNote(""); }}>{lbl}</button>)}
+              </div>
+              <textarea value={callNote} onChange={e=>setCallNote(e.target.value)} placeholder="Or log what you discussed (optional)"/>
               <div style={{display:"flex",gap:8,marginTop:8}}><button className="crm-btn p" onClick={()=>{ const txt=callNote.trim()?`Called ${first}: ${callNote.trim()}`:`Called ${first}`; onAddNote(propId,buyer.id,txt); setCallOpen(false); setCallNote(""); }}>Log call</button><button className="crm-btn" onClick={()=>{ setCallOpen(false); setCallNote(""); }}>Cancel</button></div>
             </div>}
             {!atThisOpen&&<div style={{padding:"4px 14px 12px"}}><button className={`checkin-btn${checkin==="done"?" done":""}`} style={{width:"100%",margin:0}} disabled={checkin==="busy"||checkin==="done"} onClick={async()=>{ setCheckin("busy"); const r=await onCheckIn(propId,buyer); setCheckin(r&&r.ok?"done":"err"); }}>{checkin==="done"?"Added to this open ✓":checkin==="busy"?"Adding…":checkin==="err"?"Couldn't add them, tap to try again":"Add to this open"}</button></div>}
