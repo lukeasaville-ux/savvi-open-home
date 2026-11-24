@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v129-call-outcomes";
+const BUILD = "v130-live-feed";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4649,10 +4649,13 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const replyLink=(m)=>`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(m.from.email)}&subject=${encodeURIComponent(/^re:/i.test(m.subject)?m.subject:"Re: "+m.subject)}`;
   const [feedFilter,setFeedFilter]=useState("all");
 
-  const loadIndex=useCallback(async(force)=>{ if(indexing) return; if(!force&&index&&Date.now()-indexAt<10*60*1000) return; setIndexing(true); try{ const ix=await Attio.getCrmIndex(); if(ix) { setIndex(ix); setIndexAt(Date.now()); } }catch(e){} setIndexing(false); },[index,indexAt,indexing]);
+  const loadIndex=useCallback(async(force)=>{ if(indexing) return; if(!force&&index&&Date.now()-indexAt<60*1000) return; setIndexing(true); try{ const ix=await Attio.getCrmIndex(); if(ix) { setIndex(ix); setIndexAt(Date.now()); } }catch(e){} setIndexing(false); },[index,indexAt,indexing]);
   useEffect(()=>{ loadIndex(false); },[]);
-  // Background refresh: index every 10 min, the selected listing's buyers every 2 min.
-  useEffect(()=>{ const t=setInterval(()=>{ loadIndex(false); if(sel&&crm.refreshBuyers) crm.refreshBuyers(); },120000); return ()=>clearInterval(t); },[sel,loadIndex,crm.refreshBuyers]);
+  // Rolling live feed: re-read the whole CRM every 90s (the 60s record cache throttles the
+  // actual network hit) so contract opens surface within a minute or two of happening.
+  useEffect(()=>{ const t=setInterval(()=>{ loadIndex(true); if(sel&&crm.refreshBuyers) crm.refreshBuyers(); },90000); return ()=>clearInterval(t); },[sel,loadIndex,crm.refreshBuyers]);
+  // And refresh instantly whenever the tab is refocused, so it is never stale when you look at it.
+  useEffect(()=>{ const vis=()=>{ if(document.visibilityState==="visible"){ loadIndex(true); if(sel&&crm.refreshBuyers) crm.refreshBuyers(); } }; document.addEventListener("visibilitychange",vis); window.addEventListener("focus",vis); return ()=>{ document.removeEventListener("visibilitychange",vis); window.removeEventListener("focus",vis); }; },[loadIndex,sel,crm.refreshBuyers]);
   // ⌘K → search, Esc → clear.
   useEffect(()=>{ const k=e=>{ if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="k"){ e.preventDefault(); gqRef.current?.focus(); gqRef.current?.select(); } }; window.addEventListener("keydown",k); return ()=>window.removeEventListener("keydown",k); },[]);
 
@@ -4913,7 +4916,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
                 {mail&&mail.length>8&&<div style={{padding:"8px 16px 12px"}}><button className="crm-linkbtn dark" onClick={()=>setMailAll(v=>!v)}>{mailAll?"Show fewer":`Show all ${mail.length}`}</button></div>}
               </div>
               <div className="crm-card">
-                <div className="h">Action feed <span className="ct">{feedRows.length}</span><span className="sp"/>{!index&&<span style={{letterSpacing:0,textTransform:"none",fontWeight:500}}>{indexing?"Reading every buyer…":""}</span>}</div>
+                <div className="h">Action feed <span className="ct">{feedRows.length}</span><span className="sp"/><span style={{letterSpacing:0,textTransform:"none",fontWeight:600,fontSize:11,color:indexing?BROWN_L:"#1E8C50",display:"inline-flex",alignItems:"center",gap:5}}>{!indexing&&<span style={{width:7,height:7,borderRadius:"50%",background:"#1E8C50",display:"inline-block"}}/>}{!index?(indexing?"Reading every buyer…":""):(indexing?"Updating…":"Live")}</span></div>
                 <div className="crm-filters" style={{borderBottom:`1px solid ${SAND}`}}>
                   <button className={`fchip${feedFilter==="all"?" on":""}`} onClick={()=>setFeedFilter("all")}>All<span className="n">{feed.length}</span></button>
                   {Object.keys(FEED_KINDS).map(k=><button key={k} className={`fchip${feedFilter===k?" on":""}`} onClick={()=>setFeedFilter(k)}>{FEED_KINDS[k].t}<span className="n">{feedCounts[k]||0}</span></button>)}
