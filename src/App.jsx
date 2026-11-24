@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v132-feed-signals";
+const BUILD = "v133-signing-opens";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3128,7 +3128,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
       const agentFull=AGENT_FULL[agentName]||agentName||"";
       // Who gets the executed contract once BOTH parties have signed (the completion webhook
       // emails the signed PDF to each conveyancer and cc's their client).
-      const distribution={ address:addr, agentName:agentFull, purchaserName:([p1,p2].filter(Boolean).join(" & "))||"", purchaserEmail:purEmail.trim(), purchaserConvEmail:convPur.trim(), vendorName:venName.trim(), vendorEmail:venEmail.trim(), vendorConvEmail:convVen.trim() };
+      const distribution={ address:addr, propertyId:openHome?.propertyId||"", inspectionId:buyer?._attioInspectionId||buyer?.id||"", agentName:agentFull, purchaserName:([p1,p2].filter(Boolean).join(" & "))||"", purchaserEmail:purEmail.trim(), purchaserConvEmail:convPur.trim(), vendorName:venName.trim(), vendorEmail:venEmail.trim(), vendorConvEmail:convVen.trim() };
       const payload={ name:`Contract of Sale - ${addr}`, typeName:"Contract of Sale", propertyAddr:addr, docName:filledFile.name, fileUrl:stash.url, fields:flds, submitters:subs, order:"preserved", agentName:agentFull, distribution };
       const r=await call("sendToSign",payload);
       if(r&&r.ok){ setSendState("done"); setEsignCount(c=>c+1); }
