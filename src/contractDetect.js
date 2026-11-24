@@ -46,6 +46,30 @@ export async function extractPages(data, pdfjsOverride) {
   return { numPages: doc.numPages, pages, doc };
 }
 
+// Render EVERY page to a data-URL image (no overlay) for the manual "Sign anything"
+// field placer. Also returns the page's natural (scale-1) size, so the UI can turn a
+// placed box's pixels back into page RATIOS (top-left origin) for DocuSeal.
+// NOTE: pdf.js detaches the ArrayBuffer it is handed — pass a COPY if you still need
+// the original bytes (e.g. to base64 and send).
+export async function renderPageImages(data, maxW = 900) {
+  const lib = await pdfjs();
+  const doc = await lib.getDocument({ data, isEvalSupported: false, useSystemFonts: true }).promise;
+  const out = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(2, maxW / base.width);
+    const vp = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+    const ctx = canvas.getContext("2d");
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    out.push({ page: p, url: canvas.toDataURL("image/jpeg", 0.82), w: canvas.width, h: canvas.height, natW: base.width, natH: base.height });
+  }
+  try { doc.destroy(); } catch (e) {}
+  return out;
+}
+
 // Render the pages that carry fields to data-URL images with the field boxes
 // drawn on top, so the agent can eyeball placement before sending.
 export async function renderPreviews(doc, fields, maxW = 540) {

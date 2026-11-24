@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v142-report-colon-sep";
+const BUILD = "v143-tools-sign-anything";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4898,7 +4898,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
     <aside className="crm-side">
       <div className="crm-brand"><img src={wordmark} alt="Savvi"/><span>CRM</span></div>
       <nav className="crm-nav">{TABS.map(t=><button key={t.k} className={tab===t.k?"on":""} onClick={()=>{ setSel(null); setTab(t.k); }}><span className="ic">{t.ic}</span>{t.l}{t.ct?<span className="ct">{t.ct}</span>:null}</button>)}</nav>
-      <div style={{marginTop:14}} className="crm-nav"><button onClick={()=>crm.setShowAuthority(true)}><span className="ic">✎</span>New authority</button><button onClick={()=>crm.setShowContract(true)}><span className="ic">✍</span>Sign a contract</button><button onClick={()=>crm.setShowGeneral(true)}><span className="ic">✦</span>General enquiry</button><button onClick={()=>crm.setShowAddListing(true)}><span className="ic">+</span>Add listing</button><button onClick={()=>crm.setShowCalendar(true)}><span className="ic">▦</span>Calendar of Events</button><button onClick={()=>crm.setShowProposal(true)}><span className="ic">◈</span>New proposal</button></div>
+      <div style={{marginTop:14}} className="crm-nav"><button onClick={()=>crm.setShowAuthority(true)}><span className="ic">✎</span>New authority</button><button onClick={()=>crm.setShowContract(true)}><span className="ic">✍</span>Sign a contract</button><button onClick={()=>crm.setShowGeneral(true)}><span className="ic">✦</span>General enquiry</button><button onClick={()=>crm.setShowAddListing(true)}><span className="ic">+</span>Add listing</button><button onClick={()=>crm.setShowTools(true)}><span className="ic">⚒</span>Tools</button><button onClick={()=>crm.setShowProposal(true)}><span className="ic">◈</span>New proposal</button></div>
       <div className="crm-side-foot">
         <div className="crm-agent"><div className="av" style={{background:crmColor(agentName)}}>{crmInitials(agentName)}</div><div><div className="nm">{AGENT_FULL[agentName]||agentName}</div><div className="sub">{indexing?"Syncing CRM…":index?`Synced ${crmAgo(new Date(indexAt).toISOString())}`:"Loading CRM…"}</div></div></div>
         <div style={{display:"flex",gap:4}}><button className="crm-linkbtn" onClick={()=>loadIndex(true)}>↻ Sync now</button><button className="crm-linkbtn" style={{marginLeft:"auto"}} onClick={onLogout}>Log out</button></div>
@@ -5556,6 +5556,382 @@ function CalendarSheet({ open, onClose }){
             <button className="btn-dark" style={{width:"100%",marginTop:16}} onClick={generate} disabled={busy}>{busy?<><span className="sp-sm"/>Building…</>:"Generate calendar"}</button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ============ Advertising schedule (Tools) ============
+// A one-off marketing schedule PDF on its own (no authority attached). Same pricing
+// engine + custom editor as the authority generator.
+async function buildSchedulePdf({ propertyAddr, campaignName, sched, itemised }){
+  const { PDFDocument, rgb }=await import("pdf-lib");
+  const doc=await PDFDocument.create();
+  await appendSchedulePage(doc, rgb, { propertyAddr, campaignName, sched, itemised });
+  return doc.save();
+}
+function ScheduleSheet({ open, onClose, agentName }){
+  const canCustom=/luke|madeline/i.test(agentName||"");
+  const [addr,setAddr]=useState("");
+  const [price,setPrice]=useState("");
+  const [campaign,setCampaign]=useState("hidc");
+  const [sched,setSched]=useState(null);
+  const [itemised,setItemised]=useState(false);
+  const [showEdit,setShowEdit]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const [err,setErr]=useState("");
+  const [pdfUrl,setPdfUrl]=useState(null);
+  const postcode=authPostcode(addr);
+  const band=domainBand(price);
+  const money=v=>"$"+Number(v||0).toLocaleString("en-AU");
+  useEffect(()=>{ // rebuild the item set as address / price / template change (unless a custom set is in play)
+    if(!open) return;
+    if(campaign==="off"){ setSched(null); return; }
+    if(campaign==="custom") return;
+    setSched(defaultSched(postcode, band, campaign));
+  },[open,postcode,band,campaign]);
+  function pickCampaign(id){ setCampaign(id); if(id!=="off"&&id!=="custom") setSched(defaultSched(postcode,band,id)); if(id!=="custom") setShowEdit(false); }
+  const editItem=(sec,i,k,val)=>setSched(s=>({...s,[sec]:s[sec].map((it,j)=>j===i?{...it,[k]:val}:it)}));
+  const toggleItem=(sec,i)=>setSched(s=>({...s,[sec]:s[sec].map((it,j)=>j===i?{...it,on:it.on===false}:it)}));
+  const removeItem=(sec,i)=>setSched(s=>({...s,[sec]:s[sec].filter((_,j)=>j!==i)}));
+  const addItem=(sec)=>setSched(s=>({...s,[sec]:[...s[sec],{k:"c"+Date.now(),name:"",amt:0,on:true}]}));
+  const setDomainAmt=(v)=>setSched(s=>({...s,internet:s.internet.map(it=>it.k==="domain"?{...it,amt:Number(String(v).replace(/[^0-9]/g,""))||0,needs:false}:it)}));
+  const domItem = sched && (sched.internet||[]).find(it=>it.k==="domain");
+  const domainNeeds = campaign!=="off" && domItem && (domItem.needs || !(Number(domItem.amt)>0)) && domItem.on!==false;
+  const schedTot = sched ? schedTotal(sched) : 0;
+  function reset(){ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); setErr(""); }
+  function handleClose(){ reset(); onClose(); }
+  async function generate(){
+    setErr(""); setBusy(true);
+    try{
+      const _cmp=SCHED_CAMPAIGNS.find(c=>c.id===campaign)||{};
+      const campName=_cmp.quote||_cmp.name||"High Impact Digital Campaign";
+      const bytes=await buildSchedulePdf({ propertyAddr:addr, campaignName:campName, sched, itemised });
+      const blob=new Blob([bytes],{type:"application/pdf"});
+      if(pdfUrl)URL.revokeObjectURL(pdfUrl);
+      setPdfUrl(URL.createObjectURL(blob));
+    }catch(e){ setErr("Could not generate. "+(e?.message||"")); }
+    setBusy(false);
+  }
+  const dlName=`Marketing Schedule - ${(addr||"Savvi").replace(/[\\/:*?"<>|]/g,"")}.pdf`;
+  const SECS=[["internet","Internet & Digital"],["boards","Boards & Brochures"],["photos","Photos, Plans & Copy"],["misc","Miscellaneous"]];
+  return (
+    <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) handleClose(); }}>
+      <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
+        <button onClick={handleClose} aria-label="Close" style={{position:"absolute",top:10,right:12,width:32,height:32,borderRadius:16,border:"none",background:SAND,color:BROWN,fontSize:17,fontWeight:700,cursor:"pointer",lineHeight:"32px",zIndex:5}}>×</button>
+        <div className="hndl"/>
+        <div className="sh-ttl">{pdfUrl?"Schedule ready":"Advertising schedule"}</div>
+        <div className="sh-sub">{pdfUrl?(addr||"Marketing schedule"):"A one-off marketing schedule PDF, no authority attached"}</div>
+        {pdfUrl ? (
+          <div style={{padding:"4px 16px 16px"}}>
+            <div style={{border:"1px solid #E7DFD3",borderRadius:10,overflow:"hidden",height:420,marginBottom:12,background:"#fff"}}>
+              <iframe title="Schedule preview" src={pdfUrl} style={{width:"100%",height:"100%",border:"none"}}/>
+            </div>
+            <a href={pdfUrl} target="_blank" rel="noreferrer" className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px"}}>Open full screen</a>
+            <a href={pdfUrl} download={dlName} className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px",background:BLUE_D}}>Download PDF</a>
+            <button onClick={()=>{ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); }} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Change the details</button>
+          </div>
+        ) : (
+          <div style={{paddingBottom:4}}>
+            <div className="fg"><label className="fl">Property address</label>
+              <AddressInput value={addr} onChange={setAddr} placeholder="Start typing, e.g. 12/5 Berkeley St Hawthorn"/></div>
+            <div style={{padding:"0 16px 12px"}}><label className="fl">Lower end of the price guide</label>
+              <MoneyInput value={price} onChange={setPrice} placeholder="$900,000"/>
+              <div style={{fontSize:12,color:BROWN_L,marginTop:5}}>{postcode?`${postcode} · `:""}REA Premiere {money(reaPremiere(postcode))} · Domain band {bandLabel(band)}</div>
+            </div>
+            <div style={{padding:"0 16px 10px"}}><label className="fl">Campaign template</label>
+              <select className="fi" value={campaign} onChange={e=>pickCampaign(e.target.value)}>
+                {SCHED_CAMPAIGNS.filter(c=>c.id!=="custom"||canCustom).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              </select></div>
+            {campaign==="off" ? (
+              <div style={{margin:"0 16px 12px",background:LINEN,borderRadius:10,padding:"12px 14px",fontSize:12.5,color:BROWN_M,lineHeight:1.5}}>Off-market, no advertising. There is nothing to schedule.</div>
+            ) : sched ? (<>
+              {domainNeeds && <div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12.5,lineHeight:1.4}}>
+                {band==="b3"?"This property is over $2.25m. ":""}Domain Platinum Edge is not priced yet. Phone Domain for the correct figure and enter it to continue.
+                <input className="fi" type="text" inputMode="numeric" placeholder="Domain Platinum Edge  $" value={domItem&&domItem.amt?domItem.amt:""} onChange={e=>setDomainAmt(e.target.value)} style={{marginTop:8}}/>
+              </div>}
+              <div style={{margin:"0 16px 12px",border:`1px solid ${SAND_D}`,borderRadius:12,overflow:"hidden"}}>
+                {SECS.map(([sec,title])=>{
+                  const items=(sched[sec]||[]).filter(it=>it.on!==false);
+                  return (
+                    <div key={sec} style={{borderTop:sec!=="internet"?`1px solid ${LINEN}`:"none",padding:"10px 14px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+                        <span style={{fontWeight:700,fontSize:13,color:BROWN}}>{title}</span>
+                        <span style={{fontWeight:700,fontSize:13,color:BROWN}}>{money(schedSubtotal(sched[sec]))}</span>
+                      </div>
+                      <div style={{marginTop:3}}>{items.map((it,i)=>(
+                        <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12,color:BROWN_L,lineHeight:1.55}}>
+                          <span>{it.name||"(unnamed item)"}</span>
+                          {itemised && <span>{Number(it.amt)>0?money(it.amt):"Included"}</span>}
+                        </div>
+                      ))}</div>
+                    </div>
+                  );
+                })}
+                <div style={{background:BROWN,padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{color:"#fff",fontWeight:700,fontSize:14}}>Total (incl. GST)</span>
+                  <span style={{color:"#fff",fontWeight:800,fontSize:18}}>{money(schedTot)}</span>
+                </div>
+              </div>
+              <label style={{display:"flex",alignItems:"center",gap:9,padding:"0 16px 10px",fontSize:13,color:BROWN,cursor:"pointer"}}>
+                <input type="checkbox" checked={itemised} onChange={e=>setItemised(e.target.checked)} style={{width:18,height:18,accentColor:BLUE_D}}/>
+                Show each line's price to the client
+              </label>
+              {canCustom && <div style={{padding:"0 16px 10px"}}>
+                <button onClick={()=>{ if(campaign!=="custom") setCampaign("custom"); setShowEdit(x=>!x); }} style={{background:"transparent",border:`1px dashed #CDBFA6`,borderRadius:9,width:"100%",padding:"9px",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",fontSize:12.5}}>{showEdit?"Done editing":"Edit items / build custom"}</button>
+              </div>}
+              {showEdit && canCustom && (
+                <div style={{margin:"0 16px 12px",border:`1px solid ${SAND_D}`,borderRadius:12,padding:"2px 10px 10px"}}>
+                  {SECS.map(([sec,title])=>(
+                    <div key={sec} style={{paddingTop:8}}>
+                      <div style={{fontSize:11,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase",color:BROWN_L,marginBottom:5}}>{title}</div>
+                      {(sched[sec]||[]).map((it,i)=>(
+                        <div key={i} style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
+                          <input type="checkbox" checked={it.on!==false} onChange={()=>toggleItem(sec,i)} style={{width:16,height:16,accentColor:BLUE_D,flex:"0 0 auto"}}/>
+                          <input className="fi" value={it.name} placeholder="Item name" onChange={e=>editItem(sec,i,"name",e.target.value)} style={{flex:1,padding:"8px 9px",fontSize:12.5}}/>
+                          <input className="fi" value={it.amt} inputMode="numeric" onChange={e=>editItem(sec,i,"amt",Number(String(e.target.value).replace(/[^0-9]/g,""))||0)} style={{width:64,padding:"8px 8px",fontSize:12.5,textAlign:"right"}}/>
+                          <button onClick={()=>removeItem(sec,i)} aria-label="Remove item" style={{background:"transparent",border:"none",color:BROWN_L,fontSize:16,cursor:"pointer",padding:"0 2px",flex:"0 0 auto"}}>×</button>
+                        </div>
+                      ))}
+                      <button onClick={()=>addItem(sec)} style={{background:"transparent",border:"none",color:BLUE_D,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit",padding:"1px 0"}}>+ Add item</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>) : null}
+            {err&&<div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
+            <div className="fg" style={{paddingBottom:10}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={generate} disabled={busy||campaign==="off"||!sched||domainNeeds}>{busy?<><span className="sp-sm"/>Generating…</>:"Generate schedule PDF"}</button></div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============ Sign anything (Tools) ============
+// Upload ANY PDF, drop signature / initials / date / text fields onto the pages by hand,
+// add the signers, and send for e-signing through the same DocuSeal backend the authority
+// and contract flows use (kind:"document"). Field coords are page RATIOS (top-left origin),
+// the exact shape signFields produces for authorities, so the backend sends them unchanged.
+const SIGN_COLORS=["#5A7FBF","#FE5310","#2D8A5E","#8A5CC4","#C0392B","#0E7C86"];
+const SIGN_TYPES=[["signature","Signature"],["initials","Initials"],["date","Date"],["text","Text"]];
+const SIGN_SHORT={ signature:"Sign", initials:"Initials", date:"Date", text:"Text" };
+const SIGN_DEF={ signature:{w:0.30,h:0.045}, initials:{w:0.12,h:0.045}, date:{w:0.20,h:0.032}, text:{w:0.30,h:0.034} };
+function SignAnythingSheet({ open, onClose, agentName }){
+  const [stage,setStage]=useState("upload");   // upload | place
+  const [fileName,setFileName]=useState("");
+  const [pdfBytes,setPdfBytes]=useState(null);
+  const [pages,setPages]=useState([]);
+  const [rendering,setRendering]=useState(false);
+  const [err,setErr]=useState("");
+  const [fields,setFields]=useState([]);       // {id,page,signerId,type,x,y,w,h}  (x/y/w/h = page ratios)
+  const [signers,setSigners]=useState([{id:"s1",role:"Signer 1",name:"",email:"",color:SIGN_COLORS[0]}]);
+  const [activeType,setActiveType]=useState("signature");
+  const [activeSigner,setActiveSigner]=useState("s1");
+  const [sendState,setSendState]=useState("idle");
+  const [showSigners,setShowSigners]=useState(true);
+  const dragRef=useRef(null);
+  const fileRef=useRef(null);
+
+  function resetAll(){ setPdfBytes(null); setPages([]); setFields([]); setFileName(""); setStage("upload"); setErr(""); setSendState("idle"); setSigners([{id:"s1",role:"Signer 1",name:"",email:"",color:SIGN_COLORS[0]}]); setActiveSigner("s1"); setActiveType("signature"); }
+
+  async function onFile(e){
+    const f=e.target.files&&e.target.files[0]; if(!f) return;
+    if(f.type && !/pdf/i.test(f.type)){ setErr("Please choose a PDF file."); return; }
+    setErr(""); setRendering(true); setFileName(f.name||"document.pdf");
+    try{
+      const buf=new Uint8Array(await f.arrayBuffer());
+      setPdfBytes(buf);
+      const mod=await import("./contractDetect.js");
+      const imgs=await mod.renderPageImages(buf.slice(0));   // slice: pdf.js detaches the buffer it is handed
+      setPages(imgs); setStage("place");
+    }catch(e){ setErr("Could not read that PDF. "+(e?.message||"")); }
+    setRendering(false);
+    if(fileRef.current) fileRef.current.value="";
+  }
+
+  const signerOf=id=>signers.find(s=>s.id===id)||signers[0]||{role:"Signer 1",color:SIGN_COLORS[0],name:""};
+  function addFieldAt(page, px, py){
+    const sz=SIGN_DEF[activeType]||SIGN_DEF.signature;
+    const x=Math.min(Math.max(px-sz.w/2,0),1-sz.w);
+    const y=Math.min(Math.max(py-sz.h/2,0),1-sz.h);
+    setFields(a=>[...a,{ id:"f"+Date.now()+Math.round(Math.random()*999), page, signerId:activeSigner, type:activeType, x, y, w:sz.w, h:sz.h }]);
+  }
+  const removeField=id=>setFields(a=>a.filter(f=>f.id!==id));
+
+  // pointer drag / resize (mouse + touch unified via pointer events)
+  function startDrag(e, fld, mode){
+    e.preventDefault(); e.stopPropagation();
+    const wrap=e.currentTarget.closest("[data-pagewrap]"); if(!wrap) return;
+    const r=wrap.getBoundingClientRect();
+    dragRef.current={ id:fld.id, mode, rect:r, sx:e.clientX, sy:e.clientY, x0:fld.x, y0:fld.y, w0:fld.w, h0:fld.h };
+    try{ e.currentTarget.setPointerCapture(e.pointerId); }catch(_){}
+  }
+  function moveDrag(e){
+    const d=dragRef.current; if(!d) return;
+    e.preventDefault();
+    const dx=(e.clientX-d.sx)/d.rect.width, dy=(e.clientY-d.sy)/d.rect.height;
+    setFields(a=>a.map(f=>{
+      if(f.id!==d.id) return f;
+      if(d.mode==="move") return {...f, x:Math.min(Math.max(d.x0+dx,0),1-f.w), y:Math.min(Math.max(d.y0+dy,0),1-f.h)};
+      return {...f, w:Math.min(Math.max(d.w0+dx,0.04),1-f.x), h:Math.min(Math.max(d.h0+dy,0.02),1-f.y)};
+    }));
+  }
+  function endDrag(e){ if(dragRef.current){ try{ e.currentTarget.releasePointerCapture(e.pointerId); }catch(_){} dragRef.current=null; } }
+
+  function addSigner(){ const i=signers.length; const id="s"+Date.now(); setSigners(a=>[...a,{id,role:"Signer "+(i+1),name:"",email:"",color:SIGN_COLORS[i%SIGN_COLORS.length]}]); setActiveSigner(id); }
+  function addMe(){ const full=AGENT_FULL[agentName]||agentName||"Savvi"; const email=AGENT_EMAIL[full]||"hello@getsavvi.com.au"; if(signers.some(s=>(s.email||"").trim().toLowerCase()===email.toLowerCase())) return; const i=signers.length; const id="s"+Date.now(); setSigners(a=>[...a,{id,role:"Signer "+(i+1),name:full,email,color:SIGN_COLORS[i%SIGN_COLORS.length]}]); setActiveSigner(id); }
+  const editSigner=(id,k,v)=>setSigners(a=>a.map(s=>s.id===id?{...s,[k]:v}:s));
+  function removeSigner(id){ if(signers.length<=1) return; const next=signers.find(s=>s.id!==id); setSigners(a=>a.filter(s=>s.id!==id)); setFields(a=>a.filter(f=>f.signerId!==id)); if(activeSigner===id) setActiveSigner(next?next.id:""); }
+
+  async function send(){
+    if(!fields.length){ setErr("Add at least one field to the document first."); return; }
+    const used=signers.filter(s=>fields.some(f=>f.signerId===s.id));
+    if(!used.length){ setErr("Assign your fields to a signer."); return; }
+    const bad=used.find(s=>!(s.name||"").trim()||!(s.email||"").trim());
+    if(bad){ setErr(`Add a name and email for ${bad.role}.`); setShowSigners(true); return; }
+    setErr(""); setSendState("sending");
+    try{
+      const cap=t=>t.charAt(0).toUpperCase()+t.slice(1);
+      const fieldsPayload=fields.map(f=>{ const s=signerOf(f.signerId); return { name:`${s.role} ${cap(f.type)} ${f.id}`, role:s.role, type:f.type, required:true, areas:[{x:f.x,y:f.y,w:f.w,h:f.h,page:f.page}] }; });
+      const submitters=used.map(s=>({ role:s.role, name:s.name.trim(), email:s.email.trim() }));
+      const docBase=(fileName||"Document").replace(/\.pdf$/i,"");
+      const full=AGENT_FULL[agentName]||agentName||""; const agEmail=AGENT_EMAIL[full]||"";
+      const distribution={ kind:"document", docName:docBase, address:docBase, agentName:full, agentEmail:agEmail, notifyEmail:agEmail };
+      const r=await call("sendToSign",{ name:docBase, typeName:docBase, docName:(fileName||"document.pdf"), propertyAddr:"", pdfBase64:u8ToB64(pdfBytes), fields:fieldsPayload, submitters, kind:"document", agentName:full, agentEmail:agEmail, distribution });
+      if(r&&r.ok){ setSendState("sent"); }
+      else { setSendState("idle"); setErr("Could not send. "+(r?.error||"please try again")); }
+    }catch(e){ setSendState("idle"); setErr("Could not send. "+(e?.message||"")); }
+  }
+
+  const usedCount=signers.filter(s=>fields.some(f=>f.signerId===s.id)).length;
+  const activeS=signerOf(activeSigner);
+  return (
+    <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
+        <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:10,right:12,width:32,height:32,borderRadius:16,border:"none",background:SAND,color:BROWN,fontSize:17,fontWeight:700,cursor:"pointer",lineHeight:"32px",zIndex:6}}>×</button>
+        <div className="hndl"/>
+        <div className="sh-ttl">{sendState==="sent"?"Sent for signing":"Sign anything"}</div>
+        <div className="sh-sub">{stage==="place"&&sendState!=="sent"?(fileName||"Place the fields, then send"):"Upload any document and place the signing fields yourself"}</div>
+
+        {sendState==="sent" ? (
+          <div style={{padding:"8px 16px 20px",textAlign:"center"}}>
+            <div style={{fontSize:40,marginBottom:6}}>✓</div>
+            <div style={{fontWeight:700,fontSize:15,color:BROWN,marginBottom:6}}>On its way</div>
+            <div style={{fontSize:13,color:BROWN_L,lineHeight:1.5,marginBottom:16}}>Each signer has been emailed a secure link to review and sign "{(fileName||"the document").replace(/\.pdf$/i,"")}". Once everyone has signed, a fully executed copy is emailed to you and to every signer automatically.</div>
+            <button className="btn-dark" style={{width:"100%",margin:"0 0 10px"}} onClick={resetAll}>Sign another document</button>
+            <button onClick={onClose} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>Done</button>
+          </div>
+        ) : stage==="upload" ? (
+          <div style={{padding:"10px 16px 18px"}}>
+            <button onClick={()=>fileRef.current&&fileRef.current.click()} disabled={rendering}
+              style={{width:"100%",border:`2px dashed ${SAND_D}`,borderRadius:14,background:LINEN,padding:"34px 16px",cursor:"pointer",fontFamily:"inherit",color:BROWN,display:"flex",flexDirection:"column",alignItems:"center",gap:8}}>
+              <span style={{fontSize:30}}>{rendering?"…":"⬆"}</span>
+              <span style={{fontWeight:700,fontSize:15}}>{rendering?"Reading the PDF":"Choose a PDF"}</span>
+              <span style={{fontSize:12.5,color:BROWN_L,textAlign:"center",lineHeight:1.5}}>Any document: a deposit release, a variation, a letter of offer. You place the signing fields yourself on the next screen.</span>
+            </button>
+            <input ref={fileRef} type="file" accept="application/pdf,.pdf" onChange={onFile} style={{display:"none"}}/>
+            {err&&<div style={{margin:"12px 0 0",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12.5}}>{err}</div>}
+          </div>
+        ) : (
+          <>
+            <div style={{padding:"0 16px 8px"}}>
+              <div style={{display:"flex",gap:5,marginBottom:7}}>
+                {SIGN_TYPES.map(([v,l])=>(
+                  <button key={v} onClick={()=>setActiveType(v)} style={{flex:1,padding:"8px 4px",borderRadius:9,border:`1.5px solid ${activeType===v?BROWN:SAND_D}`,background:activeType===v?BROWN:"#fff",color:activeType===v?"#fff":BROWN,fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{l}</button>
+                ))}
+              </div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                {signers.map(s=>(
+                  <button key={s.id} onClick={()=>setActiveSigner(s.id)} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"5px 9px",borderRadius:100,border:`1.5px solid ${activeSigner===s.id?s.color:SAND_D}`,background:activeSigner===s.id?s.color+"22":"#fff",color:BROWN,fontWeight:700,fontSize:11.5,cursor:"pointer",fontFamily:"inherit"}}>
+                    <span style={{width:9,height:9,borderRadius:5,background:s.color}}/>{(s.name||"").trim()||s.role}
+                  </button>
+                ))}
+                <button onClick={()=>setShowSigners(v=>!v)} style={{marginLeft:"auto",background:"transparent",border:"none",color:BLUE_D,fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{showSigners?"Hide signers":"Signers"}</button>
+              </div>
+              <div style={{fontSize:11.5,color:BROWN_L,marginTop:6}}>Tap a page to drop a {SIGN_SHORT[activeType]} field for {(activeS.name||"").trim()||activeS.role}, then drag to position or drag the corner to resize.</div>
+            </div>
+
+            {showSigners && <div style={{padding:"0 16px 10px"}}>
+              <div style={{border:`1px solid ${SAND_D}`,borderRadius:12,padding:"10px 12px"}}>
+                {signers.map(s=>(
+                  <div key={s.id} style={{display:"flex",alignItems:"center",gap:7,marginBottom:8}}>
+                    <span style={{width:11,height:11,borderRadius:6,background:s.color,flex:"0 0 auto"}}/>
+                    <input className="fi" value={s.name} placeholder={s.role+" name"} onChange={e=>editSigner(s.id,"name",e.target.value)} style={{flex:1,minWidth:0,padding:"8px 9px",fontSize:12.5}}/>
+                    <input className="fi" value={s.email} inputMode="email" placeholder="email" onChange={e=>editSigner(s.id,"email",e.target.value)} style={{flex:1,minWidth:0,padding:"8px 9px",fontSize:12.5}}/>
+                    {signers.length>1 && <button onClick={()=>removeSigner(s.id)} aria-label="Remove signer" style={{background:"transparent",border:"none",color:BROWN_L,fontSize:16,cursor:"pointer",padding:"0 2px",flex:"0 0 auto"}}>×</button>}
+                  </div>
+                ))}
+                <div style={{display:"flex",gap:16,marginTop:2}}>
+                  <button onClick={addSigner} style={{background:"transparent",border:"none",color:BLUE_D,fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit",padding:0}}>+ Add signer</button>
+                  <button onClick={addMe} style={{background:"transparent",border:"none",color:BLUE_D,fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit",padding:0}}>+ Add me</button>
+                </div>
+              </div>
+            </div>}
+
+            <div style={{padding:"0 16px",maxHeight:"46vh",overflowY:"auto"}}>
+              {pages.map(pg=>(
+                <div key={pg.page} data-pagewrap style={{position:"relative",width:"100%",marginBottom:12,borderRadius:8,overflow:"hidden",border:`1px solid ${SAND_D}`,background:"#fff"}}
+                  onClick={e=>{ const r=e.currentTarget.getBoundingClientRect(); addFieldAt(pg.page,(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height); }}>
+                  <img src={pg.url} alt={"Page "+pg.page} draggable={false} style={{display:"block",width:"100%",userSelect:"none"}}/>
+                  {fields.filter(f=>f.page===pg.page).map(f=>{ const s=signerOf(f.signerId); return (
+                    <div key={f.id}
+                      onPointerDown={e=>startDrag(e,f,"move")} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}
+                      onClick={e=>e.stopPropagation()}
+                      style={{position:"absolute",left:`${f.x*100}%`,top:`${f.y*100}%`,width:`${f.w*100}%`,height:`${f.h*100}%`,
+                              border:`1.5px solid ${s.color}`,background:s.color+"22",borderRadius:4,cursor:"move",touchAction:"none",boxSizing:"border-box",
+                              display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
+                      <span style={{fontSize:9,fontWeight:800,color:s.color,whiteSpace:"nowrap",pointerEvents:"none",padding:"0 3px"}}>{SIGN_SHORT[f.type]}</span>
+                      <button onClick={e=>{ e.stopPropagation(); removeField(f.id); }} onPointerDown={e=>e.stopPropagation()} aria-label="Remove field"
+                        style={{position:"absolute",top:-9,right:-9,width:18,height:18,borderRadius:9,border:"none",background:s.color,color:"#fff",fontSize:11,lineHeight:"18px",cursor:"pointer",padding:0,zIndex:2}}>×</button>
+                      <div onPointerDown={e=>startDrag(e,f,"resize")} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onClick={e=>e.stopPropagation()}
+                        style={{position:"absolute",right:-3,bottom:-3,width:14,height:14,cursor:"nwse-resize",touchAction:"none",background:s.color,borderRadius:3,border:"2px solid #fff",zIndex:2}}/>
+                    </div>
+                  );})}
+                </div>
+              ))}
+            </div>
+
+            <div style={{padding:"10px 16px 6px"}}>
+              <div style={{fontSize:12,color:BROWN_L,marginBottom:8}}>{fields.length} field{fields.length===1?"":"s"} placed · {usedCount} signer{usedCount===1?"":"s"}</div>
+              {err&&<div style={{margin:"0 0 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
+              <button className="btn-dark" style={{width:"100%",margin:0}} onClick={send} disabled={sendState==="sending"||!fields.length}>{sendState==="sending"?<><span className="sp-sm"/>Sending…</>:"Send for signing →"}</button>
+              <button onClick={resetAll} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8,marginTop:4}}>Upload a different document</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============ Tools hub ============
+// One home for the one-off document generators (not tied to a live deal).
+function ToolsSheet({ open, onClose, crm }){
+  const tiles=[
+    { k:"cal", ic:"▦", t:"Calendar of Events", d:"A one-off campaign calendar PDF", go:()=>crm.setShowCalendar(true) },
+    { k:"sched", ic:"▦", t:"Advertising schedule", d:"A one-off marketing schedule PDF", go:()=>crm.setShowSchedule(true) },
+    { k:"sign", ic:"✒", t:"Sign anything", d:"Upload any document, place fields, send to sign", go:()=>crm.setShowSign(true) },
+  ];
+  return (
+    <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
+        <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:10,right:12,width:32,height:32,borderRadius:16,border:"none",background:SAND,color:BROWN,fontSize:17,fontWeight:700,cursor:"pointer",lineHeight:"32px",zIndex:5}}>×</button>
+        <div className="hndl"/>
+        <div className="sh-ttl">Tools</div>
+        <div className="sh-sub">One-off documents, outside a live deal</div>
+        <div style={{padding:"4px 16px 18px",display:"flex",flexDirection:"column",gap:10}}>
+          {tiles.map(t=>(
+            <button key={t.k} onClick={t.go} style={{display:"flex",alignItems:"center",gap:13,textAlign:"left",background:"#fff",border:`1px solid ${SAND_D}`,borderRadius:13,padding:"14px 15px",cursor:"pointer",fontFamily:"inherit"}}>
+              <span style={{flex:"0 0 auto",width:40,height:40,borderRadius:11,background:LINEN,display:"flex",alignItems:"center",justifyContent:"center",fontSize:19,color:BROWN}}>{t.ic}</span>
+              <span style={{minWidth:0}}>
+                <span style={{display:"block",fontWeight:700,fontSize:15,color:BROWN}}>{t.t}</span>
+                <span style={{display:"block",fontSize:12.5,color:BROWN_L,marginTop:2}}>{t.d}</span>
+              </span>
+              <span style={{marginLeft:"auto",color:BROWN_L,fontSize:18}}>›</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -6843,6 +7219,9 @@ export default function App(){
   const[showAuthority,setShowAuthority]=useState(false);
   const[showCalendar,setShowCalendar]=useState(false);
   const[showProposal,setShowProposal]=useState(false);
+  const[showTools,setShowTools]=useState(false);
+  const[showSchedule,setShowSchedule]=useState(false);
+  const[showSign,setShowSign]=useState(false);
   const[showContract,setShowContract]=useState(false);
   const[showAssistant,setShowAssistant]=useState(false);
   const[showGeneral,setShowGeneral]=useState(false);
@@ -7597,7 +7976,7 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, sumStats, setSumStats, setSumStart, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setShowCalendar, setShowProposal, setBFilters, fmtDay, addNote, openOfferContract:(b)=>{ setOfferContractBuyer(b); setShowOfferContract(true); }, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
+  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, sumStats, setSumStats, setSumStart, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setShowCalendar, setShowProposal, setShowTools, setShowSchedule, setShowSign, setBFilters, fmtDay, addNote, openOfferContract:(b)=>{ setOfferContractBuyer(b); setShowOfferContract(true); }, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
@@ -7745,6 +8124,7 @@ export default function App(){
         <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
           <button onClick={()=>setShowAuthority(true)} style={{background:BROWN,border:"none",color:"#fff",fontSize:13.5,fontWeight:700,cursor:"pointer",fontFamily:"inherit",borderRadius:11,padding:"12px 24px",boxShadow:"0 4px 12px rgba(49,30,16,.18)"}}>+ New authority</button>
           <button onClick={()=>setShowContract(true)} style={{background:BLUE_D,border:"none",color:"#fff",fontSize:13.5,fontWeight:700,cursor:"pointer",fontFamily:"inherit",borderRadius:11,padding:"12px 24px",boxShadow:"0 4px 12px rgba(138,172,227,.3)"}}>+ Sign a contract</button>
+          <button onClick={()=>setShowTools(true)} style={{background:LINEN,border:`1px solid ${SAND_D}`,color:BROWN,fontSize:13.5,fontWeight:700,cursor:"pointer",fontFamily:"inherit",borderRadius:11,padding:"12px 24px"}}>⚒ Tools</button>
         </div>
         <div style={{marginTop:12}}><button onClick={()=>setShowAddListing(true)} style={{background:"transparent",border:"none",color:BROWN_L,fontSize:12.5,fontWeight:600,cursor:"pointer",textDecoration:"underline",fontFamily:"inherit",opacity:.8}}>+ Add a listing</button></div>
       </div>}
@@ -7920,6 +8300,9 @@ export default function App(){
     />
     <AuthoritySheet open={showAuthority} onClose={()=>setShowAuthority(false)} agentName={agentName}/>
     <CalendarSheet open={showCalendar} onClose={()=>setShowCalendar(false)}/>
+    <ToolsSheet open={showTools} onClose={()=>setShowTools(false)} crm={crm}/>
+    <ScheduleSheet open={showSchedule} onClose={()=>setShowSchedule(false)} agentName={agentName}/>
+    <SignAnythingSheet open={showSign} onClose={()=>setShowSign(false)} agentName={agentName}/>
     <ProposalSheet open={showProposal} onClose={()=>setShowProposal(false)} agentName={agentName}/>
     <ContractSheet open={showContract} onClose={()=>setShowContract(false)} agentName={agentName} listings={allListings}/>
 
