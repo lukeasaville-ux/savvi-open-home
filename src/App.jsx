@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v134-calendar-of-events";
+const BUILD = "v135-calendar-a4";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5390,6 +5390,11 @@ function calVariant(method, offMarket){ return (offMarket?"offmkt-":"")+(method=
 function calSnapMonday(iso){ if(!iso) return null; const d=new Date(iso+"T00:00:00"); if(isNaN(d)) return null; const dow=(d.getDay()+6)%7; d.setDate(d.getDate()-dow); return d; }
 let _calMeta=null;
 async function calMeta(){ if(!_calMeta) _calMeta=await fetch("/calendar-meta.json").then(r=>r.json()); return _calMeta; }
+// The source masters are mixed sizes (single-stage = US Letter, two-stage = A4). Normalise EVERY
+// calendar onto one A4 page (to match the marketing schedule + authority) by embedding the pristine
+// artwork scaled-to-fit and centred on a full-bleed cream page — the letterbox is invisible because
+// the artwork's background is the same cream (#FFF4D5). Dates are drawn on the A4 page at scaled coords.
+const CAL_A4W=595.28, CAL_A4H=841.89;
 async function appendCalendarPage(doc, rgb, { variant, startDate }){
   const { PDFDocument }=await import("pdf-lib");
   const fontkit=(await import("@pdf-lib/fontkit")).default;
@@ -5398,8 +5403,14 @@ async function appendCalendarPage(doc, rgb, { variant, startDate }){
   const med=await doc.embedFont(medBytes,{ subset:true });
   const baseBytes=await fetch(CAL_BASE[variant]||CAL_BASE["private-sale"]).then(r=>r.arrayBuffer());
   const src=await PDFDocument.load(baseBytes);
-  const [pg]=await doc.copyPages(src,[0]); doc.addPage(pg);
-  const H=pg.getHeight(); const INK=rgb(49/255,30/255,16/255); // #311E10
+  const sp=src.getPage(0); const nw=sp.getWidth(), nh=sp.getHeight();
+  const emb=await doc.embedPage(sp);
+  const s=Math.min(CAL_A4W/nw, CAL_A4H/nh);
+  const xoff=(CAL_A4W-nw*s)/2, yoff=(CAL_A4H-nh*s)/2;
+  const page=doc.addPage([CAL_A4W, CAL_A4H]);
+  page.drawRectangle({ x:0, y:0, width:CAL_A4W, height:CAL_A4H, color:rgb(255/255,244/255,213/255) });
+  page.drawPage(emb, { x:xoff, y:yoff, width:nw*s, height:nh*s });
+  const INK=rgb(49/255,30/255,16/255); // #311E10
   const all=await calMeta(); const meta=all[variant]||all["private-sale"];
   const mon=startDate?calSnapMonday(startDate):null;
   for(let n=1;n<=meta.days;n++){
@@ -5407,9 +5418,9 @@ async function appendCalendarPage(doc, rgb, { variant, startDate }){
     let label;
     if(mon){ const d=new Date(mon); d.setDate(d.getDate()+(n-1)); label=d.getDate()+" "+CAL_MONTHS[d.getMonth()]; }
     else label="Day "+n;
-    let size=slot.size; const maxW=meta.step-12; let w=med.widthOfTextAtSize(label,size);
+    let size=slot.size*s; const maxW=(meta.step-12)*s; let w=med.widthOfTextAtSize(label,size);
     if(w>maxW){ size=size*(maxW/w); w=med.widthOfTextAtSize(label,size); }
-    pg.drawText(label,{ x:slot.cx-w/2, y:H-slot.ty, size, font:med, color:INK });
+    page.drawText(label,{ x:xoff+slot.cx*s-w/2, y:yoff+(nh-slot.ty)*s, size, font:med, color:INK });
   }
 }
 async function buildCalendarPdf({ variant, startDate }){
