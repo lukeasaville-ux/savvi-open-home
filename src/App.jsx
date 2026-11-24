@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v136-calendar-polish";
+const BUILD = "v137-calendar-date-font";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5403,7 +5403,6 @@ async function appendCalendarPage(doc, rgb, { variant, startDate }){
   try{ doc.registerFontkit(fontkit); }catch(e){}
   const medBytes=await fetch("/fonts/NeueHaasUnicaPro-Medium.ttf").then(r=>r.arrayBuffer());
   const med=await doc.embedFont(medBytes,{ subset:true });
-  const serif=await doc.embedFont(await fetch("/fonts/Newsreader-Medium.ttf").then(r=>r.arrayBuffer()),{ subset:true });
   const baseBytes=await fetch(CAL_BASE[variant]||CAL_BASE["private-sale"]).then(r=>r.arrayBuffer());
   const src=await PDFDocument.load(baseBytes);
   const sp=src.getPage(0); const nw=sp.getWidth(), nh=sp.getHeight();
@@ -5431,14 +5430,14 @@ async function appendCalendarPage(doc, rgb, { variant, startDate }){
   page.drawRectangle({ x:0, y:yoff+(nh-21)*s, width:CAL_A4W, height:CAL_A4H-(yoff+(nh-21)*s), color:cream });
   page.drawRectangle({ x:0, y:0, width:CAL_A4W, height:yoff+21*s, color:cream });
   // auction variants with real dates: the auction date (the last Saturday) under the top-right
-  // "Auction" label, in the brand serif (Newsreader) so it matches the serif label
+  // "Auction" label, in the same font as the dates on the page (Neue Haas)
   const lbl=CAL_AUCT_LBL[variant];
   if(mon && lbl){
     const ad=new Date(mon); ad.setDate(ad.getDate()+(meta.days-2));
     const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][ad.getDay()];
     const txt=`${WD} ${ad.getDate()} ${CAL_MONTHS[ad.getMonth()]} ${ad.getFullYear()}`;
-    const asz=12.5; const aw=serif.widthOfTextAtSize(txt,asz);
-    page.drawText(txt,{ x:xoff+lbl.cx*s-aw/2, y:yoff+(nh-lbl.by)*s, size:asz, font:serif, color:INK });
+    const asz=12.5; const aw=med.widthOfTextAtSize(txt,asz);
+    page.drawText(txt,{ x:xoff+lbl.cx*s-aw/2, y:yoff+(nh-lbl.by)*s, size:asz, font:med, color:INK });
   }
 }
 async function buildCalendarPdf({ variant, startDate }){
