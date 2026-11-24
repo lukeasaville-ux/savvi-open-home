@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v133-signing-opens";
+const BUILD = "v134-calendar-of-events";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4851,7 +4851,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
     <aside className="crm-side">
       <div className="crm-brand"><img src={wordmark} alt="Savvi"/><span>CRM</span></div>
       <nav className="crm-nav">{TABS.map(t=><button key={t.k} className={tab===t.k?"on":""} onClick={()=>{ setSel(null); setTab(t.k); }}><span className="ic">{t.ic}</span>{t.l}{t.ct?<span className="ct">{t.ct}</span>:null}</button>)}</nav>
-      <div style={{marginTop:14}} className="crm-nav"><button onClick={()=>crm.setShowAuthority(true)}><span className="ic">✎</span>New authority</button><button onClick={()=>crm.setShowContract(true)}><span className="ic">✍</span>Sign a contract</button><button onClick={()=>crm.setShowGeneral(true)}><span className="ic">✦</span>General enquiry</button><button onClick={()=>crm.setShowAddListing(true)}><span className="ic">+</span>Add listing</button></div>
+      <div style={{marginTop:14}} className="crm-nav"><button onClick={()=>crm.setShowAuthority(true)}><span className="ic">✎</span>New authority</button><button onClick={()=>crm.setShowContract(true)}><span className="ic">✍</span>Sign a contract</button><button onClick={()=>crm.setShowGeneral(true)}><span className="ic">✦</span>General enquiry</button><button onClick={()=>crm.setShowAddListing(true)}><span className="ic">+</span>Add listing</button><button onClick={()=>crm.setShowCalendar(true)}><span className="ic">▦</span>Calendar of Events</button></div>
       <div className="crm-side-foot">
         <div className="crm-agent"><div className="av" style={{background:crmColor(agentName)}}>{crmInitials(agentName)}</div><div><div className="nm">{AGENT_FULL[agentName]||agentName}</div><div className="sub">{indexing?"Syncing CRM…":index?`Synced ${crmAgo(new Date(indexAt).toISOString())}`:"Loading CRM…"}</div></div></div>
         <div style={{display:"flex",gap:4}}><button className="crm-linkbtn" onClick={()=>loadIndex(true)}>↻ Sync now</button><button className="crm-linkbtn" style={{marginLeft:"auto"}} onClick={onLogout}>Log out</button></div>
@@ -5376,6 +5376,114 @@ async function appendSchedulePage(doc,rgb,{ propertyAddr, campaignName, sched, i
     draw(548.8,s.subFy,money(sub),true); total+=sub;
   }
   draw(527.85,710.3,money(total),true);                        // Total
+}
+
+// ============ Calendar of Events ============
+// Fill the REAL Canva artwork (4 variant masters in /public) with dates or Day numbers — do NOT
+// rebuild the calendar in HTML, the PP Editorial serif banners only exist inside these PDFs. Each
+// day cell gets either the real date (campaign start snapped to the Monday of that week) or "Day N",
+// centred in the cell, in Neue Haas Medium (the artwork's own day-label font), at the original baseline.
+const CAL_BASE = { "auction":"/calendar-auction-base.pdf", "private-sale":"/calendar-private-sale-base.pdf", "offmkt-auction":"/calendar-offmkt-auction-base.pdf", "offmkt-private":"/calendar-offmkt-private-base.pdf" };
+const CAL_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const CAL_LABEL = { "private-sale":"Private Sale · 5 weeks", "auction":"Auction · 5 weeks", "offmkt-private":"Off Market + Private Sale · 6 weeks", "offmkt-auction":"Off Market + Auction · 6 weeks" };
+function calVariant(method, offMarket){ return (offMarket?"offmkt-":"")+(method==="auction"?"auction":"private-sale"); }
+function calSnapMonday(iso){ if(!iso) return null; const d=new Date(iso+"T00:00:00"); if(isNaN(d)) return null; const dow=(d.getDay()+6)%7; d.setDate(d.getDate()-dow); return d; }
+let _calMeta=null;
+async function calMeta(){ if(!_calMeta) _calMeta=await fetch("/calendar-meta.json").then(r=>r.json()); return _calMeta; }
+async function appendCalendarPage(doc, rgb, { variant, startDate }){
+  const { PDFDocument }=await import("pdf-lib");
+  const fontkit=(await import("@pdf-lib/fontkit")).default;
+  try{ doc.registerFontkit(fontkit); }catch(e){}
+  const medBytes=await fetch("/fonts/NeueHaasUnicaPro-Medium.ttf").then(r=>r.arrayBuffer());
+  const med=await doc.embedFont(medBytes,{ subset:true });
+  const baseBytes=await fetch(CAL_BASE[variant]||CAL_BASE["private-sale"]).then(r=>r.arrayBuffer());
+  const src=await PDFDocument.load(baseBytes);
+  const [pg]=await doc.copyPages(src,[0]); doc.addPage(pg);
+  const H=pg.getHeight(); const INK=rgb(49/255,30/255,16/255); // #311E10
+  const all=await calMeta(); const meta=all[variant]||all["private-sale"];
+  const mon=startDate?calSnapMonday(startDate):null;
+  for(let n=1;n<=meta.days;n++){
+    const slot=meta.slots[String(n)]; if(!slot) continue;
+    let label;
+    if(mon){ const d=new Date(mon); d.setDate(d.getDate()+(n-1)); label=d.getDate()+" "+CAL_MONTHS[d.getMonth()]; }
+    else label="Day "+n;
+    let size=slot.size; const maxW=meta.step-12; let w=med.widthOfTextAtSize(label,size);
+    if(w>maxW){ size=size*(maxW/w); w=med.widthOfTextAtSize(label,size); }
+    pg.drawText(label,{ x:slot.cx-w/2, y:H-slot.ty, size, font:med, color:INK });
+  }
+}
+async function buildCalendarPdf({ variant, startDate }){
+  const { PDFDocument, rgb }=await import("pdf-lib");
+  const doc=await PDFDocument.create();
+  await appendCalendarPage(doc, rgb, { variant, startDate });
+  return doc.save();
+}
+function CalendarSheet({ open, onClose }){
+  const [method,setMethod]=useState("private-sale");  // private-sale | auction
+  const [offMarket,setOffMarket]=useState(false);     // true → add an Off Market first stage (6 weeks)
+  const [useDates,setUseDates]=useState(true);        // real dates vs plain Day 1…N
+  const [startDate,setStartDate]=useState("");
+  const [addr,setAddr]=useState("");
+  const [busy,setBusy]=useState(false);
+  const [err,setErr]=useState("");
+  const [pdfUrl,setPdfUrl]=useState(null);
+  const variant=calVariant(method,offMarket);
+  const mon=(useDates&&startDate)?calSnapMonday(startDate):null;
+  const monLabel=mon?mon.toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"}):"";
+  function reset(){ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); setErr(""); }
+  function handleClose(){ reset(); onClose(); }
+  async function generate(){
+    if(useDates&&!startDate){ setErr("Pick a campaign start date, or switch to Day numbers."); return; }
+    setErr(""); setBusy(true);
+    try{
+      const bytes=await buildCalendarPdf({ variant, startDate: useDates?startDate:null });
+      const blob=new Blob([bytes],{type:"application/pdf"});
+      if(pdfUrl)URL.revokeObjectURL(pdfUrl);
+      setPdfUrl(URL.createObjectURL(blob));
+    }catch(e){ setErr("Could not generate. "+(e?.message||"")); }
+    setBusy(false);
+  }
+  const seg=(active)=>({ flex:1, padding:"10px 8px", border:"none", borderRadius:9, cursor:"pointer", fontFamily:"inherit", fontWeight:700, fontSize:13, background:active?BROWN:"transparent", color:active?"#fff":BROWN });
+  const segWrap={ display:"flex", gap:4, background:SAND, borderRadius:11, padding:4 };
+  const dlName=`Calendar of Events - ${(addr||"Savvi").replace(/[\\/:*?"<>|]/g,"")}.pdf`;
+  return (
+    <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) handleClose(); }}>
+      <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
+        <button onClick={handleClose} aria-label="Close" style={{position:"absolute",top:10,right:12,width:32,height:32,borderRadius:16,border:"none",background:SAND,color:BROWN,fontSize:17,fontWeight:700,cursor:"pointer",lineHeight:"32px",zIndex:5}}>×</button>
+        <div className="hndl"/>
+        <div className="sh-ttl">{pdfUrl?"Calendar ready":"Calendar of Events"}</div>
+        <div className="sh-sub">{pdfUrl?CAL_LABEL[variant]:"For the proposal — pick the campaign and the start date"}</div>
+        {pdfUrl ? (
+          <div style={{padding:"4px 16px 16px"}}>
+            <div style={{border:"1px solid #E7DFD3",borderRadius:10,overflow:"hidden",height:420,marginBottom:12,background:"#fff"}}>
+              <iframe title="Calendar preview" src={pdfUrl} style={{width:"100%",height:"100%",border:"none"}}/>
+            </div>
+            <a href={pdfUrl} target="_blank" rel="noreferrer" className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px"}}>Open full screen</a>
+            <a href={pdfUrl} download={dlName} className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px",background:BLUE_D}}>Download PDF</a>
+            <button onClick={()=>{ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); }} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Change the details</button>
+          </div>
+        ) : (
+          <div style={{padding:"4px 16px 16px"}}>
+            <label className="fl">Method</label>
+            <div style={segWrap}><button style={seg(method==="private-sale")} onClick={()=>setMethod("private-sale")}>Private Sale</button><button style={seg(method==="auction")} onClick={()=>setMethod("auction")}>Auction</button></div>
+            <label className="fl" style={{marginTop:14}}>Campaign shape</label>
+            <div style={segWrap}><button style={seg(!offMarket)} onClick={()=>setOffMarket(false)}>Straight to market</button><button style={seg(offMarket)} onClick={()=>setOffMarket(true)}>Off market first</button></div>
+            <div style={{fontSize:12,color:BROWN_L,marginTop:6}}>{offMarket?"6 weeks — two weeks off market, then launch.":"5 weeks from launch."}</div>
+            <label className="fl" style={{marginTop:14}}>Dates</label>
+            <div style={segWrap}><button style={seg(useDates)} onClick={()=>setUseDates(true)}>Real dates</button><button style={seg(!useDates)} onClick={()=>setUseDates(false)}>Day numbers</button></div>
+            {useDates && <div style={{marginTop:10}}>
+              <input className="fi" type="date" value={startDate} onChange={e=>setStartDate(e.target.value)}/>
+              <div style={{fontSize:12,color:BROWN_L,marginTop:6}}>{monLabel?`Day 1 lands on ${monLabel} (snapped to the Monday).`:"Pick any day that week — it snaps to the Monday."}</div>
+            </div>}
+            <label className="fl" style={{marginTop:14}}>Property (for the file name)</label>
+            <input className="fi" type="text" value={addr} onChange={e=>setAddr(e.target.value)} placeholder="e.g. 8/2 Grattan Street, Hawthorn"/>
+            {err&&<div style={{margin:"12px 0 0",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12.5}}>{err}</div>}
+            <button className="btn-dark" style={{width:"100%",marginTop:16}} onClick={generate} disabled={busy}>{busy?<><span className="sp-sm"/>Building…</>:"Generate calendar"}</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // Address autocomplete (OpenStreetMap Nominatim — keyless, CORS-enabled). Fills in
@@ -6069,6 +6177,7 @@ export default function App(){
   const[showQuickContract,setShowQuickContract]=useState(false);
   const[showAddListing,setShowAddListing]=useState(false);
   const[showAuthority,setShowAuthority]=useState(false);
+  const[showCalendar,setShowCalendar]=useState(false);
   const[showContract,setShowContract]=useState(false);
   const[showAssistant,setShowAssistant]=useState(false);
   const[showGeneral,setShowGeneral]=useState(false);
@@ -6822,7 +6931,7 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, sumStats, setSumStats, setSumStart, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setBFilters, fmtDay, addNote, openOfferContract:(b)=>{ setOfferContractBuyer(b); setShowOfferContract(true); }, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
+  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, sumStats, setSumStats, setSumStart, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setShowCalendar, setBFilters, fmtDay, addNote, openOfferContract:(b)=>{ setOfferContractBuyer(b); setShowOfferContract(true); }, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
@@ -7144,6 +7253,7 @@ export default function App(){
       }}
     />
     <AuthoritySheet open={showAuthority} onClose={()=>setShowAuthority(false)} agentName={agentName}/>
+    <CalendarSheet open={showCalendar} onClose={()=>setShowCalendar(false)}/>
     <ContractSheet open={showContract} onClose={()=>setShowContract(false)} agentName={agentName} listings={allListings}/>
 
     {/* ── SUCCESS: BUYER ADDED ── */}
