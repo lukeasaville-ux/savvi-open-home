@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v146-no-ad-schedule";
+const BUILD = "v147-single-price";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5195,8 +5195,8 @@ async function fillSaleAuthority(d){
   // Marketing Expenses payable line: strike out "*the signing of this Authority", keep "*written request".
   page.drawLine({ start:{x:157,y:H-668.0}, end:{x:269,y:H-668.0}, thickness:1, color:rgb(0,0,0) });
   const from=authMoney(d.priceFrom), to=authMoney(d.priceTo);
-  if(from) put(181,472.7,from,8);
-  if(to)   put(245,472.7,to,8);
+  if(to){ if(from) put(181,472.7,from,8); put(245,472.7,to,8); }  // range → "between $from and $to"
+  else if(from) put(88,472.7,from,8);                             // single price → "Single amount $"
   const comm=(String(d.commission||"2.75").replace(/[^0-9.]/g,""))||"2.75";
   const top=Number(String(d.priceTo||d.priceFrom||"").replace(/[^0-9]/g,""));
   // Commission: fixed $ amount OR % of sale price. The unused option is struck / "Not applicable".
@@ -5253,8 +5253,8 @@ async function fillAuctionAuthority(d){
   if(rv) put(110,423.2,Number(rv).toLocaleString("en-AU"));
   else   put(378,427.0,"X",11);                  // ☑ Vendor's reserve price to be advised (default)
   const from=authMoney(d.priceFrom), to=authMoney(d.priceTo);
-  if(from) put(181,466.7,from,8);
-  if(to)   put(245,466.7,to,8);
+  if(to){ if(from) put(181,466.7,from,8); put(245,466.7,to,8); }  // range → "between $from and $to"
+  else if(from) put(88,466.7,from,8);                             // single price → "Single amount $"
   const comm=(String(d.commission||"2.75").replace(/[^0-9.]/g,""))||"2.75";
   const top=Number(String(d.priceTo||d.priceFrom||"").replace(/[^0-9]/g,""));
   // Commission: fixed $ amount OR % of sale price. The unused option is struck / "Not applicable".
@@ -6291,6 +6291,7 @@ function AuthoritySheet({ open, onClose, agentName }){
   const [sameAddr,setSameAddr]=useState(false);
   const [priceFrom,setPriceFrom]=useState("");
   const [priceTo,setPriceTo]=useState("");
+  const [priceMode,setPriceMode]=useState("single"); // single | range (single → s47A "Single amount" box; range → "between")
   const [vendorPrice,setVendorPrice]=useState("");          // optional; blank → "to be advised"
   const [settlement,setSettlement]=useState("30 / 60");
   const [settleCustom,setSettleCustom]=useState(false);
@@ -6343,13 +6344,14 @@ function AuthoritySheet({ open, onClose, agentName }){
 
   const canCustom = /luke|madeline/i.test(agentName||"");
   function collect(){ return { id:draftId||("d"+Date.now()), savedAt:Date.now(), label:(propertyAddr||vendors[0]?.name||"Untitled authority"),
-    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, commissionType, fixedCommission, advocate, advocateName, advocateAddress, campaign, sched, itemised, authType, auctionDate, auctionTime, reserve, vendorType, entityName, entityAcn, deceasedName }; }
+    stage, vendors, vendorAddr, propertyAddr, sameAddr, priceMode, priceFrom, priceTo, vendorPrice, settlement, settleCustom, period, possession, commission, commissionType, fixedCommission, advocate, advocateName, advocateAddress, campaign, sched, itemised, authType, auctionDate, auctionTime, reserve, vendorType, entityName, entityAcn, deceasedName }; }
   function saveDraft(silent){ const f=collect(); setDraftId(f.id); const arr=loadAuthDrafts().filter(d=>d.id!==f.id); arr.unshift(f); saveAuthDrafts(arr); setDrafts(arr); if(!silent){ setSavedMsg("Draft saved"); setTimeout(()=>setSavedMsg(""),1600);} }
-  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCommissionType(d.commissionType||"percent"); setFixedCommission(d.fixedCommission||""); setAdvocate(!!d.advocate); setAdvocateName(d.advocateName||""); setAdvocateAddress(d.advocateAddress||""); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setItemised(!!d.itemised); setAuthType(d.authType||"sale"); setAuctionDate(d.auctionDate||""); setAuctionTime(d.auctionTime||""); setReserve(d.reserve||""); setVendorType(d.vendorType||"individual"); setEntityName(d.entityName||""); setEntityAcn(d.entityAcn||""); setDeceasedName(d.deceasedName||""); setStage(d.stage||"details"); }
+  function loadDraft(d){ setDraftId(d.id); setVendors(d.vendors?.length?d.vendors:[{name:"",mobile:"",email:""}]); setVendorAddr(d.vendorAddr||""); setPropertyAddr(d.propertyAddr||""); setSameAddr(!!d.sameAddr); setPriceFrom(d.priceFrom||""); setPriceTo(d.priceTo||""); setPriceMode(d.priceMode||(d.priceTo?"range":"single")); setVendorPrice(d.vendorPrice||""); setSettlement(d.settlement||"30 / 60"); setSettleCustom(!!d.settleCustom); setPeriod(d.period||"90"); setPossession(d.possession||"vacant"); setCommission(d.commission||"2.75"); setCommissionType(d.commissionType||"percent"); setFixedCommission(d.fixedCommission||""); setAdvocate(!!d.advocate); setAdvocateName(d.advocateName||""); setAdvocateAddress(d.advocateAddress||""); setCampaign(d.campaign||"hidc"); setSched(d.sched||null); setItemised(!!d.itemised); setAuthType(d.authType||"sale"); setAuctionDate(d.auctionDate||""); setAuctionTime(d.auctionTime||""); setReserve(d.reserve||""); setVendorType(d.vendorType||"individual"); setEntityName(d.entityName||""); setEntityAcn(d.entityAcn||""); setDeceasedName(d.deceasedName||""); setStage(d.stage||"details"); }
   function deleteDraft(id){ const arr=loadAuthDrafts().filter(d=>d.id!==id); saveAuthDrafts(arr); setDrafts(arr); if(draftId===id) setDraftId(null); }
-  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCommissionType("percent"); setFixedCommission(""); setAdvocate(false); setAdvocateName(""); setAdvocateAddress(""); setCampaign("hidc"); setSched(null); setShowEdit(false); setItemised(false); setAuthType("sale"); setAuctionDate(""); setAuctionTime(""); setReserve(""); setVendorType("individual"); setEntityName(""); setEntityAcn(""); setDeceasedName(""); setPeriod("90"); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
+  function resetForm(){ setDraftId(null); setStage("details"); setVendors([{name:"",mobile:"",email:""}]); setVendorAddr(""); setPropertyAddr(""); setSameAddr(false); setPriceFrom(""); setPriceTo(""); setPriceMode("single"); setVendorPrice(""); setSettlement("30 / 60"); setSettleCustom(false); setPeriod("90"); setPossession("vacant"); setCommission("2.75"); setCommissionType("percent"); setFixedCommission(""); setAdvocate(false); setAdvocateName(""); setAdvocateAddress(""); setCampaign("hidc"); setSched(null); setShowEdit(false); setItemised(false); setAuthType("sale"); setAuctionDate(""); setAuctionTime(""); setReserve(""); setVendorType("individual"); setEntityName(""); setEntityAcn(""); setDeceasedName(""); setPeriod("90"); if(pdfUrl){URL.revokeObjectURL(pdfUrl); setPdfUrl(null);} }
   function handleClose(){ if(!pdfUrl && hasData) saveDraft(true); onClose(); }
 
+  function pickPriceMode(m){ setPriceMode(m); if(m==="single") setPriceTo(""); }
   function goSchedule(){ setSched(defaultSched(postcode, band, campaign==="custom"?"hidc":campaign)); setShowEdit(false); setStage("schedule"); }
   // switch template → rebuild the default item set (preset omits); "custom" keeps the current set editable
   function pickCampaign(id){ setCampaign(id); if(!schedOff(id)&&id!=="custom") setSched(defaultSched(postcode, band, id)); if(id!=="custom") setShowEdit(false); }
@@ -6557,14 +6559,27 @@ function AuthoritySheet({ open, onClose, agentName }){
           <div style={{padding:"0 16px 10px"}}><button onClick={addV} style={{background:"transparent",border:`1px dashed #CDBFA6`,borderRadius:9,width:"100%",padding:"9px",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",fontSize:12.5}}>+ Add another {({individual:"owner",company:"director",trust:"trustee",estate:"executor"}[vendorType]||"owner")}</button></div>
           {(vendorType!=="individual"||!sameAddr)&&<div className="fg"><label className="fl">{vendorType==="company"?"Registered office":vendorType==="trust"?"Trustee's address":vendorType==="estate"?"Executor's address":"Owner's current address"}</label>
             <AddressInput value={vendorAddr} onChange={setVendorAddr} placeholder="Address for the authority"/></div>}
-          <div style={{padding:"0 16px 10px"}}><label className="fl">Price guide (advertised range)</label><div style={fieldRow}>
-            <MoneyInput value={priceFrom} onChange={setPriceFrom} placeholder="From"/>
-            <MoneyInput value={priceTo} onChange={setPriceTo} placeholder="To"/>
+          <div style={{padding:"0 16px 10px"}}>
+            <label className="fl" style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:4}}>
+              <span>Price guide</span>
+              <span style={{display:"inline-flex",border:`1px solid ${SAND_D}`,borderRadius:7,overflow:"hidden"}}>
+                <button type="button" onClick={()=>pickPriceMode("single")} style={{border:"none",padding:"1px 9px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:priceMode==="single"?BLUE_D:"#fff",color:priceMode==="single"?"#fff":BROWN_L}}>Single</button>
+                <button type="button" onClick={()=>pickPriceMode("range")} style={{border:"none",padding:"1px 9px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:priceMode==="range"?BLUE_D:"#fff",color:priceMode==="range"?"#fff":BROWN_L}}>Range</button>
+              </span>
+            </label>
+            {priceMode==="single" ? (
+              <MoneyInput value={priceFrom} onChange={setPriceFrom} placeholder="Price"/>
+            ) : (<>
+              <div style={fieldRow}>
+                <MoneyInput value={priceFrom} onChange={setPriceFrom} placeholder="From"/>
+                <MoneyInput value={priceTo} onChange={setPriceTo} placeholder="To"/>
+              </div>
+              {rangeMsg && <div style={{display:"flex",gap:8,alignItems:"center",marginTop:6}}>
+                <div style={{flex:1,fontSize:11.5,color:"#C0392B",lineHeight:1.35}}>{rangeMsg}</div>
+                {maxTo>0 && ptN>maxTo && <button onClick={()=>setPriceTo(String(maxTo))} style={{flex:"0 0 auto",background:"transparent",border:`1px solid #C0392B`,borderRadius:8,color:"#C0392B",fontWeight:600,fontSize:11.5,padding:"5px 9px",cursor:"pointer",fontFamily:"inherit"}}>Use ${maxTo.toLocaleString("en-AU")}</button>}
+              </div>}
+            </>)}
           </div>
-          {rangeMsg && <div style={{display:"flex",gap:8,alignItems:"center",marginTop:6}}>
-            <div style={{flex:1,fontSize:11.5,color:"#C0392B",lineHeight:1.35}}>{rangeMsg}</div>
-            {maxTo>0 && ptN>maxTo && <button onClick={()=>setPriceTo(String(maxTo))} style={{flex:"0 0 auto",background:"transparent",border:`1px solid #C0392B`,borderRadius:8,color:"#C0392B",fontWeight:600,fontSize:11.5,padding:"5px 9px",cursor:"pointer",fontFamily:"inherit"}}>Use ${maxTo.toLocaleString("en-AU")}</button>}
-          </div>}</div>
           {authType==="auction" ? (
             <>
               <div style={{padding:"0 16px 10px"}}><div style={fieldRow}>
