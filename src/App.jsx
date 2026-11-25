@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v152-void-dragdrop";
+const BUILD = "v153-autofile-calcs";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5710,6 +5710,49 @@ function ScheduleSheet({ open, onClose, agentName }){
   );
 }
 
+// ============ Address matching — tie a signed doc to a listing ============
+// Read the address off an uploaded PDF and match it to a listing, tolerating ranges
+// (154-164 vs 154), street-type abbreviations (Road vs Rd), and units (5/124 vs 7/124).
+const _ADDR_TYPE=[["road","rd"],["street","st"],["avenue","ave"],["av","ave"],["parade","pde"],["court","ct"],["place","pl"],["drive","dr"],["lane","ln"],["terrace","tce"],["crescent","cres"],["cr","cres"],["boulevard","blvd"],["highway","hwy"],["grove","gr"],["close","cl"]];
+function _normType(s){ let t=" "+s+" "; for(const [a,b] of _ADDR_TYPE) t=t.replace(new RegExp("\\b"+a+"\\b","g"),b); return t.replace(/\s+/g," ").trim(); }
+function _addrParts(addr){
+  const raw=_normType(String(addr||"").toLowerCase().replace(/,/g," ").replace(/\s+/g," ").trim());
+  const unitM=raw.match(/^(\d+[a-z]?)\s*\/\s*/); const unit=unitM?unitM[1]:"";
+  const after=raw.replace(/^\d+[a-z]?\s*\/\s*/,"");
+  const rangeM=after.match(/^(\d+)\s*[-–]\s*(\d+)\b/); const singM=after.match(/^(\d+)[a-z]?\b/);
+  let num=null,rest=after;
+  if(rangeM){ num=+rangeM[1]; rest=after.slice(rangeM[0].length); }
+  else if(singM){ num=+singM[1]; rest=after.slice(singM[0].length); }
+  const street=(rest.trim().split(" ").filter(Boolean)[0])||"";
+  return {unit,num,street};
+}
+function _docHit(docNorm,P){
+  if(!P.num||!P.street) return null;
+  let from=0;
+  while(true){ const j=docNorm.indexOf(P.street,from); if(j<0) break; from=j+P.street.length;
+    const pre=docNorm.slice(Math.max(0,j-20),j);
+    const rm=pre.match(/(\d+)\s*[-–]\s*(\d+)[a-z]?\s*$/); const sm=pre.match(/(\d+)[a-z]?\s*$/);
+    let ok=false;
+    if(rm){ const lo=Math.min(+rm[1],+rm[2]),hi=Math.max(+rm[1],+rm[2]); if(P.num>=lo&&P.num<=hi) ok=true; }
+    else if(sm){ if(+sm[1]===P.num) ok=true; }
+    if(ok){ let unitOk=false; if(P.unit){ const up=docNorm.slice(Math.max(0,j-28),j); if(new RegExp("\\b"+P.unit+"\\s*/\\s*\\d").test(up)||new RegExp("unit\\s*"+P.unit+"\\b").test(up)) unitOk=true; } return {unitOk}; } }
+  return null;
+}
+// → { match:listing|null, ambiguous:bool, candidates:[listing] }
+function matchListingToDoc(docText, listings){
+  const dn=_normType(String(docText||"").toLowerCase().replace(/\s+/g," "));
+  const scored=[];
+  for(const L of (listings||[])){ if(!L||!L.address) continue; const P=_addrParts(L.address); const h=_docHit(dn,P); if(!h) continue;
+    const sub=String(L.suburb||"").toLowerCase().trim(); const subOk=sub?dn.includes(sub):false;
+    const score=2+(subOk?2:0)+(P.unit?(h.unitOk?2:-2):0);
+    scored.push({L,score,subOk,unitOk:h.unitOk,hasUnit:!!P.unit}); }
+  scored.sort((a,b)=>b.score-a.score);
+  if(!scored.length) return {match:null,ambiguous:false,candidates:[]};
+  const top=scored[0]; const tie=scored.filter(s=>s.score===top.score);
+  const confident=tie.length===1 && top.subOk && (!top.hasUnit||top.unitOk) && top.score>=4;
+  return confident?{match:top.L,ambiguous:false,candidates:scored.map(s=>s.L)}:{match:null,ambiguous:true,candidates:scored.slice(0,6).map(s=>s.L)};
+}
+
 // ============ Sign anything (Tools) ============
 // Upload ANY PDF, drop signature / initials / date / text fields onto the pages by hand,
 // add the signers, and send for e-signing through the same DocuSeal backend the authority
@@ -5719,7 +5762,7 @@ const SIGN_COLORS=["#5A7FBF","#FE5310","#2D8A5E","#8A5CC4","#C0392B","#0E7C86"];
 const SIGN_TYPES=[["signature","Signature"],["initials","Initials"],["date","Date"],["text","Text"]];
 const SIGN_SHORT={ signature:"Sign", initials:"Initials", date:"Date", text:"Text" };
 const SIGN_DEF={ signature:{w:0.30,h:0.045}, initials:{w:0.12,h:0.045}, date:{w:0.20,h:0.032}, text:{w:0.30,h:0.034} };
-function SignAnythingSheet({ open, onClose, agentName }){
+function SignAnythingSheet({ open, onClose, agentName, listings=[] }){
   const [stage,setStage]=useState("upload");   // upload | place
   const [fileName,setFileName]=useState("");
   const [pdfBytes,setPdfBytes]=useState(null);
@@ -5733,10 +5776,15 @@ function SignAnythingSheet({ open, onClose, agentName }){
   const [sendState,setSendState]=useState("idle");
   const [showSigners,setShowSigners]=useState(true);
   const [dragOver,setDragOver]=useState(false);
+  const [attachTo,setAttachTo]=useState(null);           // {id,address,suburb} — signed doc files to this listing's contract on completion
+  const [attachAuto,setAttachAuto]=useState(false);      // true = we matched it from the PDF (vs picked by hand)
+  const [attachCandidates,setAttachCandidates]=useState([]);
+  const [showAttachPicker,setShowAttachPicker]=useState(false);
+  const [attachQ,setAttachQ]=useState("");
   const dragRef=useRef(null);
   const fileRef=useRef(null);
 
-  function resetAll(){ setPdfBytes(null); setPages([]); setFields([]); setFileName(""); setStage("upload"); setErr(""); setSendState("idle"); setSigners([{id:"s1",role:"Signer 1",name:"",email:"",color:SIGN_COLORS[0]}]); setActiveSigner("s1"); setActiveType("signature"); }
+  function resetAll(){ setPdfBytes(null); setPages([]); setFields([]); setFileName(""); setStage("upload"); setErr(""); setSendState("idle"); setSigners([{id:"s1",role:"Signer 1",name:"",email:"",color:SIGN_COLORS[0]}]); setActiveSigner("s1"); setActiveType("signature"); setAttachTo(null); setAttachAuto(false); setAttachCandidates([]); setShowAttachPicker(false); setAttachQ(""); }
 
   async function processFile(f){
     if(!f) return;
@@ -5749,6 +5797,14 @@ function SignAnythingSheet({ open, onClose, agentName }){
       const mod=await import("./contractDetect.js");
       const imgs=await mod.renderPageImages(buf.slice(0));   // slice: pdf.js detaches the buffer it is handed
       setPages(imgs); setStage("place");
+      // Read the address off the PDF and match it to a listing, so the signed copy auto-files.
+      try{
+        const ex=await mod.extractPages(buf.slice(0));
+        const txt=(ex.pages||[]).slice(0,3).map(pg=>(pg.items||[]).map(i=>i.str).join(" ")).join("\n");
+        const mm=matchListingToDoc(txt, listings||[]);
+        if(mm.match){ setAttachTo({id:mm.match.id,address:mm.match.address,suburb:mm.match.suburb}); setAttachAuto(true); setShowAttachPicker(false); setAttachCandidates([]); }
+        else { setAttachTo(null); setAttachAuto(false); setAttachCandidates(mm.candidates||[]); setShowAttachPicker(!!mm.ambiguous); }
+      }catch(_e){}
     }catch(e){ setErr("Could not read that PDF. "+(e?.message||"")); }
     setRendering(false);
     if(fileRef.current) fileRef.current.value="";
@@ -5805,8 +5861,9 @@ function SignAnythingSheet({ open, onClose, agentName }){
       const submitters=used.map(s=>({ role:s.role, name:s.name.trim(), email:s.email.trim() }));
       const docBase=(fileName||"Document").replace(/\.pdf$/i,"");
       const full=AGENT_FULL[agentName]||agentName||""; const agEmail=AGENT_EMAIL[full]||"";
-      const distribution={ kind:"document", docName:docBase, address:docBase, agentName:full, agentEmail:agEmail, notifyEmail:agEmail };
-      const r=await call("sendToSign",{ name:docBase, typeName:docBase, docName:(fileName||"document.pdf"), propertyAddr:"", pdfBase64:u8ToB64(pdfBytes), fields:fieldsPayload, submitters, kind:"document", agentName:full, agentEmail:agEmail, distribution });
+      const fileTo = attachTo ? { propertyId:attachTo.id, fileToListing:true, listingAddress:attachTo.address } : {};
+      const distribution={ kind:"document", docName:docBase, address:(attachTo?attachTo.address:docBase), agentName:full, agentEmail:agEmail, notifyEmail:agEmail, ...fileTo };
+      const r=await call("sendToSign",{ name:docBase, typeName:docBase, docName:(fileName||"document.pdf"), propertyAddr:(attachTo?attachTo.address:""), pdfBase64:u8ToB64(pdfBytes), fields:fieldsPayload, submitters, kind:"document", agentName:full, agentEmail:agEmail, distribution });
       if(r&&r.ok){ setSendState("sent"); }
       else { setSendState("idle"); setErr("Could not send. "+(r?.error||"please try again")); }
     }catch(e){ setSendState("idle"); setErr("Could not send. "+(e?.message||"")); }
@@ -5903,6 +5960,37 @@ function SignAnythingSheet({ open, onClose, agentName }){
 
             <div style={{padding:"10px 16px 6px"}}>
               <div style={{fontSize:12,color:BROWN_L,marginBottom:8}}>{fields.length} field{fields.length===1?"":"s"} placed · {usedCount} signer{usedCount===1?"":"s"}</div>
+              <div style={{margin:"0 0 10px",border:`1px solid ${SAND_D}`,borderRadius:11,padding:"11px 12px",background:LINEN}}>
+                {attachTo ? (
+                  <div>
+                    <div style={{fontSize:12.5,color:BROWN,fontWeight:700,lineHeight:1.4}}><span style={{color:"#1E7A46"}}>✓</span> When signed, this saves to <span style={{fontWeight:800}}>{attachTo.address}</span> as the listing's contract.</div>
+                    <div style={{fontSize:11.5,color:BROWN_L,marginTop:3}}>{attachAuto?"Matched from the document — change it if that's not right.":"Chosen by you."}</div>
+                    <div style={{display:"flex",gap:14,marginTop:7}}>
+                      <button onClick={()=>{ setShowAttachPicker(true); setAttachQ(""); }} style={{background:"transparent",border:"none",color:BLUE_D,fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit",padding:0}}>Change listing</button>
+                      <button onClick={()=>{ setAttachTo(null); setAttachAuto(false); setShowAttachPicker(false); }} style={{background:"transparent",border:"none",color:BROWN_L,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit",padding:0}}>Don't save to a listing</button>
+                    </div>
+                  </div>
+                ) : showAttachPicker ? (
+                  <div>
+                    <div style={{fontSize:12.5,color:BROWN,fontWeight:700,marginBottom:6}}>Save to which listing when signed?</div>
+                    <input className="fi" value={attachQ} onChange={e=>setAttachQ(e.target.value)} placeholder="Search listings by address…" style={{padding:"8px 10px",fontSize:12.5,marginBottom:6}}/>
+                    <div style={{maxHeight:150,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+                      {(listings||[]).filter(L=>{ const q=attachQ.trim().toLowerCase(); return !q || `${L.address} ${L.suburb||""}`.toLowerCase().includes(q); }).slice(0,8).map(L=>(
+                        <button key={L.id} onClick={()=>{ setAttachTo({id:L.id,address:L.address,suburb:L.suburb}); setAttachAuto(false); setShowAttachPicker(false); }} style={{textAlign:"left",background:"#fff",border:`1px solid ${SAND_D}`,borderRadius:8,padding:"8px 10px",cursor:"pointer",fontFamily:"inherit"}}>
+                          <span style={{display:"block",fontWeight:700,fontSize:12.5,color:BROWN}}>{L.address}</span>
+                          <span style={{display:"block",fontSize:11,color:BROWN_L}}>{L.suburb}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <button onClick={()=>setShowAttachPicker(false)} style={{background:"transparent",border:"none",color:BROWN_L,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit",padding:"6px 0 0"}}>Cancel</button>
+                  </div>
+                ) : (
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+                    <div style={{fontSize:12.5,color:BROWN_L,minWidth:0}}>Not saved to a listing.{attachCandidates.length?" Couldn't auto-match the address.":""}</div>
+                    <button onClick={()=>{ setShowAttachPicker(true); setAttachQ(""); }} style={{flex:"0 0 auto",background:"#fff",border:`1.5px solid ${BLUE}`,color:BLUE_D,fontWeight:700,fontSize:12,borderRadius:8,padding:"7px 11px",cursor:"pointer",fontFamily:"inherit"}}>Save to a listing</button>
+                  </div>
+                )}
+              </div>
               {err&&<div style={{margin:"0 0 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
               <button className="btn-dark" style={{width:"100%",margin:0}} onClick={send} disabled={sendState==="sending"||!fields.length}>{sendState==="sending"?<><span className="sp-sm"/>Sending…</>:"Send for signing →"}</button>
               <button onClick={resetAll} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8,marginTop:4}}>Upload a different document</button>
@@ -5991,7 +6079,7 @@ function ToolsSheet({ open, onClose, crm }){
     { k:"sched", ic:"▦", t:"Advertising schedule", d:"A one-off marketing schedule PDF", go:()=>crm.setShowSchedule(true) },
     { k:"sign", ic:"✒", t:"Sign anything", d:"Upload any document, place fields, send to sign", go:()=>crm.setShowSign(true) },
     { k:"void", ic:"⊘", t:"Sent to sign", d:"See documents out for signature, and void any sent in error", go:()=>crm.setShowSignouts(true) },
-    { k:"calc", ic:"$", t:"Calculators", d:"Stamp duty, net proceeds, repayments, yield, timeline, grant", go:()=>crm.setShowCalc(true) },
+    { k:"calc", ic:"$", t:"Calculators", d:"Stamp duty, vacant vs tenanted, repayments, yield", go:()=>crm.setShowCalc(true) },
   ];
   return (
     <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
@@ -6046,7 +6134,6 @@ function dutyFHB(v){ // first home buyer
   return dutyGeneral(v);
 }
 // ---- shared calculator helpers ----
-function addBusinessDays(dt,n){ const r=new Date(dt); let a=0; while(a<n){ r.setDate(r.getDate()+1); const w=r.getDay(); if(w!==0&&w!==6) a++; } return r; }
 const calcMoney=v=>"$"+Math.round(Number(v)||0).toLocaleString("en-AU");
 const calcNum=v=>Number(String(v==null?"":v).replace(/[^0-9.]/g,""))||0;
 function calcSeg(active){ return { flex:1, padding:"9px 6px", border:`1.5px solid ${active?BROWN:SAND_D}`, borderRadius:10, cursor:"pointer", fontFamily:"inherit", fontWeight:700, fontSize:12.5, background:active?BROWN:"#fff", color:active?"#fff":BROWN }; }
@@ -6116,32 +6203,69 @@ function DutyPanel(){
   </>);
 }
 
-// 2) Vendor net proceeds
+// 2) Investor: sell vacant & staged (on-market) vs tenant in place (off-market)
+// Answers "what's the difference" for a landlord weighing a styled on-market campaign
+// (staging + advertising + holding costs while the place sits vacant) against keeping
+// the tenant and selling quietly off-market with the rent still coming in.
 function NetProceedsPanel(){
-  const [price,setPrice]=useState("");
+  const [priceVac,setPriceVac]=useState("");
+  const [priceTen,setPriceTen]=useState("");
   const [commPct,setCommPct]=useState("2");
-  const [marketing,setMarketing]=useState("");
-  const [payout,setPayout]=useState("");
-  const [other,setOther]=useState("");
-  const p=calcNum(price), cp=calcNum(commPct);
-  const comm=p*cp/100, mk=calcNum(marketing), po=calcNum(payout), ot=calcNum(other);
-  const net=p-comm-mk-po-ot;
-  const netFmt=p<=0?"—":(net<0?"−"+calcMoney(-net):calcMoney(net));
+  const [staging,setStaging]=useState("3500");
+  const [advertising,setAdvertising]=useState("8372");
+  const [repay,setRepay]=useState("");
+  const [rent,setRent]=useState("");
+  const [days,setDays]=useState(60);
+  const pv=calcNum(priceVac), pt=calcNum(priceTen), cp=calcNum(commPct);
+  const months=Number(days)/30.44, weeks=Number(days)/7;
+  const stg=calcNum(staging), adv=calcNum(advertising), rp=calcNum(repay), rnt=calcNum(rent);
+  const commV=pv*cp/100, commT=pt*cp/100;
+  const holding=rp*months;            // mortgage paid while vacant (no rent coming in)
+  const rentKept=rnt*weeks;           // rent the tenant keeps paying through to settlement
+  const netVac = pv>0 ? pv-commV-stg-adv-holding : 0;
+  const netTen = pt>0 ? pt-commT+rentKept : 0;
+  const diff = netVac-netTen;
+  const ready = pv>0 && pt>0;
+  const diffFmt = !ready?"—":(diff<0?"−"+calcMoney(-diff):"+"+calcMoney(diff));
+  const money=v=>v<0?"−"+calcMoney(-v):calcMoney(v);
   return (<>
-    <label className="fl">Sale price</label>
-    <MoneyInput value={price} onChange={setPrice} placeholder="$900,000"/>
-    <label className="fl" style={{marginTop:14}}>Commission (% inc GST)</label>
-    <input style={calcInput} inputMode="decimal" value={commPct} onChange={e=>setCommPct(e.target.value)} placeholder="2"/>
-    <label className="fl" style={{marginTop:14}}>Marketing / advertising</label>
-    <MoneyInput value={marketing} onChange={setMarketing} placeholder="$ optional"/>
-    <label className="fl" style={{marginTop:14}}>Loan / mortgage payout</label>
-    <MoneyInput value={payout} onChange={setPayout} placeholder="$ optional"/>
-    <label className="fl" style={{marginTop:14}}>Other costs (legal, adjustments)</label>
-    <MoneyInput value={other} onChange={setOther} placeholder="$ optional"/>
+    <div style={{fontSize:12.5,fontWeight:700,color:BROWN,margin:"2px 0 8px"}}>Vacant &amp; staged — on market</div>
+    <label className="fl">Expected sale price</label>
+    <MoneyInput value={priceVac} onChange={setPriceVac} placeholder="$950,000"/>
+    <div style={{display:"flex",gap:10,marginTop:12}}>
+      <div style={{flex:1}}><label className="fl">Staging</label><MoneyInput value={staging} onChange={setStaging} placeholder="$3,500"/></div>
+      <div style={{flex:1}}><label className="fl">Advertising</label><MoneyInput value={advertising} onChange={setAdvertising} placeholder="$8,372"/></div>
+    </div>
+    <div style={{fontSize:12.5,fontWeight:700,color:BROWN,margin:"18px 0 8px"}}>Tenant in place — off market</div>
+    <label className="fl">Expected sale price</label>
+    <MoneyInput value={priceTen} onChange={setPriceTen} placeholder="$900,000"/>
+    <label className="fl" style={{marginTop:12}}>Weekly rent (kept until settlement)</label>
+    <MoneyInput value={rent} onChange={setRent} placeholder="$650"/>
+    <div style={{borderTop:`1px solid ${SAND_D}`,margin:"18px 0 0",paddingTop:14}}/>
+    <div style={{display:"flex",gap:10}}>
+      <div style={{flex:1}}><label className="fl">Commission (% inc GST)</label><input style={calcInput} inputMode="decimal" value={commPct} onChange={e=>setCommPct(e.target.value)} placeholder="2"/></div>
+      <div style={{flex:1}}><label className="fl">Monthly repayment</label><MoneyInput value={repay} onChange={setRepay} placeholder="$ holding cost"/></div>
+    </div>
+    <label className="fl" style={{marginTop:14}}>Days vacant (campaign + settlement)</label>
+    <div style={{display:"flex",gap:6}}>
+      {[30,60,90].map(d=><button key={d} style={calcSeg(Number(days)===d)} onClick={()=>setDays(d)}>{d} days</button>)}
+    </div>
     <ResultCard
-      rows={[ ["Sale price", p>0?calcMoney(p):"—"], ["Commission ("+(cp||0)+"%)", comm>0?"− "+calcMoney(comm):"—"], mk>0&&["Marketing","− "+calcMoney(mk)], po>0&&["Loan payout","− "+calcMoney(po)], ot>0&&["Other","− "+calcMoney(ot)] ]}
-      label="Net to vendor" value={netFmt}/>
-    <Disc>Estimate only. Commission is shown inclusive of GST. It excludes discharge fees, rate and owners corporation adjustments at settlement, and any GST on the sale itself.</Disc>
+      rows={[
+        ["Vacant & staged — net", ready?money(netVac):"—", true],
+        ["Tenant in place — net", ready?money(netTen):"—", true],
+        stg>0&&["  Staging","− "+calcMoney(stg)],
+        adv>0&&["  Advertising","− "+calcMoney(adv)],
+        rp>0&&["  Holding ("+Math.round(days)+" days vacant)","− "+calcMoney(holding)],
+        rnt>0&&["  Rent kept (tenanted)","+ "+calcMoney(rentKept)]
+      ]}
+      label={ready?(diff>=0?"Vacant & staged ahead by":"Tenant in place ahead by"):"Difference"} value={diffFmt}/>
+    {ready&&<div style={{fontSize:12,color:diff>=0?GRN:BROWN,marginTop:8,lineHeight:1.45,fontWeight:600}}>
+      {diff>=0
+        ? "Going vacant and staged nets "+calcMoney(diff)+" more, after staging, advertising and "+Math.round(days)+" days of holding costs with no rent."
+        : "Keeping the tenant and selling off market nets "+calcMoney(-diff)+" more once staging, advertising and the vacant holding costs are counted."}
+    </div>}
+    <Disc>Estimate only. Commission is shown inclusive of GST. Repayments are counted as a holding cost only for the vacant scenario, where no rent is coming in; under the tenanted scenario the rent is kept through to settlement. It excludes discharge fees, rate and owners corporation adjustments, and any difference in days on market.</Disc>
   </>);
 }
 
@@ -6196,72 +6320,9 @@ function YieldPanel(){
   </>);
 }
 
-// 5) Deposit, cooling-off and settlement timeline
-function TimelinePanel(){
-  const iso=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-  const [price,setPrice]=useState("");
-  const [depPct,setDepPct]=useState("10");
-  const [cdate,setCdate]=useState(iso(new Date()));
-  const [days,setDays]=useState(60);
-  const p=calcNum(price), dp=calcNum(depPct);
-  const deposit=p*dp/100;
-  const parts=(cdate||"").split("-").map(Number);
-  const base=(parts.length===3&&parts[0])?new Date(parts[0],parts[1]-1,parts[2]):null;
-  const fmt=d=>d?d.toLocaleDateString("en-AU",{weekday:"short",day:"numeric",month:"short",year:"numeric"}):"—";
-  const cool=base?addBusinessDays(base,3):null;
-  const settle=base?(()=>{ const s=new Date(base); s.setDate(s.getDate()+Number(days)); return s; })():null;
-  return (<>
-    <label className="fl">Price</label>
-    <MoneyInput value={price} onChange={setPrice} placeholder="$750,000"/>
-    <div style={{display:"flex",gap:10,marginTop:14}}>
-      <div style={{flex:1}}><label className="fl">Deposit (%)</label><input style={calcInput} inputMode="decimal" value={depPct} onChange={e=>setDepPct(e.target.value)} placeholder="10"/></div>
-      <div style={{flex:1.3}}><label className="fl">Contract date</label><input type="date" style={calcInput} value={cdate} onChange={e=>setCdate(e.target.value)}/></div>
-    </div>
-    <label className="fl" style={{marginTop:14}}>Settlement period</label>
-    <div style={{display:"flex",gap:6}}>
-      {[30,60,90].map(d=><button key={d} style={calcSeg(Number(days)===d)} onClick={()=>setDays(d)}>{d} days</button>)}
-    </div>
-    <ResultCard
-      rows={[ ["Deposit ("+(dp||0)+"%)", p>0?calcMoney(deposit):"—", true], ["Cooling-off ends", fmt(cool)] ]}
-      label="Settlement" value={fmt(settle)} vSize={15}/>
-    <Disc>Cooling-off is 3 clear business days on a private sale, and public holidays can extend it. It does not apply at auction, within 3 clear business days either side of a public auction, or where the buyer has had independent legal advice. Confirm all dates with the conveyancer.</Disc>
-  </>);
-}
-
-// 6) First Home Owner Grant (VIC)
-function GrantPanel(){
-  const [price,setPrice]=useState("");
-  const [kind,setKind]=useState("new");   // new | established
-  const [first,setFirst]=useState(true);
-  const p=calcNum(price);
-  let eligible=false, reason="";
-  if(kind==="established"){ reason="The grant applies to newly built homes only. Established homes are not eligible."; }
-  else if(!first){ reason="The grant is for first home buyers who have not owned property in Australia before."; }
-  else if(p>750000){ reason="The home must be valued at $750,000 or less. Above that the grant does not apply."; }
-  else if(p<=0){ reason="Enter the price of the new home to check eligibility."; }
-  else { eligible=true; reason="Likely eligible for the $10,000 First Home Owner Grant."; }
-  return (<>
-    <label className="fl">Home value</label>
-    <MoneyInput value={price} onChange={setPrice} placeholder="$650,000"/>
-    <label className="fl" style={{marginTop:14}}>Home type</label>
-    <div style={{display:"flex",gap:6}}>
-      <button style={calcSeg(kind==="new")} onClick={()=>setKind("new")}>Newly built</button>
-      <button style={calcSeg(kind==="established")} onClick={()=>setKind("established")}>Established</button>
-    </div>
-    <label style={{display:"flex",alignItems:"center",gap:9,marginTop:14,fontSize:13.5,color:BROWN,cursor:"pointer"}}>
-      <input type="checkbox" checked={first} onChange={e=>setFirst(e.target.checked)} style={{width:18,height:18,accentColor:BLUE_D}}/>
-      First home buyer (never owned property)
-    </label>
-    <ResultCard rows={[ ["Home value", p>0?calcMoney(p):"—"], ["Home type", kind==="new"?"Newly built":"Established"] ]}
-      label={eligible?"Grant":"Not eligible"} value={eligible?"$10,000":"—"}/>
-    <div style={{fontSize:12,color:eligible?GRN:BROWN,marginTop:8,lineHeight:1.45,fontWeight:600}}>{reason}</div>
-    <Disc>Guide only. Eligibility also depends on Australian residency or citizenship and living in the home for 12 months. The $10,000 grant is for new homes valued up to $750,000. Confirm with the SRO.</Disc>
-  </>);
-}
-
 function CalculatorsSheet({ open, onClose }){
   const [tab,setTab]=useState("duty");
-  const TABS=[["duty","Stamp duty"],["net","Net proceeds"],["repay","Repayments"],["yield","Yield"],["timeline","Timeline"],["grant","Grant"]];
+  const TABS=[["duty","Stamp duty"],["net","Vacant vs tenanted"],["repay","Repayments"],["yield","Yield"]];
   return (
     <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
       <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
@@ -6277,8 +6338,6 @@ function CalculatorsSheet({ open, onClose }){
           {tab==="net"&&<NetProceedsPanel/>}
           {tab==="repay"&&<RepaymentPanel/>}
           {tab==="yield"&&<YieldPanel/>}
-          {tab==="timeline"&&<TimelinePanel/>}
-          {tab==="grant"&&<GrantPanel/>}
         </div>
       </div>
     </div>
@@ -8694,10 +8753,10 @@ export default function App(){
       }}
     />
     <AuthoritySheet open={showAuthority} onClose={()=>setShowAuthority(false)} agentName={agentName}/>
-    <CalendarSheet open={showCalendar} onClose={()=>setShowCalendar(false)}/>
     <ToolsSheet open={showTools} onClose={()=>setShowTools(false)} crm={crm}/>
+    <CalendarSheet open={showCalendar} onClose={()=>setShowCalendar(false)}/>
     <ScheduleSheet open={showSchedule} onClose={()=>setShowSchedule(false)} agentName={agentName}/>
-    <SignAnythingSheet open={showSign} onClose={()=>setShowSign(false)} agentName={agentName}/>
+    <SignAnythingSheet open={showSign} onClose={()=>setShowSign(false)} agentName={agentName} listings={allListings}/>
     <SignoutsSheet open={showSignouts} onClose={()=>setShowSignouts(false)}/>
     <CalculatorsSheet open={showCalc} onClose={()=>setShowCalc(false)}/>
     <ProposalSheet open={showProposal} onClose={()=>setShowProposal(false)} agentName={agentName}/>
