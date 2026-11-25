@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v158-calendar-canva-frames";
+const BUILD = "v159-calendar-centred-clean";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5452,11 +5452,15 @@ const CAL_METHOD_LABEL = { "auction":"Auction", "private-sale":"Private Sale", "
 // fonts) are the PDF base; only day labels + activities are drawn on top in Neue Haas. Geometry is in
 // the frame's own top-origin points: cols = each column's day-label x (left aligned), rows = each week's
 // day-label top y, dx = day-label x → cell centre.
+// rowH = cell height (for vertical-centring the activity). cover = cream strips (top-origin [x0,y0,x1,y1])
+// painted over the faint decorative edge rules the Canva masters bake into the background image, so the
+// page reads as one uniform cream sheet. 612 masters bleed off the sides (only top/bottom rules); the
+// two-stage 842 masters carry a full inset rectangle (all four sides).
 const CAL_FRAMES = {
-  "auction":        { frame:"/calendar/frame_auction.pdf",          circ:"std", W:612, H:792, cols:[49.5,123,195.8,269.2,342,415.5,488.2], rows:[264,361,453,548,643], dx:31, lsize:12.8, asize:9 },
-  "private-sale":   { frame:"/calendar/frame_private.pdf",          circ:"std", W:612, H:792, cols:[49,123,196,269,342,416,488],         rows:[264,361,453,548,643], dx:31, lsize:12.8, asize:9 },
-  "offmkt-auction": { frame:"/calendar/frame_twostage_auction.pdf", circ:"ts",  W:596, H:842, cols:[86,146,206,267,327,388,448],         rows:[248,329,463,542,625,706], dx:25, lsize:11.5, asize:8 },
-  "offmkt-private": { frame:"/calendar/frame_twostage_private.pdf", circ:"ts",  W:596, H:842, cols:[86,146,206,267,327,388,448],         rows:[248,329,463,542,625,706], dx:25, lsize:11.5, asize:8 },
+  "auction":        { frame:"/calendar/frame_auction.pdf",          circ:"std", W:612, H:792, cols:[49.5,123,195.8,269.2,342,415.5,488.2], rows:[264,361,453,548,643], dx:31, lsize:12.8, asize:9, rowH:93, cover:[[0,0,612,20],[0,745,612,792]] },
+  "private-sale":   { frame:"/calendar/frame_private.pdf",          circ:"std", W:612, H:792, cols:[49,123,196,269,342,416,488],         rows:[264,361,453,548,643], dx:31, lsize:12.8, asize:9, rowH:93, cover:[[0,0,612,20],[0,745,612,792]] },
+  "offmkt-auction": { frame:"/calendar/frame_twostage_auction.pdf", circ:"ts",  W:596, H:842, cols:[86,146,206,267,327,388,448],         rows:[248,329,463,542,625,706], dx:25, lsize:11.5, asize:8, rowH:80, cover:[[0,0,596,25],[0,790,596,842],[0,0,79,842],[510,0,596,842]] },
+  "offmkt-private": { frame:"/calendar/frame_twostage_private.pdf", circ:"ts",  W:596, H:842, cols:[86,146,206,267,327,388,448],         rows:[248,329,463,542,625,706], dx:25, lsize:11.5, asize:8, rowH:80, cover:[[0,0,596,25],[0,790,596,842],[0,0,79,842],[510,0,596,842]] },
 };
 // Circle art lifted straight from Canva. The two-stage masters style the circle text on an arc, so they
 // carry their own art ("ts"); the straight 5-week masters use "std". Size + vertical offset (row top →
@@ -5549,7 +5553,9 @@ async function buildCalendarPdfV2({ variant, events, anchorDate, labelMode }){
   const med=await doc.embedFont(await fetch("/fonts/NeueHaasUnicaPro-Medium.ttf").then(r=>r.arrayBuffer()),{ subset:true });
   const W=cfg.W, H=cfg.H, page=doc.addPage([W,H]);
   page.drawPage(frame,{ x:0, y:0, width:W, height:H });
-  const INK=rgb(49/255,30/255,16/255);
+  const INK=rgb(49/255,30/255,16/255), CREAM=rgb(1,0.9569,0.8353);
+  // Erase the faint decorative edge rules baked into the Canva master so the sheet is one uniform cream.
+  (cfg.cover||[]).forEach(([x0,y0,x1,y1])=> page.drawRectangle({ x:x0, y:H-y1, width:x1-x0, height:y1-y0, color:CREAM }));
   // Pull in only the Canva circle art actually needed, and only while its text still matches — so a moved
   // circle stays the exact Canva art, a renamed one falls back to a drawn circle below.
   const cimg={};
@@ -5561,7 +5567,7 @@ async function buildCalendarPdfV2({ variant, events, anchorDate, labelMode }){
     const n=calDay(w,c), topY=cfg.rows[w]; if(topY==null) continue;
     if(labelMode!=="none"){
       const dt=calDateOf(n,anchorDay,anchorDate); const lab=labelMode==="date"?(dt?calFmtDate(dt):""):("Day "+n);
-      if(lab) page.drawText(lab,{ x:cfg.cols[c], y:H-(topY+cfg.lsize+0.5), size:cfg.lsize, font:med, color:INK });
+      if(lab){ const lw=med.widthOfTextAtSize(lab,cfg.lsize); page.drawText(lab,{ x:cx(c)-lw/2, y:H-(topY+cfg.lsize+0.5), size:cfg.lsize, font:med, color:INK }); }
     }
     const evs=evByDay[n]||[]; if(!evs.length) continue;
     const plain=[];
@@ -5581,11 +5587,18 @@ async function buildCalendarPdfV2({ variant, events, anchorDate, labelMode }){
         }
       } else plain.push(ev);
     });
-    let ey=topY+48;
-    plain.forEach(ev=>{ const lines=calWrap(med,cfg.asize,ev.text,cw-10), lh=cfg.asize+2;
-      lines.forEach((ln,i)=>{ const lw=med.widthOfTextAtSize(ln,cfg.asize); page.drawText(ln,{ x:cx(c)-lw/2, y:H-(ey+i*lh), size:cfg.asize, font:med, color:INK }); });
-      ey+=lines.length*lh+5;
-    });
+    // Activity text: centred horizontally on the cell, and the whole block centred vertically in the
+    // space between the date label and the cell bottom (so a single "Open For Inspection" sits mid-cell).
+    if(plain.length){
+      const lh=cfg.asize+2, gap=5;
+      const wrapped=plain.map(ev=>calWrap(med,cfg.asize,ev.text,cw-10));
+      const totalLines=wrapped.reduce((s,L)=>s+L.length,0);
+      const blockH=totalLines*lh+Math.max(0,plain.length-1)*gap;
+      const cellCenter=topY+cfg.rowH/2, floor=topY+cfg.lsize+8;
+      let blockTop=cellCenter-blockH/2; if(blockTop<floor) blockTop=floor;
+      let ey=blockTop+cfg.asize*0.78;
+      wrapped.forEach(L=>{ L.forEach((ln,i)=>{ const lw=med.widthOfTextAtSize(ln,cfg.asize); page.drawText(ln,{ x:cx(c)-lw/2, y:H-(ey+i*lh), size:cfg.asize, font:med, color:INK }); }); ey+=L.length*lh+gap; });
+    }
   }
   return doc.save();
 }
