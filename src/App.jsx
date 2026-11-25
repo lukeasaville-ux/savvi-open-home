@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v165-special-reword-enquiries";
+const BUILD = "v166-annexure-vendor-name";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3071,7 +3071,7 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
   // Draw an execution block at the end of the special-conditions annexure so ALL parties sign
   // it, and return the signature/date field areas to merge into the e-sign set. Uses lowercase
   // "Signed by the …" headings so the UPPERCASE-only detector does not also place duplicates.
-  const drawExecBlock=(pg0,y0,purchaserName)=>{
+  const drawExecBlock=(pg0,y0,purchaserName,vendorName)=>{
     const W=SA_W,H=SA_H,MG=SA_MG,maxW=W-2*MG; let pg=pg0, y=y0;
     if(y < MG+190){ pg=doc.addPage([W,H]); y=H-72; const n=doc.getPageCount(); touched.add(n); markLbl(n,"Special conditions"); }
     const pageNo1=doc.getPages().indexOf(pg)+1;
@@ -3092,7 +3092,7 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
       y=lineY-46;
     };
     row("Purchaser", purchaserName||"");
-    row("Vendor", "");
+    row("Vendor", vendorName||"");
     return flds;
   };
   let signFields=[];   // execution-block fields injected on the special-conditions annexure
@@ -3133,7 +3133,7 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
     const r=appendSpecial(String(v.special).trim(), "SPECIAL CONDITIONS", v.propertyAddr||"",
       "The following special conditions form part of this Contract of Sale and do not merge on settlement. Where a special condition is inconsistent with a printed or general condition, the special condition prevails.", "Special conditions");
     // All parties sign the annexure (Luke: special conditions must be signed by all parties).
-    signFields=drawExecBlock(r.pg, r.y, names);
+    signFields=drawExecBlock(r.pg, r.y, names, v.vendorName||"");
   }
   // Short, human labels for the review preview (what landed on each page).
   lblPage(T.price,"Price & deposit"); lblPage(T.deposit,"Price & deposit");
@@ -3264,7 +3264,11 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
       // Finance approval date computed from the finance period (business-day adjusted).
       const apprDate=fin?dateFromDays(finDays, new Date()):null;
       const depPaidStr=depUpfront.trim()?(num(depUpfront)!=null?money(num(depUpfront)):depUpfront.trim()):"Nil";
-      const v={ purchaserName:[p1,p2].filter(Boolean).join(" & "), purchaserAddr:padr,
+      // Vendor name for the special-conditions annexure execution block (printed "Name:" under the
+      // Vendor signature line). Reuse if already fetched, else pull from the agency agreement.
+      let vName=venName;
+      if(!vName){ try{ const vr=await call("getVendor",{propertyId:openHome?.propertyId}); if(vr&&vr.ok){ if(vr.vendor){ vName=vr.vendor.name||""; setVenName(vName); if(vr.vendor.email) setVenEmail(vr.vendor.email); } setEsignCount(Number(vr.esignCount)||0); } }catch(e){} }
+      const v={ purchaserName:[p1,p2].filter(Boolean).join(" & "), purchaserAddr:padr, vendorName:vName||"",
         convName:parsed.convName||"", convEmail:parsed.convEmail||"",
         price:money(priceN), deposit:money(depN), depositBy:(depWhen||"on signing").trim(), depositPaid:depPaidStr,
         balance:money(balance), settlement:settle, p1, p2,
