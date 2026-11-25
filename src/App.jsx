@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v153-autofile-calcs";
+const BUILD = "v154-authority-file";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2145,6 +2145,7 @@ function OpenListingInfo({ openHome, onContractUploaded }){
   const notes=(openHome?.listingNotes||_pm.listingNotes||"").trim();
   const access=(openHome?.accessNotes||_pm.accessNotes||"").trim();  // AGENT-ONLY keysafe/door codes — never shown to buyers
   const contractUrl=openHome?.contractUrl||"";
+  const authorityUrl=openHome?.authorityUrl||"";   // fully signed agency agreement, auto-filed on completion
   const sb=statusBadge(openHome?.statusText);
   // For a sold / under-offer listing, pull the purchaser + sale details on demand.
   const [parties,setParties]=useState(null);
@@ -2173,7 +2174,8 @@ function OpenListingInfo({ openHome, onContractUploaded }){
         <div style={{fontSize:13.5,fontWeight:700,color:ESPRESSO,lineHeight:1.45,whiteSpace:"pre-wrap"}}>{access}</div>
       </div>}
       {!contractUrl&&onContractUploaded&&pid&&<div style={{marginBottom:10}}><div style={{fontSize:12,color:BROWN_L,marginBottom:6}}>No contract on this listing yet. Add the PDF and it's ready to send straight away.</div><ContractUpload propertyId={pid} onUploaded={onContractUploaded}/></div>}
-      {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none",marginBottom:notes?8:0}}>Open / read the full contract</a>}
+      {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none",marginBottom:(authorityUrl||notes)?8:0}}>Open / read the full contract</a>}
+      {authorityUrl&&<a href={authorityUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none",marginBottom:notes?8:0}}>Signed agency agreement (certified)</a>}
       {notes&&<div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"12px 13px",fontSize:13,lineHeight:1.5,color:ESPRESSO,whiteSpace:"pre-wrap"}}>{notes}</div>}
     </div>
   );
@@ -4705,7 +4707,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   // ⌘K → search, Esc → clear.
   useEffect(()=>{ const k=e=>{ if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="k"){ e.preventDefault(); gqRef.current?.focus(); gqRef.current?.select(); } }; window.addEventListener("keydown",k); return ()=>window.removeEventListener("keydown",k); },[]);
 
-  const listingOh=(p)=>{ const pid=p.propertyId||p.id; return { id:`listing_${pid}`, propertyId:pid, address:p.address||"Unknown", suburb:p.suburb||"", beds:p.beds,baths:p.baths,car:p.car, price:p.price||"", contractUrl:p.contractUrl||"", igUrl:p.igUrl||"", auctionDate:p.auctionDate||"", access:p.access||"", notes:p.notes||"", listingNotes:p.listingNotes||"", accessNotes:(propMetaGet(pid)||{}).accessNotes||"", statusText:p.statusText||"", settlementDate:p.settlementDate||"", soldPrice:p.soldPrice||null, _listing:true }; };
+  const listingOh=(p)=>{ const pid=p.propertyId||p.id; return { id:`listing_${pid}`, propertyId:pid, address:p.address||"Unknown", suburb:p.suburb||"", beds:p.beds,baths:p.baths,car:p.car, price:p.price||"", contractUrl:p.contractUrl||"", authorityUrl:p.authorityUrl||"", igUrl:p.igUrl||"", auctionDate:p.auctionDate||"", access:p.access||"", notes:p.notes||"", listingNotes:p.listingNotes||"", accessNotes:(propMetaGet(pid)||{}).accessNotes||"", statusText:p.statusText||"", settlementDate:p.settlementDate||"", soldPrice:p.soldPrice||null, _listing:true }; };
   const specOf=(o)=>[o.beds&&`${o.beds}b`,o.baths&&`${o.baths}ba`,o.car&&`${o.car}c`].filter(Boolean).join(" · ")||"Apartment";
   const select=(oh)=>{ setSel(oh); setTq(""); setTf("all"); setShowInfo(false); crm.enterOpenHome(oh); };
   const auctionByProp=useMemo(()=>{ const m={}; [...(allListings||[]),...(opens||[])].forEach(o=>{ const pid=o.propertyId||o.id; if(o.auctionDate&&pid&&!m[pid]) m[pid]=o.auctionDate; }); return m; },[allListings,opens]);
@@ -7836,7 +7838,7 @@ export default function App(){
       try{
         const [r,lr]=await Promise.all([Attio.getOpenHomesThisWeek(),Attio.getAllActiveListings()]);
         if(r.ok&&r.data.length){ setOpenHomes(r.data); try{ localStorage.setItem("savvi_opens",JSON.stringify(r.data)); }catch(e){} setOpenHome(cur=>{ if(!cur) return cur; const f=r.data.find(o=>o.id===cur.id); return f?{...cur,...f}:cur; }); }
-        if(lr.ok){ setAllListings(lr.data); try{ localStorage.setItem("savvi_listings",JSON.stringify(lr.data)); }catch(e){} setOpenHome(cur=>{ if(!cur||!cur._listing) return cur; const p=lr.data.find(x=>(x.propertyId||x.id)===cur.propertyId); return p?{...cur,contractUrl:p.contractUrl||cur.contractUrl,igUrl:p.igUrl||cur.igUrl,price:p.price||cur.price,auctionDate:p.auctionDate||cur.auctionDate}:cur; }); }
+        if(lr.ok){ setAllListings(lr.data); try{ localStorage.setItem("savvi_listings",JSON.stringify(lr.data)); }catch(e){} setOpenHome(cur=>{ if(!cur||!cur._listing) return cur; const p=lr.data.find(x=>(x.propertyId||x.id)===cur.propertyId); return p?{...cur,contractUrl:p.contractUrl||cur.contractUrl,authorityUrl:p.authorityUrl||cur.authorityUrl,igUrl:p.igUrl||cur.igUrl,price:p.price||cur.price,auctionDate:p.auctionDate||cur.auctionDate}:cur; }); }
       }catch(e){}
     };
     document.addEventListener("visibilitychange",refresh); window.addEventListener("focus",refresh);
