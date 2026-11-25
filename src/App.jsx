@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v157-calendar-brandfont";
+const BUILD = "v158-calendar-canva-frames";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5446,8 +5446,40 @@ async function appendSchedulePage(doc,rgb,{ propertyAddr, campaignName, sched, i
 // user picks: the auction day for auction variants, else the first open.
 const CAL_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const CAL_DOW = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
-const CAL_ORANGE = "#FE5310", CAL_BLUE = "#8AACE3", CAL_CREAM = "#FFF4D5", CAL_INK = "#311E10";
+const CAL_ORANGE = "#FE5310", CAL_BLUE = "#8AACE3", CAL_CREAM = "#FFF4D5";
 const CAL_METHOD_LABEL = { "auction":"Auction", "private-sale":"Private Sale", "offmkt-auction":"Two Stage Auction", "offmkt-private":"Two Stage Private Sale" };
+// Real Canva frames (logo + title + method label + MON–SUN + bands + grid, in the actual PP Editorial
+// fonts) are the PDF base; only day labels + activities are drawn on top in Neue Haas. Geometry is in
+// the frame's own top-origin points: cols = each column's day-label x (left aligned), rows = each week's
+// day-label top y, dx = day-label x → cell centre.
+const CAL_FRAMES = {
+  "auction":        { frame:"/calendar/frame_auction.pdf",          circ:"std", W:612, H:792, cols:[49.5,123,195.8,269.2,342,415.5,488.2], rows:[264,361,453,548,643], dx:31, lsize:12.8, asize:9 },
+  "private-sale":   { frame:"/calendar/frame_private.pdf",          circ:"std", W:612, H:792, cols:[49,123,196,269,342,416,488],         rows:[264,361,453,548,643], dx:31, lsize:12.8, asize:9 },
+  "offmkt-auction": { frame:"/calendar/frame_twostage_auction.pdf", circ:"ts",  W:596, H:842, cols:[86,146,206,267,327,388,448],         rows:[248,329,463,542,625,706], dx:25, lsize:11.5, asize:8 },
+  "offmkt-private": { frame:"/calendar/frame_twostage_private.pdf", circ:"ts",  W:596, H:842, cols:[86,146,206,267,327,388,448],         rows:[248,329,463,542,625,706], dx:25, lsize:11.5, asize:8 },
+};
+// Circle art lifted straight from Canva. The two-stage masters style the circle text on an arc, so they
+// carry their own art ("ts"); the straight 5-week masters use "std". Size + vertical offset (row top →
+// circle centre) is per variant per shape in CAL_CSIZE: [w, h, voff].
+const CAL_CIRCLE_SETS = {
+  std: {
+    circleO:  { url:"/calendar/circle_first_open.png",    text:"First Open For Inspection" },
+    ellipseO: { url:"/calendar/circle_launch_online.png", text:"Launch Online" },
+    circleB:  { url:"/calendar/circle_auction_day.png",   text:"Auction Day" },
+  },
+  ts: {
+    circleO:  { url:"/calendar/circle_first_open_ts.png",    text:"First Open For Inspection" },
+    ellipseO: { url:"/calendar/circle_launch_online_ts.png", text:"Launch Online" },
+    circleB:  { url:"/calendar/circle_auction_day_ts.png",   text:"Auction Day" },
+  },
+};
+const CAL_CSIZE = {
+  "auction":        { circleO:[71,71,51], ellipseO:[120,38,61], circleB:[85,84,52] },
+  "private-sale":   { circleO:[71,71,51], ellipseO:[120,38,61], circleB:[85,84,52] },
+  "offmkt-auction": { circleO:[71,71,48], ellipseO:[99,32,45],  circleB:[76,75,49] },
+  "offmkt-private": { circleO:[71,71,48], ellipseO:[99,32,45],  circleB:[76,75,49] },
+};
+function calNorm(s){ return String(s||"").toLowerCase().replace(/[^a-z0-9]/g,""); }
 function calVariant(method, offMarket){ return (offMarket?"offmkt-":"")+(method==="auction"?"auction":"private-sale"); }
 function calWeeks(variant){ return variant.indexOf("offmkt")===0 ? 6 : 5; }
 function calBands(variant){
@@ -5461,33 +5493,33 @@ let _calEid=0; function calEid(){ return "ce"+(++_calEid); }
 // Default schedules. shape: "none" | "circleO" (orange circle) | "ellipseO" (orange oval) | "circleB" (blue circle).
 function calDefaults(variant, staging){
   const E=(w,dow,text,shape)=>({ id:calEid(), day:calDay(w,dow), text, shape:shape||"none" });
-  const stg = staging ? [E(0,0,"Staging furniture installed")] : [];
-  if(variant==="offmkt-auction") return [...stg,
-    E(0,1,"Walkthrough video & photos"), E(0,3,"Launch Social Media Strategy"), E(0,5,"First Open For Inspection","circleO"),
-    E(1,0,"Buyer callbacks"), E(1,3,"Photography, floorplan & copywriting"), E(1,5,"Open For Inspection"),
-    E(2,0,"Proof marketing collateral"), E(2,1,"Launch Online","ellipseO"), E(2,4,"Sign board installed"), E(2,5,"Open For Inspection"),
-    E(3,0,"Buyer callbacks"), E(3,1,"Campaign report"), E(3,3,"Open For Inspection"), E(3,5,"Open For Inspection"),
-    E(4,0,"Buyer callbacks"), E(4,1,"Campaign report"), E(4,3,"Open For Inspection"), E(4,5,"Open For Inspection"),
-    E(5,0,"Buyer callbacks"), E(5,2,"Pre-auction meeting"), E(5,3,"Open For Inspection"), E(5,4,"SMS & email auction invitations"), E(5,5,"Auction Day","circleB") ];
-  if(variant==="offmkt-private") return [...stg,
-    E(0,1,"Walkthrough video & photos"), E(0,3,"Launch Social Media Strategy"), E(0,5,"First Open For Inspection","circleO"),
-    E(1,0,"Buyer callbacks"), E(1,3,"Photography, floorplan & copywriting"), E(1,5,"Open For Inspection"),
-    E(2,0,"Proof marketing collateral"), E(2,1,"Launch Online","ellipseO"), E(2,4,"Sign board installed"), E(2,5,"Open For Inspection"),
-    E(3,0,"Buyer callbacks"), E(3,1,"Campaign report"), E(3,3,"Open For Inspection"), E(3,5,"Open For Inspection"),
-    E(4,0,"Buyer callbacks"), E(4,1,"Campaign report"), E(4,3,"Open For Inspection"), E(4,5,"Open For Inspection"),
-    E(5,0,"Buyer callbacks"), E(5,1,"Campaign report"), E(5,3,"Open For Inspection"), E(5,5,"Open For Inspection") ];
+  const stg = staging ? [E(0,0,"Staging Furniture Installed")] : [];
   if(variant==="auction") return [...stg,
-    E(0,1,"Photography, floorplan & copywriting"), E(0,2,"Social media walkthrough"), E(0,3,"Launch Online","ellipseO"), E(0,4,"Launch Online","ellipseO"),
-    E(1,0,"Proof marketing collateral"), E(1,2,"Sign board installed"), E(1,5,"First Open For Inspection","circleO"),
-    E(2,0,"Buyer callbacks"), E(2,1,"Campaign report"), E(2,3,"Open For Inspection"), E(2,5,"Open For Inspection"),
-    E(3,0,"Buyer callbacks"), E(3,1,"Campaign report"), E(3,3,"Open For Inspection"), E(3,5,"Open For Inspection"),
-    E(4,0,"Buyer callbacks"), E(4,2,"Pre-auction meeting"), E(4,3,"Open For Inspection"), E(4,4,"SMS & email auction invitations"), E(4,5,"Auction Day","circleB") ];
-  return [...stg,  // private-sale (straight)
-    E(0,1,"Walkthrough video & photos"), E(0,2,"Photography, floorplan & copywriting"),
-    E(1,0,"Proof marketing collateral"), E(1,1,"Launch Online","ellipseO"), E(1,4,"Sign board installed"), E(1,5,"First Open For Inspection","circleO"),
-    E(2,0,"Buyer callbacks"), E(2,1,"Campaign report"), E(2,3,"Open For Inspection"), E(2,5,"Open For Inspection"),
-    E(3,0,"Buyer callbacks"), E(3,1,"Campaign report"), E(3,3,"Open For Inspection"), E(3,5,"Open For Inspection"),
-    E(4,0,"Buyer callbacks"), E(4,1,"Campaign report"), E(4,3,"Open For Inspection"), E(4,5,"Open For Inspection") ];
+    E(0,2,"Photography, Floorplan & Copywriting"),
+    E(1,0,"Proof Marketing Collateral"), E(1,1,"Launch Online","ellipseO"), E(1,3,"Social Media Walkthrough"), E(1,4,"Sign Board Installed"), E(1,5,"First Open For Inspection","circleO"),
+    E(2,0,"Buyer Callbacks"), E(2,1,"Campaign Report"), E(2,3,"Open For Inspection"), E(2,5,"Open For Inspection"),
+    E(3,0,"Buyer Callbacks"), E(3,1,"Campaign Report"), E(3,3,"Open For Inspection"), E(3,5,"Open For Inspection"),
+    E(4,0,"Buyer Callbacks"), E(4,2,"Pre-Auction Meeting"), E(4,3,"Open For Inspection"), E(4,4,"SMS & E-mail Auction Invitations"), E(4,5,"Auction Day","circleB") ];
+  if(variant==="private-sale") return [...stg,
+    E(0,1,"Walkthrough Video & Photos"), E(0,2,"Photography, Floorplan & Copywriting"),
+    E(1,0,"Proof Marketing Collateral"), E(1,1,"Launch Online","ellipseO"), E(1,4,"Sign Board Installed"), E(1,5,"First Open For Inspection","circleO"),
+    E(2,0,"Buyer Callbacks"), E(2,1,"Campaign Report"), E(2,3,"Open For Inspection"), E(2,5,"Open For Inspection"),
+    E(3,0,"Buyer Callbacks"), E(3,1,"Campaign Report"), E(3,3,"Open For Inspection"), E(3,5,"Open For Inspection"),
+    E(4,0,"Buyer Callbacks"), E(4,1,"Campaign Report"), E(4,3,"Open For Inspection"), E(4,5,"Open For Inspection") ];
+  if(variant==="offmkt-auction") return [...stg,
+    E(0,1,"Walkthrough Video & Photos"), E(0,2,"Launch Social Media Strategy"), E(0,5,"First Open For Inspection","circleO"),
+    E(1,0,"Buyer Callbacks"), E(1,4,"Photography, Floorplan & Copywriting"), E(1,5,"Open For Inspection"),
+    E(2,0,"Proof Marketing Collateral"), E(2,1,"Launch Online","ellipseO"), E(2,4,"Sign Board Installed"), E(2,5,"Open For Inspection"),
+    E(3,0,"Buyer Callbacks"), E(3,1,"Campaign Report"), E(3,3,"Open For Inspection"), E(3,5,"Open For Inspection"),
+    E(4,0,"Buyer Callbacks"), E(4,1,"Campaign Report"), E(4,3,"Open For Inspection"), E(4,5,"Open For Inspection"),
+    E(5,0,"Buyer Callbacks"), E(5,2,"Pre-Auction Meeting"), E(5,3,"Open For Inspection"), E(5,4,"SMS & E-mail Auction Invitations"), E(5,5,"Auction Day","circleB") ];
+  return [...stg,  // offmkt-private
+    E(0,1,"Walkthrough Video & Photos"), E(0,3,"Launch Social Media Strategy"), E(0,5,"First Open For Inspection","circleO"),
+    E(1,0,"Buyer Callbacks"), E(1,4,"Photography, Floorplan & Copywriting"), E(1,5,"Open For Inspection"),
+    E(2,0,"Proof Marketing Collateral"), E(2,1,"Launch Online","ellipseO"), E(2,4,"Sign Board Installed"), E(2,5,"Open For Inspection"),
+    E(3,0,"Buyer Callbacks"), E(3,1,"Campaign Report"), E(3,3,"Open For Inspection"), E(3,5,"Open For Inspection"),
+    E(4,0,"Buyer Callbacks"), E(4,1,"Campaign Report"), E(4,3,"Open For Inspection"), E(4,5,"Open For Inspection"),
+    E(5,0,"Buyer Callbacks"), E(5,3,"Open For Inspection"), E(5,5,"Open For Inspection") ];
 }
 // The anchor day index = the date the user actually picks (auction day for auction variants, else first open).
 function calAnchorDay(variant, events){
@@ -5504,88 +5536,64 @@ function calDateOf(n, anchorDay, anchorDate){
 // Auction day + first open are Saturdays; snap the picked date to that week's Saturday so the Mon–Sun grid stays honest.
 function calSnapSat(iso){ if(!iso) return ""; const d=new Date(iso+"T00:00:00"); if(isNaN(d)) return iso; const add=(6-((d.getDay()+6)%7)+7-1)%7; d.setDate(d.getDate()+add); return d.toISOString().slice(0,10); }
 function calFmtDate(d){ return d ? (d.getDate()+" "+CAL_MONTHS[d.getMonth()]) : ""; }
-const CAL_A4W=595.28, CAL_A4H=841.89;
-function calHexRgb(rgb,hex){ const n=parseInt(hex.slice(1),16); return rgb(((n>>16)&255)/255,((n>>8)&255)/255,(n&255)/255); }
 function calWrap(font,size,text,maxW){ const words=String(text).split(" "); const lines=[]; let cur=""; words.forEach(wd=>{ const t=cur?cur+" "+wd:wd; if(font.widthOfTextAtSize(t,size)>maxW && cur){ lines.push(cur); cur=wd; } else cur=t; }); if(cur) lines.push(cur); return lines; }
 async function buildCalendarPdfV2({ variant, events, anchorDate, labelMode }){
-  const { PDFDocument, StandardFonts, rgb }=await import("pdf-lib");
-  const doc=await PDFDocument.create();
-  // Savvi's brand serif (Newsreader) for the title / method label / band labels; Neue Haas for cells.
-  // Fall back to Times/Helvetica only if the font files can't be fetched.
-  let serif, serifR, med;
-  try{
-    const fontkit=(await import("@pdf-lib/fontkit")).default; doc.registerFontkit(fontkit);
-    const nb=await fetch("/fonts/Newsreader-Medium.ttf").then(r=>r.arrayBuffer()); serif=await doc.embedFont(nb,{ subset:true }); serifR=serif;
-    const mb=await fetch("/fonts/NeueHaasUnicaPro-Medium.ttf").then(r=>r.arrayBuffer()); med=await doc.embedFont(mb,{ subset:true });
-  }catch(e){
-    serif=await doc.embedFont(StandardFonts.TimesRomanBold); serifR=await doc.embedFont(StandardFonts.TimesRoman); med=await doc.embedFont(StandardFonts.Helvetica);
-  }
-  let logo=null; try{ const lb=await fetch("/savvi-wordmark-black.png").then(r=>r.arrayBuffer()); logo=await doc.embedPng(lb); }catch(e){}
-  const W=CAL_A4W, H=CAL_A4H, page=doc.addPage([W,H]);
-  const INK=calHexRgb(rgb,CAL_INK), CREAM=calHexRgb(rgb,CAL_CREAM), ORANGE=calHexRgb(rgb,CAL_ORANGE), BLUE=calHexRgb(rgb,CAL_BLUE);
-  page.drawRectangle({ x:0, y:0, width:W, height:H, color:CREAM });
-  const mL=26, mR=26, gridW=W-mL-mR;
-  let yTop=H-38;
-  if(logo){ const lw=148, lh=logo.height*(lw/logo.width); page.drawImage(logo,{ x:(W-lw)/2, y:yTop-lh, width:lw, height:lh }); yTop=yTop-lh-22; } else { yTop-=10; }
-  const titleSize=37;
-  page.drawText("Calendar of Events",{ x:mL, y:yTop-titleSize, size:titleSize, font:serif, color:INK });
-  const mlbl=CAL_METHOD_LABEL[variant]||""; const mlSize=16, mlMaxW=gridW*0.32;
-  const mlLines=calWrap(serifR,mlSize,mlbl,mlMaxW);
-  mlLines.forEach((ln,i)=>{ const w=serifR.widthOfTextAtSize(ln,mlSize); page.drawText(ln,{ x:W-mR-w, y:yTop-mlSize-2-i*(mlSize+3), size:mlSize, font:serifR, color:INK }); });
-  const gridTop=yTop-titleSize-24, gridBottom=24;
-  const weeks=calWeeks(variant), bands=calBands(variant);
-  const dayHdrH=25, bandH=25, colW=gridW/7;
-  const rowH=(gridTop-gridBottom-dayHdrH-bands.length*bandH)/weeks;
-  let y=gridTop;
-  page.drawRectangle({ x:mL, y:y-dayHdrH, width:gridW, height:dayHdrH, color:INK });
-  for(let c=0;c<7;c++){ const sz=10.5, w=serifR.widthOfTextAtSize(CAL_DOW[c],sz); page.drawText(CAL_DOW[c],{ x:mL+c*colW+(colW-w)/2, y:y-dayHdrH/2-sz*0.34, size:sz, font:serifR, color:CREAM }); }
-  y-=dayHdrH;
+  const { PDFDocument, rgb }=await import("pdf-lib");
+  const fontkit=(await import("@pdf-lib/fontkit")).default;
+  const cfg=CAL_FRAMES[variant]||CAL_FRAMES["auction"], csz=CAL_CSIZE[variant]||CAL_CSIZE["auction"];
+  const CIRC=CAL_CIRCLE_SETS[cfg.circ]||CAL_CIRCLE_SETS.std;
+  const doc=await PDFDocument.create(); doc.registerFontkit(fontkit);
+  // Base = the real Canva frame (exact design + PP Editorial fonts); we only draw the day labels + activities.
+  const frameBytes=await fetch(cfg.frame).then(r=>r.arrayBuffer());
+  const [frame]=await doc.embedPdf(frameBytes,[0]);
+  const med=await doc.embedFont(await fetch("/fonts/NeueHaasUnicaPro-Medium.ttf").then(r=>r.arrayBuffer()),{ subset:true });
+  const W=cfg.W, H=cfg.H, page=doc.addPage([W,H]);
+  page.drawPage(frame,{ x:0, y:0, width:W, height:H });
+  const INK=rgb(49/255,30/255,16/255);
+  // Pull in only the Canva circle art actually needed, and only while its text still matches — so a moved
+  // circle stays the exact Canva art, a renamed one falls back to a drawn circle below.
+  const cimg={};
+  for(const ev of events){ const cc=CIRC[ev.shape]; if(cc && !cimg[ev.shape] && calNorm(ev.text)===calNorm(cc.text)){ try{ cimg[ev.shape]=await doc.embedPng(await fetch(cc.url).then(r=>r.arrayBuffer())); }catch(_){} } }
   const anchorDay=labelMode==="date"?calAnchorDay(variant,events):null;
+  const cw=cfg.cols[1]-cfg.cols[0], cx=c=>cfg.cols[c]+cfg.dx, weeks=calWeeks(variant);
   const evByDay={}; events.forEach(e=>{ (evByDay[e.day]=evByDay[e.day]||[]).push(e); });
-  bands.forEach(bd=>{
-    page.drawRectangle({ x:mL, y:y-bandH, width:gridW, height:bandH, color:INK });
-    const bsz=15, bw=serif.widthOfTextAtSize(bd.label,bsz); page.drawText(bd.label,{ x:mL+(gridW-bw)/2, y:y-bandH/2-bsz*0.34, size:bsz, font:serif, color:CREAM });
-    y-=bandH;
-    for(let w=bd.w0; w<=bd.w1; w++){
-      for(let c=0;c<7;c++){
-        const x=mL+c*colW, cy=y-rowH, n=calDay(w,c);
-        page.drawRectangle({ x, y:cy, width:colW, height:rowH, borderColor:INK, borderWidth:0.6 });
-        const showLabel=labelMode!=="none";
-        if(showLabel){ const dt=calDateOf(n,anchorDay,anchorDate); const dlab=labelMode==="date"?(dt?calFmtDate(dt):""):("Day "+n);
-          const dsz=11, dw=med.widthOfTextAtSize(dlab,dsz); page.drawText(dlab,{ x:x+(colW-dw)/2, y:y-14, size:dsz, font:med, color:INK }); }
-        const evs=evByDay[n]||[];
-        // plain (non-shape) events: block-centre them vertically when cells are blank, else sit under the label
-        const plainWrapped=evs.filter(e=>e.shape!=="circleO"&&e.shape!=="circleB"&&e.shape!=="ellipseO").map(ev=>calWrap(med,8.5,ev.text,colW-12));
-        const totalLines=plainWrapped.reduce((s,l)=>s+l.length,0), blockH=totalLines*10+Math.max(0,plainWrapped.length-1)*6;
-        let ey = showLabel ? (y-30) : (cy+rowH/2+blockH/2-7), pi=0;
-        evs.forEach(ev=>{
-          if(ev.shape==="circleO"||ev.shape==="circleB"){
-            const r=Math.min(colW*0.44, rowH*0.33), cx=x+colW/2, ccy=cy+rowH*0.40;
-            page.drawEllipse({ x:cx, y:ccy, xScale:r, yScale:r, color:ev.shape==="circleB"?BLUE:ORANGE });
-            const lines=calWrap(med,7.5,ev.text,r*1.7), lh=8.6;
-            lines.forEach((ln,i)=>{ const lw=med.widthOfTextAtSize(ln,7.5); page.drawText(ln,{ x:cx-lw/2, y:ccy+(lines.length-1)*lh/2-i*lh-3, size:7.5, font:med, color:INK }); });
-          } else if(ev.shape==="ellipseO"){
-            const exr=colW*0.46, eyr=Math.min(rowH*0.19,14), cx=x+colW/2, ccy=cy+rowH*0.42;
-            page.drawEllipse({ x:cx, y:ccy, xScale:exr, yScale:eyr, color:ORANGE });
-            const lines=calWrap(med,8.5,ev.text,exr*1.85), lh=9.5;
-            lines.forEach((ln,i)=>{ const lw=med.widthOfTextAtSize(ln,8.5); page.drawText(ln,{ x:cx-lw/2, y:ccy+(lines.length-1)*lh/2-i*lh-3, size:8.5, font:med, color:INK }); });
-          } else {
-            const lines=plainWrapped[pi++], lh=10;
-            lines.forEach((ln,i)=>{ const lw=med.widthOfTextAtSize(ln,8.5); page.drawText(ln,{ x:x+(colW-lw)/2, y:ey-i*lh, size:8.5, font:med, color:INK }); });
-            ey-=lines.length*lh+6;
-          }
-        });
-      }
-      y-=rowH;
+  for(let w=0; w<weeks; w++) for(let c=0;c<7;c++){
+    const n=calDay(w,c), topY=cfg.rows[w]; if(topY==null) continue;
+    if(labelMode!=="none"){
+      const dt=calDateOf(n,anchorDay,anchorDate); const lab=labelMode==="date"?(dt?calFmtDate(dt):""):("Day "+n);
+      if(lab) page.drawText(lab,{ x:cfg.cols[c], y:H-(topY+cfg.lsize+0.5), size:cfg.lsize, font:med, color:INK });
     }
-  });
+    const evs=evByDay[n]||[]; if(!evs.length) continue;
+    const plain=[];
+    evs.forEach(ev=>{
+      const cc=CIRC[ev.shape];
+      if(cc){
+        const sz=csz[ev.shape]||[71,71,50], iw=sz[0], ih=sz[1], ccy=topY+sz[2];
+        // The Launch Online oval is wider than a cell; in Canva it bleeds right into the (empty) next day,
+        // never left over the Monday activity. Bias it right so its left edge sits on the cell's left line.
+        const ccx=cx(c)+(ev.shape==="ellipseO"?(iw-cw)/2:0);
+        if(cimg[ev.shape]){ page.drawImage(cimg[ev.shape],{ x:ccx-iw/2, y:H-(ccy+ih/2), width:iw, height:ih }); }
+        else {
+          const col=ev.shape==="circleB"?rgb(138/255,172/255,227/255):rgb(254/255,83/255,16/255);
+          page.drawEllipse({ x:ccx, y:H-ccy, xScale:iw/2, yScale:ih/2, color:col });
+          const lines=calWrap(med,7.5,ev.text,iw*0.82), lh=8.6;
+          lines.forEach((ln,i)=>{ const lw=med.widthOfTextAtSize(ln,7.5); page.drawText(ln,{ x:ccx-lw/2, y:H-ccy+(lines.length-1)*lh/2-i*lh-3, size:7.5, font:med, color:INK }); });
+        }
+      } else plain.push(ev);
+    });
+    let ey=topY+48;
+    plain.forEach(ev=>{ const lines=calWrap(med,cfg.asize,ev.text,cw-10), lh=cfg.asize+2;
+      lines.forEach((ln,i)=>{ const lw=med.widthOfTextAtSize(ln,cfg.asize); page.drawText(ln,{ x:cx(c)-lw/2, y:H-(ey+i*lh), size:cfg.asize, font:med, color:INK }); });
+      ey+=lines.length*lh+5;
+    });
+  }
   return doc.save();
 }
 function CalendarSheet({ open, onClose }){
   const [method,setMethod]=useState("private-sale");  // private-sale | auction
   const [offMarket,setOffMarket]=useState(false);     // true → add an Off Market first stage (6 weeks)
   const [staging,setStaging]=useState(true);
-  const [labelMode,setLabelMode]=useState("none");    // none (blank cells, matches the master) | day | date
+  const [labelMode,setLabelMode]=useState("day");     // day (Day 1, Day 2…) | date (real campaign dates) — the two Canva options
   const [anchorDate,setAnchorDate]=useState("");
   const [addr,setAddr]=useState("");
   const [events,setEvents]=useState(()=>calDefaults("private-sale",true));
@@ -5602,9 +5610,9 @@ function CalendarSheet({ open, onClose }){
   function toggleStaging(next){
     setStaging(next);
     setEvents(evs=>{
-      const has=evs.some(e=>e.text==="Staging furniture installed");
-      if(next&&!has) return [{id:calEid(),day:1,text:"Staging furniture installed",shape:"none"},...evs];
-      if(!next&&has) return evs.filter(e=>e.text!=="Staging furniture installed");
+      const has=evs.some(e=>/^staging/i.test(e.text));
+      if(next&&!has) return [{id:calEid(),day:1,text:"Staging Furniture Installed",shape:"none"},...evs];
+      if(!next&&has) return evs.filter(e=>!/^staging/i.test(e.text));
       return evs;
     });
   }
@@ -5623,7 +5631,7 @@ function CalendarSheet({ open, onClose }){
   function reset(){ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); setErr(""); }
   function handleClose(){ reset(); onClose(); }
   async function generate(){
-    if(labelMode==="date"&&!anchorDate){ setErr(`Pick the ${calAnchorLabel(variant).toLowerCase()}, or switch to Blank / Days.`); return; }
+    if(labelMode==="date"&&!anchorDate){ setErr(`Pick the ${calAnchorLabel(variant).toLowerCase()}, or switch to Days.`); return; }
     setErr(""); setBusy(true);
     try{
       const bytes=await buildCalendarPdfV2({ variant, events, anchorDate: labelMode==="date"?anchorDate:null, labelMode });
@@ -5671,7 +5679,7 @@ function CalendarSheet({ open, onClose }){
             </div>
             <div style={{display:"flex",gap:8,marginTop:12}}>
               <div style={{flex:1}}><label className="fl">Staging</label><div style={segWrap}><button style={seg(staging)} onClick={()=>toggleStaging(true)}>Staged</button><button style={seg(!staging)} onClick={()=>toggleStaging(false)}>No staging</button></div></div>
-              <div style={{flex:1}}><label className="fl">Day labels</label><div style={segWrap}><button style={seg(labelMode==="none")} onClick={()=>setLabelMode("none")}>Blank</button><button style={seg(labelMode==="day")} onClick={()=>setLabelMode("day")}>Days</button><button style={seg(labelMode==="date")} onClick={()=>setLabelMode("date")}>Dates</button></div></div>
+              <div style={{flex:1}}><label className="fl">Day labels</label><div style={segWrap}><button style={seg(labelMode==="day")} onClick={()=>setLabelMode("day")}>Days</button><button style={seg(labelMode==="date")} onClick={()=>setLabelMode("date")}>Dates</button></div></div>
             </div>
             {labelMode==="date" && <div style={{marginTop:12}}>
               <label className="fl">{calAnchorLabel(variant)}</label>
