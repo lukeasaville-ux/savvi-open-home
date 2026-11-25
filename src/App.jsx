@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v148-marketing-nil";
+const BUILD = "v149-offmarket-one";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5310,8 +5310,7 @@ const SCHED_CAMPAIGNS=[
   {id:"hidc",name:"High Impact Digital Campaign",omit:[]},
   {id:"noboard",name:"High Impact Digital Campaign (No Board)",omit:["board"]},
   {id:"nodomain",name:"High Impact Digital Campaign (No Domain)",omit:["domain"]},
-  {id:"off",name:"Off-market — no advertising ($0)",off:true},
-  {id:"none",name:"No advertising schedule",off:true},
+  {id:"off",name:"Off market - $0 (no advertising)",off:true},
   {id:"custom",name:"Custom schedule",custom:true,quote:"High Impact Digital & Social Campaign"},
 ];
 // off:true means NO advertising schedule is attached to the authority (off-market, or a listing run with no Savvi schedule).
@@ -5644,7 +5643,7 @@ function ScheduleSheet({ open, onClose, agentName }){
             </div>
             <div style={{padding:"0 16px 10px"}}><label className="fl">Campaign template</label>
               <select className="fi" value={campaign} onChange={e=>pickCampaign(e.target.value)}>
-                {SCHED_CAMPAIGNS.filter(c=>(c.id!=="custom"||canCustom)&&c.id!=="none").map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                {SCHED_CAMPAIGNS.filter(c=>c.id!=="custom"||canCustom).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
               </select></div>
             {schedOff(campaign) ? (
               <div style={{margin:"0 16px 12px",background:LINEN,borderRadius:10,padding:"12px 14px",fontSize:12.5,color:BROWN_M,lineHeight:1.5}}>Off-market, no advertising. There is nothing to schedule.</div>
@@ -6438,7 +6437,7 @@ function AuthoritySheet({ open, onClose, agentName }){
                 {SCHED_CAMPAIGNS.filter(c=>c.id!=="custom"||canCustom).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
               </select></div>
             {schedOff(campaign) ? (
-              <div style={{margin:"0 16px 12px",background:LINEN,borderRadius:10,padding:"12px 14px",fontSize:12.5,color:BROWN_M,lineHeight:1.5}}>{campaign==="none"?"No advertising schedule is attached to this authority. The marketing expenses section shows NIL.":"Off-market: no advertising. Nothing is payable during the off-market period, and the authority's marketing expenses show NIL."}</div>
+              <div style={{margin:"0 16px 12px",background:LINEN,borderRadius:10,padding:"12px 14px",fontSize:12.5,color:BROWN_M,lineHeight:1.5}}>Off market, no advertising. The authority's marketing expenses show NIL ($0).</div>
             ) : sched ? (<>
               {domainNeeds && <div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12.5,lineHeight:1.4}}>
                 {band==="b3"?"This property is over $2.25m. ":""}Domain Platinum Edge isn't priced yet — phone Domain for the correct figure and enter it to continue.
@@ -7378,7 +7377,7 @@ function ProposalSheet({ open, onClose, agentName }){
 
           <label className="fl" style={{marginTop:14}}>Advertising schedule</label>
           <select className="fi" value={campaign} onChange={e=>setCampaign(e.target.value)}>
-            {SCHED_CAMPAIGNS.filter(c=>c.id!=="none").map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+            {SCHED_CAMPAIGNS.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
           <div style={{fontSize:12,color:BROWN_L,marginTop:5}}>{schedOff(campaign)?"No advertising shown.":`Total ${"$"+schedTotal(sched).toLocaleString("en-AU")} inc GST · pulled from the schedule engine.`}</div>
 
