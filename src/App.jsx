@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v160-special-conditions-annexure";
+const BUILD = "v161-permanent-send-preview";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3197,14 +3197,13 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
       else fail("It didn't send — nothing has gone to the purchaser or vendor. "+((r&&r.error)||"Please tap Send to try again."));
     }catch(e){ fail("It didn't send — nothing has gone to anyone. "+(e?.message||"")+" Tap Send to try again."); }
   };
-  // Tap "Send": for the first 10 contracts, show the placement preview to confirm; after that, send straight away.
+  // Tap "Send": always show the placement preview to confirm before anything is sent (Luke: preview is permanent).
   const startSend=async()=>{
     if(!purEmail.trim()){ setSignErr("Add the purchaser's email — they sign first."); return; }
     if(!venEmail.trim()){ setSignErr("Add the vendor's email — it goes to them once the purchaser signs."); return; }
     if(!signDetected||!signDetected.fields.length){ setSignErr("No signing spots detected in this contract."); return; }
     setSignErr("");
-    if(esignCount<10){ setPreviewing(true); const imgs=await buildPreview(); setPreviewImgs(imgs); setPreviewing(false); setSignStep("preview"); }
-    else doSign();
+    setPreviewing(true); const imgs=await buildPreview(); setPreviewImgs(imgs); setPreviewing(false); setSignStep("preview");
   };
   const num=v=>{const n=parseFloat(String(v).replace(/[^0-9.]/g,""));return isNaN(n)?null:n;};
   const priceN=num(price), depN=num(depAmt), balance=(priceN!=null&&depN!=null)?priceN-depN:null;
@@ -3294,7 +3293,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
           ) : signStep==="preview" ? (
             <div>
               <div style={{fontSize:11,fontWeight:800,letterSpacing:1,textTransform:"uppercase",color:ESPRESSO,margin:"2px 0 6px"}}>Check before it sends</div>
-              <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"9px 11px",fontSize:12,color:BROWN_M,lineHeight:1.5,marginBottom:10}}>Confirm the signing spots land in the right place on this contract. <b style={{color:"#2563eb"}}>Blue</b> = signature, <b style={{color:"#dc2626"}}>red</b> = date. You'll check this for the first few contracts, then it sends automatically.</div>
+              <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"9px 11px",fontSize:12,color:BROWN_M,lineHeight:1.5,marginBottom:10}}>Confirm the signing spots land in the right place on this contract. <b style={{color:"#2563eb"}}>Blue</b> = signature, <b style={{color:"#dc2626"}}>red</b> = date. You'll see this check every time, before anything is sent.</div>
               <div style={{maxHeight:"44vh",overflowY:"auto",border:`1px solid ${SAND_D}`,borderRadius:10,padding:8,background:"#fff"}}>
                 {(previewImgs||[]).map(pg=>(<div key={pg.page} style={{marginBottom:10}}>
                   <div style={{fontSize:10.5,fontWeight:800,color:BROWN_L,marginBottom:3}}>Page {pg.page}</div>
@@ -3333,7 +3332,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
             {signErr&&<div style={{margin:"10px 0 0",background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{signErr}</div>}
             <div style={{display:"flex",gap:8,marginTop:12}}>
               <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 18px",whiteSpace:"nowrap"}} onClick={()=>{setSignOpen(false);setSignErr("");}}>Back</button>
-              <button className="btn-grn" style={{flex:"1 1 0",minWidth:0,whiteSpace:"nowrap"}} disabled={previewing||venLoading||!(signDetected&&signDetected.fields.length)} onClick={startSend}>{previewing?"Preparing…":(esignCount<10?"Review & send →":"Send for signing →")}</button>
+              <button className="btn-grn" style={{flex:"1 1 0",minWidth:0,whiteSpace:"nowrap"}} disabled={previewing||venLoading||!(signDetected&&signDetected.fields.length)} onClick={startSend}>{previewing?"Preparing…":"Review & send →"}</button>
             </div>
           </>)}
         </div>
