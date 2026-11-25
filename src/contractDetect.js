@@ -98,6 +98,41 @@ export async function renderPreviews(doc, fields, maxW = 540) {
   return out;
 }
 
+// Render a CHOSEN SET of pages (the particulars we filled — price/deposit/settlement/purchaser —
+// plus finance, Section 32, the signing pages, and any special-conditions annexure) to images so
+// the agent can review the whole FILLED contract before sending, not just the signing blocks.
+// `pages` = 1-based page numbers the fill wrote on; `pageInfo` = {1-based page: short label}.
+// Signing overlays (blue signature / red date) are drawn wherever `fields` land. maxW is higher
+// here (sharper) because these pages carry small particulars text the agent must actually read.
+export async function renderReviewPages(doc, fields, pages, pageInfo = {}, maxW = 980) {
+  const byPage = {};
+  for (const f of (fields || [])) (byPage[f.page] = byPage[f.page] || []).push(f);
+  const want = [...new Set([...(pages || []), ...Object.keys(byPage).map(Number)])]
+    .filter(p => p >= 1 && p <= doc.numPages).sort((a, b) => a - b);
+  const out = [];
+  for (const p of want) {
+    const page = await doc.getPage(p);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(2, maxW / base.width);
+    const vp = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+    const ctx = canvas.getContext("2d");
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    for (const f of (byPage[p] || [])) {
+      const a = f.area, x = a.x * vp.width, y = a.y * vp.height, w = a.w * vp.width, h = a.h * vp.height;
+      const sig = f.type === "signature";
+      ctx.fillStyle = sig ? "rgba(37,99,235,.10)" : "rgba(220,38,38,.10)";
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = sig ? "#2563eb" : "#dc2626"; ctx.lineWidth = 1.5;
+      ctx.strokeRect(x, y, w, h);
+    }
+    out.push({ page: p, url: canvas.toDataURL("image/jpeg", 0.85), w: canvas.width, h: canvas.height,
+      label: pageInfo[p] || "", sign: !!(byPage[p] && byPage[p].length) });
+  }
+  return out;
+}
+
 function toLines(items) {
   const sorted = items.slice().sort((a, b) => a.base - b.base || a.x0 - b.x0);
   const lines = [];

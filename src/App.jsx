@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v161-permanent-send-preview";
+const BUILD = "v162-review-filled-pages-zoom";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3034,20 +3034,27 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
   const INK=rgb(0,0,0);          // black ink
   const LIFT=3.5;                // sit values just ABOVE the dotted line, not on it
   const T=map.text||{}, B=map.boxes||{};
+  // Track the 1-based pages we actually write on (+ a short label each) so the send-preview can
+  // show the FILLED pages — price / settlement / purchaser / special conditions — not just the
+  // signing blocks.
+  const touched=new Set(); const pageInfo={};
+  const markLbl=(pg1,label)=>{ if(!pg1||!label)return; const cur=pageInfo[pg1]; if(!cur) pageInfo[pg1]=label; else if(cur.indexOf(label)<0) pageInfo[pg1]=cur+" · "+label; };
+  const lblPage=(f,label)=>{ if(f&&f.page!=null) markLbl(f.page+1,label); };
   // Some contract PDFs have a MediaBox pdf-lib can't parse, so prefer the page height the
   // mapper recorded (map.pageSizes) and only fall back to pdf-lib / A4.
   const pageH=(idx,pg)=>{ const ps=(map.pageSizes||{})[String(idx)]; if(ps&&ps[1]) return ps[1]; try{ return pg.getHeight(); }catch(e){ return 841.89; } };
-  const put=(f,text)=>{ if(!f||text==null||text==="")return; const pg=pages[f.page]; if(!pg)return; pg.drawText(String(text),{x:f.x,y:pageH(f.page,pg)-f.y+LIFT,size:f.size||10,font,color:INK}); };
-  const tick=(f)=>{ if(!f)return; const pg=pages[f.page]; if(!pg)return; pg.drawText("X",{x:f.x,y:pageH(f.page,pg)-f.y,size:f.size||9,font,color:INK}); };
+  const put=(f,text)=>{ if(!f||text==null||text==="")return; const pg=pages[f.page]; if(!pg)return; touched.add(f.page+1); pg.drawText(String(text),{x:f.x,y:pageH(f.page,pg)-f.y+LIFT,size:f.size||10,font,color:INK}); };
+  const tick=(f)=>{ if(!f)return; const pg=pages[f.page]; if(!pg)return; touched.add(f.page+1); pg.drawText("X",{x:f.x,y:pageH(f.page,pg)-f.y,size:f.size||9,font,color:INK}); };
   // Multi-line, word-wrapped special-condition text in the contract's special-conditions area.
-  const drawSpecial=(sc,text)=>{ const pg=pages[sc.page]; if(!pg)return; const size=sc.size||9, lh=sc.lineHeight||12.5, maxW=sc.width||448; let y=pageH(sc.page,pg)-sc.y;
+  const drawSpecial=(sc,text)=>{ const pg=pages[sc.page]; if(!pg)return; touched.add(sc.page+1); markLbl(sc.page+1,"Special conditions"); const size=sc.size||9, lh=sc.lineHeight||12.5, maxW=sc.width||448; let y=pageH(sc.page,pg)-sc.y;
     String(text).split("\n").forEach(para=>{ const bold=/^SPECIAL CONDITION/i.test(para); const ff=bold?fontB:font; const words=para.split(/\s+/); let line="";
       words.forEach(w=>{ const t=line?line+" "+w:w; if(ff.widthOfTextAtSize(t,size)>maxW && line){ pg.drawText(line,{x:sc.x,y,size,font:ff,color:INK}); y-=lh; line=w; } else line=t; });
       if(line){ pg.drawText(line,{x:sc.x,y,size,font:ff,color:INK}); y-=lh; } y-=4; }); };
   // Fallback: append a clean page with the special condition (contracts that already carry
   // special conditions, or have no empty box to write into).
-  const appendSpecial=(text,title,subtitle,intro)=>{ const W=595.28,H=841.89,MG=56,maxW=W-2*MG,size=10,lh=14; let pg=doc.addPage([W,H]); let y=H-72;
-    const nl=()=>{ y-=lh; if(y<MG){ pg=doc.addPage([W,H]); y=H-72; } };
+  const appendSpecial=(text,title,subtitle,intro,reviewLabel)=>{ const W=595.28,H=841.89,MG=56,maxW=W-2*MG,size=10,lh=14; let pg=doc.addPage([W,H]); let y=H-72;
+    const mark=()=>{ const n=doc.getPageCount(); touched.add(n); markLbl(n, reviewLabel||"Special conditions"); }; mark();
+    const nl=()=>{ y-=lh; if(y<MG){ pg=doc.addPage([W,H]); y=H-72; mark(); } };
     const line=(s,ff,z)=>{ pg.drawText(s,{x:MG,y,size:z||size,font:ff||font,color:INK}); nl(); };
     const wrap=(s,ff,z)=>{ const f=ff||font, zz=z||size; let ln=""; String(s).split(/\s+/).forEach(w=>{ const t=ln?ln+" "+w:w; if(f.widthOfTextAtSize(t,zz)>maxW && ln){ line(ln,f,zz); ln=w; } else ln=t; }); if(ln) line(ln,f,zz); };
     pg.drawText(title||"ADDITIONAL SPECIAL CONDITION",{x:MG,y,size:11,font:fontB,color:INK}); y-=18;
@@ -3082,16 +3089,23 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
     if((B.building||B.pest) && d==="14"){ tick(B.building); tick(B.pest); }
     else if(map.specialConditions){ drawSpecial(map.specialConditions, bpSpecialConditionText(v.bpDays||"14")); }
     else if(B.building||B.pest){ tick(B.building); tick(B.pest); }
-    else { appendSpecial(bpSpecialConditionText(v.bpDays||"14")); }
+    else { appendSpecial(bpSpecialConditionText(v.bpDays||"14"), undefined, undefined, undefined, "Building & pest condition"); }
   }
   // Free-text special conditions typed on the prepare-contract screen (e.g. agreed
   // pre-settlement works). Added as a clean Special Conditions annexure so arbitrary
   // length never overflows a fixed box; the parties sign the whole PDF, annexure included.
   if(v.special && String(v.special).trim()){
     appendSpecial(String(v.special).trim(), "SPECIAL CONDITIONS", v.propertyAddr||"",
-      "The following special conditions form part of this Contract of Sale and do not merge on settlement. Where a special condition is inconsistent with a printed or general condition, the special condition prevails.");
+      "The following special conditions form part of this Contract of Sale and do not merge on settlement. Where a special condition is inconsistent with a printed or general condition, the special condition prevails.", "Special conditions");
   }
-  return await doc.save();
+  // Short, human labels for the review preview (what landed on each page).
+  lblPage(T.price,"Price & deposit"); lblPage(T.deposit,"Price & deposit");
+  lblPage(T.settlement,"Settlement"); lblPage(T.balance,"Balance at settlement");
+  lblPage(T.purchaserName,"Purchaser"); lblPage(T.purchaserAddr,"Purchaser");
+  if(v.loan){ lblPage(T.lender,"Finance condition"); lblPage(T.loanAmount,"Finance condition"); }
+  lblPage(T.s32PurchaserName,"Section 32 — purchaser");
+  lblPage(T.signPurchaserName,"Signature");
+  return { bytes: await doc.save(), pages:[...touched].sort((a,b)=>a-b), pageInfo };
 }
 
 function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
@@ -3108,8 +3122,10 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   // Conveyancer emails (the executed contract is auto-sent to these on completion, cc the client).
   // Purchaser's comes from the offer; vendor's is read from the contract's Particulars of Sale.
   const [convPur,setConvPur]=useState(""),[convVen,setConvVen]=useState("");
-  // First 10 sends show a placement preview to confirm; after that it sends straight through.
+  // Every send shows a placement + filled-pages preview to confirm before anything is sent (permanent).
   const [esignCount,setEsignCount]=useState(0),[previewImgs,setPreviewImgs]=useState(null),[previewing,setPreviewing]=useState(false);
+  // Tap a preview page to open it full-screen and zoom (the app disables native pinch-zoom).
+  const [zoomImg,setZoomImg]=useState(null),[zoomScale,setZoomScale]=useState(1);
   useEffect(()=>{ if(open&&parsed){
     setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||""); setPadr(parsed.buyerAddress||"");
     setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); setDepWhen(parsed.depositBy||"on signing"); setDepUpfront(parsed.depositPaid||"");
@@ -3118,7 +3134,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
     setSpecial("");
     setFilling(false); setFillErr(""); setFilledFile(null);
     setSignOpen(false); setSignStep("prep"); setSignErr(""); setSendState("idle"); setPurEmail(""); setVenName(""); setVenEmail(""); setVenLoading(false); setSignDetected(null);
-    setConvPur(""); setConvVen(""); setPreviewImgs(null); setPreviewing(false);
+    setConvPur(""); setConvVen(""); setPreviewImgs(null); setPreviewing(false); setZoomImg(null); setZoomScale(1);
   } /* eslint-disable-next-line */ },[open,parsed]);
   const fileName=()=>`Contract - ${String(openHome?.address||"property").replace(/[\\/:*?"<>|]/g,"")} - ${(p1||"purchaser").split(" ")[0]}.pdf`;
   const doFill=async()=>{
@@ -3136,8 +3152,8 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
         approval:apprDate?fmtContractDate(apprDate):"", approvalD:apprDate?apprDate.getDate():"", approvalM:apprDate?(apprDate.getMonth()+1):"", approvalYY:apprDate?String(apprDate.getFullYear()).slice(-2):"",
         bp, bpDays:(bpDays||"14"),
         special:special.trim(), propertyAddr:openHome?.address||"" };
-      const bytes=await fillOfferContractPdf({ contractUrl:openHome?.contractUrl, propertyId:openHome?.propertyId, v });
-      setFilledFile({ bytes, name:fileName() });
+      const res=await fillOfferContractPdf({ contractUrl:openHome?.contractUrl, propertyId:openHome?.propertyId, v });
+      setFilledFile({ bytes:res.bytes, name:fileName(), filledPages:res.pages||[], pageInfo:res.pageInfo||{} });
     }catch(e){ setFillErr(e?.code==="NO_MAP" ? "This contract isn't set up for auto-fill yet. I map each contract once when it's added — tell Luke which listing and it takes a few minutes." : (e?.message||"Couldn't fill the contract.")); }
     setFilling(false);
   };
@@ -3166,7 +3182,11 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   // Build the placement-preview images (pages that carry fields, with the boxes drawn on).
   const buildPreview=async()=>{
     if(!signDetected||!signDetected._doc) return [];
-    try{ const mod=await import("./contractDetect.js"); return await mod.renderPreviews(signDetected._doc, signDetected.fields); }catch(e){ return []; }
+    const mod=await import("./contractDetect.js");
+    // Review the whole FILLED contract: the pages we wrote on (price / settlement / purchaser /
+    // special conditions) plus the signing pages, each labelled. Falls back to signing-only.
+    try{ return await mod.renderReviewPages(signDetected._doc, signDetected.fields, filledFile?.filledPages||[], filledFile?.pageInfo||{}); }
+    catch(e){ try{ return await mod.renderPreviews(signDetected._doc, signDetected.fields); }catch(_){ return []; } }
   };
   const doSign=async()=>{
     if(!purEmail.trim()){ setSignErr("Add the purchaser's email — they sign first."); return; }
@@ -3292,15 +3312,16 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
             </div>
           ) : signStep==="preview" ? (
             <div>
-              <div style={{fontSize:11,fontWeight:800,letterSpacing:1,textTransform:"uppercase",color:ESPRESSO,margin:"2px 0 6px"}}>Check before it sends</div>
-              <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"9px 11px",fontSize:12,color:BROWN_M,lineHeight:1.5,marginBottom:10}}>Confirm the signing spots land in the right place on this contract. <b style={{color:"#2563eb"}}>Blue</b> = signature, <b style={{color:"#dc2626"}}>red</b> = date. You'll see this check every time, before anything is sent.</div>
-              <div style={{maxHeight:"44vh",overflowY:"auto",border:`1px solid ${SAND_D}`,borderRadius:10,padding:8,background:"#fff"}}>
-                {(previewImgs||[]).map(pg=>(<div key={pg.page} style={{marginBottom:10}}>
-                  <div style={{fontSize:10.5,fontWeight:800,color:BROWN_L,marginBottom:3}}>Page {pg.page}</div>
-                  <img src={pg.url} style={{width:"100%",display:"block",borderRadius:6,border:`1px solid ${SAND_D}`}} alt={`Page ${pg.page}`}/>
+              <div style={{fontSize:11,fontWeight:800,letterSpacing:1,textTransform:"uppercase",color:ESPRESSO,margin:"2px 0 6px"}}>Check the filled contract before it sends</div>
+              <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"9px 11px",fontSize:12,color:BROWN_M,lineHeight:1.5,marginBottom:10}}>These are the pages we filled in — price, settlement, purchaser, special conditions — plus the signing pages. <b>Tap any page to zoom.</b> <b style={{color:"#2563eb"}}>Blue</b> = signature, <b style={{color:"#dc2626"}}>red</b> = date. If anything's off, tap Back and Change details &amp; fill again.</div>
+              <div style={{maxHeight:"48vh",overflowY:"auto",border:`1px solid ${SAND_D}`,borderRadius:10,padding:8,background:"#fff"}}>
+                {(previewImgs||[]).map(pg=>(<div key={pg.page} style={{marginBottom:12}}>
+                  <div style={{fontSize:10.5,fontWeight:800,color:BROWN_L,marginBottom:3,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}><span>Page {pg.page}</span>{pg.label&&<span style={{background:SAND,color:ESPRESSO,borderRadius:100,padding:"1px 8px",fontSize:10,fontWeight:800}}>{pg.label}</span>}{pg.sign&&<span style={{background:"#E7EFFD",color:"#2563eb",borderRadius:100,padding:"1px 8px",fontSize:10,fontWeight:800}}>signing</span>}</div>
+                  <img src={pg.url} onClick={()=>{setZoomScale(1);setZoomImg(pg);}} style={{width:"100%",display:"block",borderRadius:6,border:`1px solid ${SAND_D}`,cursor:"zoom-in"}} alt={`Page ${pg.page}${pg.label?" — "+pg.label:""}`}/>
                 </div>))}
                 {(!previewImgs||!previewImgs.length)&&<div style={{fontSize:12,color:BROWN_L,padding:"12px 4px"}}>Couldn't render the preview here, but {signDetected?signDetected.fields.length:0} signing spots were detected and will be placed.</div>}
               </div>
+              <button className="btn-cream" style={{width:"100%",marginTop:8,padding:"10px",fontSize:12.5}} onClick={downloadFilled}>Open the full contract (all pages) ↓</button>
               <div style={{background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:10,padding:"10px 12px",fontSize:12,color:ESPRESSO,lineHeight:1.55,marginTop:10}}>
                 <div style={{fontWeight:800,marginBottom:3}}>When both parties sign, the executed contract goes to:</div>
                 <div>Purchaser's conveyancer: {convPur||<span style={{color:"#A23B1E"}}>not set</span>}{convPur?<span style={{color:BROWN_L}}> · cc {purEmail}</span>:null}</div>
@@ -3353,6 +3374,16 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
         <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} disabled={filling} onClick={doFill}>{filling?"Filling…":"Fill contract →"}</button>
       </div>)}
     </div>
+    {zoomImg&&<div onClick={()=>{setZoomImg(null);setZoomScale(1);}} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.93)",zIndex:1000,display:"flex",flexDirection:"column"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 14px",color:"#fff",flex:"0 0 auto"}}>
+        <div style={{fontSize:12.5,fontWeight:700,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Page {zoomImg.page}{zoomImg.label?` · ${zoomImg.label}`:""}</div>
+        <button onClick={e=>{e.stopPropagation();setZoomImg(null);setZoomScale(1);}} style={{flex:"0 0 auto",marginLeft:10,background:"rgba(255,255,255,.16)",border:"none",color:"#fff",borderRadius:8,padding:"7px 14px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Close ✕</button>
+      </div>
+      <div onClick={e=>e.stopPropagation()} style={{flex:"1 1 0",overflow:"auto",WebkitOverflowScrolling:"touch",padding:10,textAlign:"center"}}>
+        <img src={zoomImg.url} onClick={()=>setZoomScale(s=>s>1?1:2.4)} style={{width:`${zoomScale*100}%`,maxWidth:"none",display:"inline-block",borderRadius:4,cursor:zoomScale>1?"zoom-out":"zoom-in"}} alt={`Page ${zoomImg.page}`}/>
+      </div>
+      <div style={{flex:"0 0 auto",textAlign:"center",color:"rgba(255,255,255,.72)",fontSize:11.5,padding:"8px 0 14px"}}>Tap the page to zoom in and out · scroll to move around</div>
+    </div>}
   </div>;
 }
 
