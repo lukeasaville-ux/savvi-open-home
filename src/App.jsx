@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v164-preview-pinch-zoom";
+const BUILD = "v165-special-reword-enquiries";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3222,6 +3222,8 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   const [bpDays,setBpDays]=useState("14");
   const [depUpfront,setDepUpfront]=useState("");
   const [special,setSpecial]=useState("");
+  // AI "reword like a lawyer" for the special conditions. specialPrev holds the pre-reword text so Luke can undo.
+  const [rewording,setRewording]=useState(false),[rewordErr,setRewordErr]=useState(""),[specialPrev,setSpecialPrev]=useState(null);
   const [filling,setFilling]=useState(false),[fillErr,setFillErr]=useState(""),[filledFile,setFilledFile]=useState(null);
   // Digital-signing (DocuSeal) sub-flow: purchaser signs first, then the vendor automatically.
   const [signOpen,setSignOpen]=useState(false),[signStep,setSignStep]=useState("prep"),[signErr,setSignErr]=useState(""),[sendState,setSendState]=useState("idle");
@@ -3238,12 +3240,23 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
     setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); setDepWhen(parsed.depositBy||"on signing"); setDepUpfront(parsed.depositPaid||"");
     // Settlement period ("60 days") becomes a real date from today; the agent can still edit it.
     setSettle(computeSettleDate(parsed.settlement, new Date())); setFin(!!parsed.finance); setLender(parsed.lender||"An approved lending institution"); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setBpDays(parsed.bpDays||"14"); setVacant(true); setCopied(false);
-    setSpecial("");
+    setSpecial(parsed.conditions||""); setRewording(false); setRewordErr(""); setSpecialPrev(null);
     setFilling(false); setFillErr(""); setFilledFile(null);
     setSignOpen(false); setSignStep("prep"); setSignErr(""); setSendState("idle"); setPurEmail(""); setVenName(""); setVenEmail(""); setVenLoading(false); setSignDetected(null);
     setConvPur(""); setConvVen(""); setPreviewImgs(null); setPreviewing(false); setZoomImg(null); setZoomScale(1);
   } /* eslint-disable-next-line */ },[open,parsed]);
   const fileName=()=>`Contract - ${String(openHome?.address||"property").replace(/[\\/:*?"<>|]/g,"")} - ${(p1||"purchaser").split(" ")[0]}.pdf`;
+  // Ask the backend (Claude) to rewrite the special conditions as a lawyer would. Keeps the
+  // previous text so Luke can undo. Result lands back in the editable field.
+  const rewordSpecial=async()=>{
+    const src=special.trim(); if(!src){ setRewordErr("Add the special conditions first, then I'll reword them."); return; }
+    setRewordErr(""); setRewording(true);
+    try{ const r=await call("aiRewordSpecial",{text:src});
+      if(r&&r.ok&&r.text){ setSpecialPrev(special); setSpecial(r.text); }
+      else setRewordErr((r&&r.error==="empty"?"Add the special conditions first.":"Couldn't reword those just now. Try again.")); }
+    catch(e){ setRewordErr("Couldn't reach the reword service. Try again."); }
+    setRewording(false);
+  };
   const doFill=async()=>{
     setFillErr(""); setFilling(true); setFilledFile(null);
     try{
@@ -3399,14 +3412,17 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
           <input style={fi} value={bpDays} onChange={e=>setBpDays(e.target.value)} inputMode="numeric" placeholder="14"/>
         </div>}
         <div style={{marginTop:12}}>
-          <label style={fl}>Special conditions (added to the contract)</label>
-          <textarea style={{...fi,minHeight:96,resize:"vertical",lineHeight:1.5}} value={special} onChange={e=>setSpecial(e.target.value)} placeholder={"e.g. works the vendor will complete before settlement. One per line.\n\nLeave blank if there are none."}/>
-          <div style={{fontSize:11,color:BROWN_L,marginTop:4,lineHeight:1.45}}>Anything typed here is added to the filled contract as a Special Conditions annexure. Start a line with "SPECIAL CONDITION" for a bold heading.</div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:4}}>
+            <label style={{...fl,marginBottom:0}}>Special conditions (added to the contract)</label>
+            <button type="button" onClick={rewordSpecial} disabled={rewording||!special.trim()} style={{flex:"0 0 auto",display:"inline-flex",alignItems:"center",gap:5,background:rewording?LINEN:"#EEF2FF",border:`1px solid ${rewording?SAND_D:"#C7D2FE"}`,color:"#4338CA",borderRadius:8,padding:"6px 11px",fontSize:12,fontWeight:800,cursor:(rewording||!special.trim())?"default":"pointer",fontFamily:"inherit",opacity:(!special.trim())?.5:1,whiteSpace:"nowrap"}}>{rewording?<><span className="sp-sm"/> Rewording…</>:"✦ Reword like a lawyer"}</button>
+          </div>
+          <textarea style={{...fi,minHeight:110,resize:"vertical",lineHeight:1.5}} value={special} onChange={e=>setSpecial(e.target.value)} placeholder={"Special conditions from the buyer's offer appear here. Edit them freely, then tap Reword like a lawyer.\n\nLeave blank if there are none."}/>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginTop:4}}>
+            <div style={{fontSize:11,color:BROWN_L,lineHeight:1.45,flex:"1 1 0"}}>Prefilled from the buyer's offer. Added to the filled contract as a Special Conditions annexure signed by all parties. Start a line with "SPECIAL CONDITION" for a bold heading.</div>
+            {specialPrev!=null&&<button type="button" onClick={()=>{setSpecial(specialPrev);setSpecialPrev(null);}} style={{flex:"0 0 auto",background:"none",border:"none",color:BLUE_D,fontSize:11.5,fontWeight:700,cursor:"pointer",padding:0,fontFamily:"inherit",whiteSpace:"nowrap"}}>↶ Undo reword</button>}
+          </div>
+          {rewordErr&&<div style={{marginTop:6,background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:9,padding:"8px 10px",fontSize:12,fontWeight:600}}>{rewordErr}</div>}
         </div>
-        {parsed.conditions&&<div style={{marginTop:12}}>
-          <label style={fl}>Buyer's offer notes (reference)</label>
-          <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:9,padding:"9px 11px",fontSize:12.5,color:BROWN_M,whiteSpace:"pre-wrap",maxHeight:120,overflowY:"auto"}}>{parsed.conditions}</div>
-        </div>}
       </div>
       {fillErr&&<div style={{margin:"0 16px 10px",background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{fillErr}</div>}
       {filledFile ? ( signOpen ? (
@@ -4896,6 +4912,9 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const _defCmp=(a,b)=>(_IR[b.interest]||0)-(_IR[a.interest]||0)||buyerHeat(b).score-buyerHeat(a).score;
   const _wCmp=(a,b)=>{ if(wsort){ const va=_sortVal(a,wsort.k),vb=_sortVal(b,wsort.k); const c=typeof va==="string"?va.localeCompare(vb):(va-vb); if(c) return c*wsort.d; } return _defCmp(a,b); };
   const tRows=useMemo(()=>{ const src=tf==="enquiry"?enquiries:tf==="open"?pb.filter(b=>!b.isEnquiry):propReal; const q=tq.trim().toLowerCase(); const _of=Object.keys(wOpenF).filter(k=>wOpenF[k]); return src.filter(b=>tf==="all"||tf==="enquiry"||tf==="open"?true:tf==="contract"?!!b.contractSent:tf==="repeat"?(b.visits||1)>1:tf==="offer"?(b.notes||[]).some(n=>/^\s*\[(Offer|Bid registration)\]/i.test(n.text||"")):b.interest===tf).filter(b=>!q||(b.name||"").toLowerCase().includes(q)||(b.mobile||"").includes(q)||(b.email||"").toLowerCase().includes(q)).filter(b=>!_of.length||_of.some(id=>(b.openHomeIds||[]).includes(id))).sort(_wCmp); },[tf,tq,pb,propReal,enquiries,wOpenF,wsort]);
+  // Enquiries shown as their own segment UNDER the inspections on the default "All" view (so you
+  // never have to click the Enquiries tab to see them). Same search + sort as the inspections table.
+  const enqRows=useMemo(()=>{ const q=tq.trim().toLowerCase(); return (enquiries||[]).filter(b=>!q||(b.name||"").toLowerCase().includes(q)||(b.mobile||"").includes(q)||(b.email||"").toLowerCase().includes(q)).sort(_wCmp); },[enquiries,tq,wsort]);
   const openBuyer=(b)=>{ crm.setActive(b); crm.setShowDetail(true); };
   const wselected=tRows.filter(b=>wsel[b.id]);
   const wAllOn=tRows.length>0&&tRows.every(b=>wsel[b.id]);
@@ -4987,17 +5006,33 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
             </div>
           : wselected.length>0&&<div className="crm-bulkbar">{wselected.length} selected<button className="crm-btn p" disabled={!wselected.some(b=>b.mobile)} onClick={()=>setWbulk(true)}>Text {wselected.length}</button><button className="crm-btn" disabled={!wselected.some(b=>b.email)} onClick={()=>emailBuyers(wselected)}>Email {wselected.filter(b=>b.email).length}</button><button className="crm-btn" onClick={()=>setWsel({})}>Clear</button></div>}
         {loading&&<div style={{textAlign:"center",padding:40}}><div className="sp"/></div>}
-        {!loading&&tRows.length===0&&<div className="crm-empty"><div className="em">👥</div><div>{propAll.length?"No buyers match that filter.":"No buyers on this listing yet."}</div></div>}
-        {!loading&&tRows.length>0&&(wview==="insp"&&wsOpens.length>0 ? (()=>{ const {gs,orphans}=inspGroups(); return <table className="crm-tbl">{thead}<tbody>
-          {gs.map(({o,bs})=><Fragment key={o.id}>
-            <tr className="grouphdr"><td colSpan={9}><span className="gh-when">{openWhen(o)||o.date}{o.end_time?`–${o.end_time}`:""}</span>{o.agent_name?<span className="gh-agent"> · {o.agent_name}</span>:null}<span className="gh-n">{bs.length} buyer{bs.length===1?"":"s"}</span></td></tr>
-            {bs.map(rowTr)}
-          </Fragment>)}
-          {orphans.length>0&&<Fragment key="__orphans">
-            <tr className="grouphdr"><td colSpan={9}><span className="gh-when">Not tied to a dated inspection</span><span className="gh-n">{orphans.length}</span></td></tr>
-            {orphans.map(rowTr)}
-          </Fragment>}
-        </tbody></table>; })() : <table className="crm-tbl">{thead}<tbody>{tRows.map(rowTr)}</tbody></table>)}
+        {!loading&&(()=>{
+          // On the default "All" view, enquiries get their own labelled segment BELOW the inspections.
+          const showEnqSeg = tf==="all" && enqRows.length>0;
+          if(tRows.length===0 && !showEnqSeg) return <div className="crm-empty"><div className="em">👥</div><div>{propAll.length?"No buyers match that filter.":"No buyers on this listing yet."}</div></div>;
+          const inspBody = (wview==="insp"&&wsOpens.length>0)
+            ? (()=>{ const {gs,orphans}=inspGroups(); return <>
+                {gs.map(({o,bs})=><Fragment key={o.id}>
+                  <tr className="grouphdr"><td colSpan={9}><span className="gh-when">{openWhen(o)||o.date}{o.end_time?`–${o.end_time}`:""}</span>{o.agent_name?<span className="gh-agent"> · {o.agent_name}</span>:null}<span className="gh-n">{bs.length} buyer{bs.length===1?"":"s"}</span></td></tr>
+                  {bs.map(rowTr)}
+                </Fragment>)}
+                {orphans.length>0&&<Fragment key="__orphans">
+                  <tr className="grouphdr"><td colSpan={9}><span className="gh-when">Not tied to a dated inspection</span><span className="gh-n">{orphans.length}</span></td></tr>
+                  {orphans.map(rowTr)}
+                </Fragment>}
+              </>; })()
+            : <>
+                {showEnqSeg&&<tr className="grouphdr"><td colSpan={9}><span className="gh-when">Inspections</span><span className="gh-n">{tRows.length}</span></td></tr>}
+                {tRows.map(rowTr)}
+              </>;
+          return <table className="crm-tbl">{thead}<tbody>
+            {tRows.length>0&&inspBody}
+            {showEnqSeg&&<Fragment key="__enq">
+              <tr className="grouphdr"><td colSpan={9}><span className="gh-when">Enquiries</span><span className="gh-n">{enqRows.length}</span></td></tr>
+              {enqRows.map(rowTr)}
+            </Fragment>}
+          </tbody></table>;
+        })()}
       </div>
     </div>;
   };
