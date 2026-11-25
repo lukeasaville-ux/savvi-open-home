@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v156-calendar-rebuild";
+const BUILD = "v157-calendar-brandfont";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5507,12 +5507,19 @@ function calFmtDate(d){ return d ? (d.getDate()+" "+CAL_MONTHS[d.getMonth()]) : 
 const CAL_A4W=595.28, CAL_A4H=841.89;
 function calHexRgb(rgb,hex){ const n=parseInt(hex.slice(1),16); return rgb(((n>>16)&255)/255,((n>>8)&255)/255,(n&255)/255); }
 function calWrap(font,size,text,maxW){ const words=String(text).split(" "); const lines=[]; let cur=""; words.forEach(wd=>{ const t=cur?cur+" "+wd:wd; if(font.widthOfTextAtSize(t,size)>maxW && cur){ lines.push(cur); cur=wd; } else cur=t; }); if(cur) lines.push(cur); return lines; }
-async function buildCalendarPdfV2({ variant, events, anchorDate, useDates }){
+async function buildCalendarPdfV2({ variant, events, anchorDate, labelMode }){
   const { PDFDocument, StandardFonts, rgb }=await import("pdf-lib");
   const doc=await PDFDocument.create();
-  const serif=await doc.embedFont(StandardFonts.TimesRomanBold);
-  const serifR=await doc.embedFont(StandardFonts.TimesRoman);
-  let med; try{ const fontkit=(await import("@pdf-lib/fontkit")).default; doc.registerFontkit(fontkit); const mb=await fetch("/fonts/NeueHaasUnicaPro-Medium.ttf").then(r=>r.arrayBuffer()); med=await doc.embedFont(mb,{ subset:true }); }catch(e){ med=await doc.embedFont(StandardFonts.Helvetica); }
+  // Savvi's brand serif (Newsreader) for the title / method label / band labels; Neue Haas for cells.
+  // Fall back to Times/Helvetica only if the font files can't be fetched.
+  let serif, serifR, med;
+  try{
+    const fontkit=(await import("@pdf-lib/fontkit")).default; doc.registerFontkit(fontkit);
+    const nb=await fetch("/fonts/Newsreader-Medium.ttf").then(r=>r.arrayBuffer()); serif=await doc.embedFont(nb,{ subset:true }); serifR=serif;
+    const mb=await fetch("/fonts/NeueHaasUnicaPro-Medium.ttf").then(r=>r.arrayBuffer()); med=await doc.embedFont(mb,{ subset:true });
+  }catch(e){
+    serif=await doc.embedFont(StandardFonts.TimesRomanBold); serifR=await doc.embedFont(StandardFonts.TimesRoman); med=await doc.embedFont(StandardFonts.Helvetica);
+  }
   let logo=null; try{ const lb=await fetch("/savvi-wordmark-black.png").then(r=>r.arrayBuffer()); logo=await doc.embedPng(lb); }catch(e){}
   const W=CAL_A4W, H=CAL_A4H, page=doc.addPage([W,H]);
   const INK=calHexRgb(rgb,CAL_INK), CREAM=calHexRgb(rgb,CAL_CREAM), ORANGE=calHexRgb(rgb,CAL_ORANGE), BLUE=calHexRgb(rgb,CAL_BLUE);
@@ -5533,7 +5540,7 @@ async function buildCalendarPdfV2({ variant, events, anchorDate, useDates }){
   page.drawRectangle({ x:mL, y:y-dayHdrH, width:gridW, height:dayHdrH, color:INK });
   for(let c=0;c<7;c++){ const sz=10.5, w=serifR.widthOfTextAtSize(CAL_DOW[c],sz); page.drawText(CAL_DOW[c],{ x:mL+c*colW+(colW-w)/2, y:y-dayHdrH/2-sz*0.34, size:sz, font:serifR, color:CREAM }); }
   y-=dayHdrH;
-  const anchorDay=useDates?calAnchorDay(variant,events):null;
+  const anchorDay=labelMode==="date"?calAnchorDay(variant,events):null;
   const evByDay={}; events.forEach(e=>{ (evByDay[e.day]=evByDay[e.day]||[]).push(e); });
   bands.forEach(bd=>{
     page.drawRectangle({ x:mL, y:y-bandH, width:gridW, height:bandH, color:INK });
@@ -5543,9 +5550,14 @@ async function buildCalendarPdfV2({ variant, events, anchorDate, useDates }){
       for(let c=0;c<7;c++){
         const x=mL+c*colW, cy=y-rowH, n=calDay(w,c);
         page.drawRectangle({ x, y:cy, width:colW, height:rowH, borderColor:INK, borderWidth:0.6 });
-        const dt=calDateOf(n,anchorDay,anchorDate), dlab=(useDates&&dt)?calFmtDate(dt):("Day "+n);
-        const dsz=11, dw=med.widthOfTextAtSize(dlab,dsz); page.drawText(dlab,{ x:x+(colW-dw)/2, y:y-14, size:dsz, font:med, color:INK });
-        const evs=evByDay[n]||[]; let ey=y-30;
+        const showLabel=labelMode!=="none";
+        if(showLabel){ const dt=calDateOf(n,anchorDay,anchorDate); const dlab=labelMode==="date"?(dt?calFmtDate(dt):""):("Day "+n);
+          const dsz=11, dw=med.widthOfTextAtSize(dlab,dsz); page.drawText(dlab,{ x:x+(colW-dw)/2, y:y-14, size:dsz, font:med, color:INK }); }
+        const evs=evByDay[n]||[];
+        // plain (non-shape) events: block-centre them vertically when cells are blank, else sit under the label
+        const plainWrapped=evs.filter(e=>e.shape!=="circleO"&&e.shape!=="circleB"&&e.shape!=="ellipseO").map(ev=>calWrap(med,8.5,ev.text,colW-12));
+        const totalLines=plainWrapped.reduce((s,l)=>s+l.length,0), blockH=totalLines*10+Math.max(0,plainWrapped.length-1)*6;
+        let ey = showLabel ? (y-30) : (cy+rowH/2+blockH/2-7), pi=0;
         evs.forEach(ev=>{
           if(ev.shape==="circleO"||ev.shape==="circleB"){
             const r=Math.min(colW*0.44, rowH*0.33), cx=x+colW/2, ccy=cy+rowH*0.40;
@@ -5558,7 +5570,7 @@ async function buildCalendarPdfV2({ variant, events, anchorDate, useDates }){
             const lines=calWrap(med,8.5,ev.text,exr*1.85), lh=9.5;
             lines.forEach((ln,i)=>{ const lw=med.widthOfTextAtSize(ln,8.5); page.drawText(ln,{ x:cx-lw/2, y:ccy+(lines.length-1)*lh/2-i*lh-3, size:8.5, font:med, color:INK }); });
           } else {
-            const lines=calWrap(med,8.5,ev.text,colW-12), lh=10;
+            const lines=plainWrapped[pi++], lh=10;
             lines.forEach((ln,i)=>{ const lw=med.widthOfTextAtSize(ln,8.5); page.drawText(ln,{ x:x+(colW-lw)/2, y:ey-i*lh, size:8.5, font:med, color:INK }); });
             ey-=lines.length*lh+6;
           }
@@ -5573,7 +5585,7 @@ function CalendarSheet({ open, onClose }){
   const [method,setMethod]=useState("private-sale");  // private-sale | auction
   const [offMarket,setOffMarket]=useState(false);     // true → add an Off Market first stage (6 weeks)
   const [staging,setStaging]=useState(true);
-  const [useDates,setUseDates]=useState(true);        // real dates vs plain Day 1…N
+  const [labelMode,setLabelMode]=useState("none");    // none (blank cells, matches the master) | day | date
   const [anchorDate,setAnchorDate]=useState("");
   const [addr,setAddr]=useState("");
   const [events,setEvents]=useState(()=>calDefaults("private-sale",true));
@@ -5597,7 +5609,7 @@ function CalendarSheet({ open, onClose }){
     });
   }
   const weeks=calWeeks(variant), bands=calBands(variant);
-  const anchorDay=useDates?calAnchorDay(variant,events):null;
+  const anchorDay=labelMode==="date"?calAnchorDay(variant,events):null;
   const sel=events.find(e=>e.id===selId)||null;
   function upd(id,patch){ setEvents(evs=>evs.map(e=>e.id===id?{...e,...patch}:e)); }
   function del(id){ setEvents(evs=>evs.filter(e=>e.id!==id)); if(selId===id) setSelId(null); }
@@ -5611,10 +5623,10 @@ function CalendarSheet({ open, onClose }){
   function reset(){ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); setErr(""); }
   function handleClose(){ reset(); onClose(); }
   async function generate(){
-    if(useDates&&!anchorDate){ setErr(`Pick the ${calAnchorLabel(variant).toLowerCase()}, or switch to Day numbers.`); return; }
+    if(labelMode==="date"&&!anchorDate){ setErr(`Pick the ${calAnchorLabel(variant).toLowerCase()}, or switch to Blank / Days.`); return; }
     setErr(""); setBusy(true);
     try{
-      const bytes=await buildCalendarPdfV2({ variant, events, anchorDate: useDates?anchorDate:null, useDates });
+      const bytes=await buildCalendarPdfV2({ variant, events, anchorDate: labelMode==="date"?anchorDate:null, labelMode });
       const blob=new Blob([bytes],{type:"application/pdf"});
       if(pdfUrl)URL.revokeObjectURL(pdfUrl);
       setPdfUrl(URL.createObjectURL(blob));
@@ -5627,9 +5639,10 @@ function CalendarSheet({ open, onClose }){
   const chipBg=sh=>sh==="circleB"?CAL_BLUE:(sh==="circleO"||sh==="ellipseO")?CAL_ORANGE:"#EFE6CF";
   const anchorNote = variant.indexOf("auction")>=0 ? "This is the auction date (a Saturday). Every other event is spaced around it." : "This is the first open for inspection (a Saturday). Every other event is spaced around it.";
   // Render the grid: day-of-week header, then each band followed by its week rows.
-  const cell=(w,c)=>{ const n=calDay(w,c); const dt=calDateOf(n,anchorDay,anchorDate); const dlab=(useDates&&dt)?calFmtDate(dt):("Day "+n); const evs=events.filter(e=>e.day===n);
-    return <div key={c} data-calcell={n} style={{position:"relative",minHeight:72,border:`0.6px solid ${BROWN}`,background:CAL_CREAM,padding:"17px 3px 5px",display:"flex",flexDirection:"column",gap:3,alignItems:"center"}}>
-      <div style={{position:"absolute",top:3,left:0,right:0,textAlign:"center",fontSize:9.5,fontWeight:800,color:BROWN,pointerEvents:"none"}}>{dlab}</div>
+  const showLabel=labelMode!=="none";
+  const cell=(w,c)=>{ const n=calDay(w,c); const dt=calDateOf(n,anchorDay,anchorDate); const dlab=labelMode==="date"?(dt?calFmtDate(dt):""):("Day "+n); const evs=events.filter(e=>e.day===n);
+    return <div key={c} data-calcell={n} style={{position:"relative",minHeight:72,border:`0.6px solid ${BROWN}`,background:CAL_CREAM,padding:showLabel?"17px 3px 5px":"6px 3px 6px",display:"flex",flexDirection:"column",gap:3,alignItems:"center",justifyContent:showLabel?"flex-start":"center"}}>
+      {showLabel&&<div style={{position:"absolute",top:3,left:0,right:0,textAlign:"center",fontSize:9.5,fontWeight:800,color:BROWN,pointerEvents:"none"}}>{dlab}</div>}
       <button onClick={()=>addAt(n)} title="Add event" style={{position:"absolute",top:2,right:3,width:15,height:15,lineHeight:"13px",borderRadius:8,border:"none",background:"rgba(49,30,16,0.12)",color:BROWN,fontSize:12,fontWeight:700,cursor:"pointer",padding:0}}>+</button>
       {evs.map(ev=><div key={ev.id} onPointerDown={e=>chipDown(e,ev)} onPointerMove={chipMove} onPointerUp={chipUp} style={{touchAction:"none",cursor:"grab",width:"100%",background:chipBg(ev.shape),borderRadius:ev.shape==="circleO"||ev.shape==="circleB"?13:7,padding:"3px 5px",fontSize:8.5,fontWeight:700,color:BROWN,textAlign:"center",lineHeight:1.15,wordBreak:"break-word",outline:selId===ev.id?`2px solid ${BROWN}`:"none"}}>{ev.text}</div>)}
     </div>;
@@ -5658,9 +5671,9 @@ function CalendarSheet({ open, onClose }){
             </div>
             <div style={{display:"flex",gap:8,marginTop:12}}>
               <div style={{flex:1}}><label className="fl">Staging</label><div style={segWrap}><button style={seg(staging)} onClick={()=>toggleStaging(true)}>Staged</button><button style={seg(!staging)} onClick={()=>toggleStaging(false)}>No staging</button></div></div>
-              <div style={{flex:1}}><label className="fl">Dates</label><div style={segWrap}><button style={seg(useDates)} onClick={()=>setUseDates(true)}>Real dates</button><button style={seg(!useDates)} onClick={()=>setUseDates(false)}>Day No.</button></div></div>
+              <div style={{flex:1}}><label className="fl">Day labels</label><div style={segWrap}><button style={seg(labelMode==="none")} onClick={()=>setLabelMode("none")}>Blank</button><button style={seg(labelMode==="day")} onClick={()=>setLabelMode("day")}>Days</button><button style={seg(labelMode==="date")} onClick={()=>setLabelMode("date")}>Dates</button></div></div>
             </div>
-            {useDates && <div style={{marginTop:12}}>
+            {labelMode==="date" && <div style={{marginTop:12}}>
               <label className="fl">{calAnchorLabel(variant)}</label>
               <input className="fi" type="date" value={anchorDate} onChange={e=>setAnchorDate(calSnapSat(e.target.value))}/>
               <div style={{fontSize:11.5,color:BROWN_L,marginTop:5,lineHeight:1.4}}>{anchorDate?anchorNote:anchorNote}</div>
