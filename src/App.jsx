@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v147-single-price";
+const BUILD = "v148-marketing-nil";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5215,10 +5215,10 @@ async function fillSaleAuthority(d){
   }
   // Marketing Expenses block (page 0): the advertising-schedule total flows into
   // Advertising + TOTAL; "Other" lines are never used → NIL. (coords from the base PDF)
-  if(d.schedule && d.schedule.total){
-    const tot=Number(d.schedule.total).toLocaleString("en-AU");
-    put(75,651.2,tot); put(286,651.2,"NIL"); put(418,651.2,tot); put(213,689.5,"NIL");
-    await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
+  { const st=d.schedule&&d.schedule.total?Number(d.schedule.total):0;
+    const adv=st>0?st.toLocaleString("en-AU"):"NIL";                 // no schedule (off-market / no schedule) → NIL, never blank
+    put(75,651.2,adv); put(286,651.2,"NIL"); put(418,651.2,adv); put(213,689.5,"NIL");
+    if(st>0) await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
   }
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   if(d.advocate && (d.advocateName||"").trim()) await appendCommissionSharingPage(doc, font, bold, rgb, d);
@@ -5272,10 +5272,10 @@ async function fillAuctionAuthority(d){
       put(37,572.5,est.toLocaleString("en-AU")); put(481,572.5,gst.toLocaleString("en-AU")); put(404,588.2,top.toLocaleString("en-AU")); }
   }
   page.drawLine({ start:{x:19.6,y:H-698.0}, end:{x:133.3,y:H-698.0}, thickness:1, color:rgb(0,0,0) }); // strike "*the signing of this Authority"
-  if(d.schedule && d.schedule.total){
-    const tot=Number(d.schedule.total).toLocaleString("en-AU");
-    put(75,667.7,tot); put(286,667.7,"NIL"); put(418,667.7,tot); put(213,716.5,"NIL");
-    await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
+  { const st=d.schedule&&d.schedule.total?Number(d.schedule.total):0;
+    const adv=st>0?st.toLocaleString("en-AU"):"NIL";                 // no schedule (off-market / no schedule) → NIL, never blank
+    put(75,667.7,adv); put(286,667.7,"NIL"); put(418,667.7,adv); put(213,716.5,"NIL");
+    if(st>0) await appendSchedulePage(doc,rgb,{ propertyAddr:d.propertyAddr, campaignName:d.schedule.campaignName, sched:d.schedule.sched, itemised:d.schedule.itemised });
   }
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   if(d.advocate && (d.advocateName||"").trim()) await appendCommissionSharingPage(doc, font, bold, rgb, d);
