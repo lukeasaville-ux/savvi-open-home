@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v145-calculators";
+const BUILD = "v146-no-ad-schedule";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5311,8 +5311,11 @@ const SCHED_CAMPAIGNS=[
   {id:"noboard",name:"High Impact Digital Campaign (No Board)",omit:["board"]},
   {id:"nodomain",name:"High Impact Digital Campaign (No Domain)",omit:["domain"]},
   {id:"off",name:"Off-market — no advertising ($0)",off:true},
+  {id:"none",name:"No advertising schedule",off:true},
   {id:"custom",name:"Custom schedule",custom:true,quote:"High Impact Digital & Social Campaign"},
 ];
+// off:true means NO advertising schedule is attached to the authority (off-market, or a listing run with no Savvi schedule).
+function schedOff(id){ const c=SCHED_CAMPAIGNS.find(x=>x.id===id); return !!(c&&c.off); }
 function authPostcode(addr){ const m=String(addr||"").match(/\b(3\d{3})\b/g); return m?m[m.length-1]:""; }
 function domainBand(bottom){ const n=Number(String(bottom||"").replace(/[^0-9]/g,"")); if(!n||n<=999999)return"b1"; if(n<=2249999)return"b2"; return"b3"; }
 function reaPremiere(postcode){ return REA_PREMIERE[postcode]!=null?REA_PREMIERE[postcode]:REA_DEFAULT; }
@@ -5586,18 +5589,18 @@ function ScheduleSheet({ open, onClose, agentName }){
   const money=v=>"$"+Number(v||0).toLocaleString("en-AU");
   useEffect(()=>{ // rebuild the item set as address / price / template change (unless a custom set is in play)
     if(!open) return;
-    if(campaign==="off"){ setSched(null); return; }
+    if(schedOff(campaign)){ setSched(null); return; }
     if(campaign==="custom") return;
     setSched(defaultSched(postcode, band, campaign));
   },[open,postcode,band,campaign]);
-  function pickCampaign(id){ setCampaign(id); if(id!=="off"&&id!=="custom") setSched(defaultSched(postcode,band,id)); if(id!=="custom") setShowEdit(false); }
+  function pickCampaign(id){ setCampaign(id); if(!schedOff(id)&&id!=="custom") setSched(defaultSched(postcode,band,id)); if(id!=="custom") setShowEdit(false); }
   const editItem=(sec,i,k,val)=>setSched(s=>({...s,[sec]:s[sec].map((it,j)=>j===i?{...it,[k]:val}:it)}));
   const toggleItem=(sec,i)=>setSched(s=>({...s,[sec]:s[sec].map((it,j)=>j===i?{...it,on:it.on===false}:it)}));
   const removeItem=(sec,i)=>setSched(s=>({...s,[sec]:s[sec].filter((_,j)=>j!==i)}));
   const addItem=(sec)=>setSched(s=>({...s,[sec]:[...s[sec],{k:"c"+Date.now(),name:"",amt:0,on:true}]}));
   const setDomainAmt=(v)=>setSched(s=>({...s,internet:s.internet.map(it=>it.k==="domain"?{...it,amt:Number(String(v).replace(/[^0-9]/g,""))||0,needs:false}:it)}));
   const domItem = sched && (sched.internet||[]).find(it=>it.k==="domain");
-  const domainNeeds = campaign!=="off" && domItem && (domItem.needs || !(Number(domItem.amt)>0)) && domItem.on!==false;
+  const domainNeeds = !schedOff(campaign) && domItem && (domItem.needs || !(Number(domItem.amt)>0)) && domItem.on!==false;
   const schedTot = sched ? schedTotal(sched) : 0;
   function reset(){ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); setErr(""); }
   function handleClose(){ reset(); onClose(); }
@@ -5641,9 +5644,9 @@ function ScheduleSheet({ open, onClose, agentName }){
             </div>
             <div style={{padding:"0 16px 10px"}}><label className="fl">Campaign template</label>
               <select className="fi" value={campaign} onChange={e=>pickCampaign(e.target.value)}>
-                {SCHED_CAMPAIGNS.filter(c=>c.id!=="custom"||canCustom).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                {SCHED_CAMPAIGNS.filter(c=>(c.id!=="custom"||canCustom)&&c.id!=="none").map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
               </select></div>
-            {campaign==="off" ? (
+            {schedOff(campaign) ? (
               <div style={{margin:"0 16px 12px",background:LINEN,borderRadius:10,padding:"12px 14px",fontSize:12.5,color:BROWN_M,lineHeight:1.5}}>Off-market, no advertising. There is nothing to schedule.</div>
             ) : sched ? (<>
               {domainNeeds && <div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12.5,lineHeight:1.4}}>
@@ -5700,7 +5703,7 @@ function ScheduleSheet({ open, onClose, agentName }){
               )}
             </>) : null}
             {err&&<div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
-            <div className="fg" style={{paddingBottom:10}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={generate} disabled={busy||campaign==="off"||!sched||domainNeeds}>{busy?<><span className="sp-sm"/>Generating…</>:"Generate schedule PDF"}</button></div>
+            <div className="fg" style={{paddingBottom:10}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={generate} disabled={busy||schedOff(campaign)||!sched||domainNeeds}>{busy?<><span className="sp-sm"/>Generating…</>:"Generate schedule PDF"}</button></div>
           </div>
         )}
       </div>
@@ -6321,7 +6324,7 @@ function AuthoritySheet({ open, onClose, agentName }){
   const [draftId,setDraftId]=useState(null);
   const [savedMsg,setSavedMsg]=useState("");
   useEffect(()=>{ if(open) setDrafts(loadAuthDrafts()); },[open]);
-  useEffect(()=>{ if(stage==="schedule" && !sched && campaign!=="off") setSched(defaultSched(authPostcode(propertyAddr), domainBand(priceFrom||priceTo||vendorPrice), campaign==="custom"?"hidc":campaign)); },[stage,sched,campaign,propertyAddr,priceFrom,priceTo,vendorPrice]);
+  useEffect(()=>{ if(stage==="schedule" && !sched && !schedOff(campaign)) setSched(defaultSched(authPostcode(propertyAddr), domainBand(priceFrom||priceTo||vendorPrice), campaign==="custom"?"hidc":campaign)); },[stage,sched,campaign,propertyAddr,priceFrom,priceTo,vendorPrice]);
   const setV=(i,k,val)=>setVendors(vs=>vs.map((v,j)=>j===i?{...v,[k]:val}:v));
   const addV=()=>setVendors(vs=>[...vs,{name:"",mobile:"",email:""}]);
   const rmV=(i)=>setVendors(vs=>vs.length>1?vs.filter((_,j)=>j!==i):vs);
@@ -6349,7 +6352,7 @@ function AuthoritySheet({ open, onClose, agentName }){
 
   function goSchedule(){ setSched(defaultSched(postcode, band, campaign==="custom"?"hidc":campaign)); setShowEdit(false); setStage("schedule"); }
   // switch template → rebuild the default item set (preset omits); "custom" keeps the current set editable
-  function pickCampaign(id){ setCampaign(id); if(id!=="off"&&id!=="custom") setSched(defaultSched(postcode, band, id)); if(id!=="custom") setShowEdit(false); }
+  function pickCampaign(id){ setCampaign(id); if(!schedOff(id)&&id!=="custom") setSched(defaultSched(postcode, band, id)); if(id!=="custom") setShowEdit(false); }
   // item editing (custom)
   const editItem=(sec,i,k,val)=>setSched(s=>({...s,[sec]:s[sec].map((it,j)=>j===i?{...it,[k]:val}:it)}));
   const toggleItem=(sec,i)=>setSched(s=>({...s,[sec]:s[sec].map((it,j)=>j===i?{...it,on:it.on===false}:it)}));
@@ -6357,7 +6360,7 @@ function AuthoritySheet({ open, onClose, agentName }){
   const addItem=(sec)=>setSched(s=>({...s,[sec]:[...s[sec],{k:"c"+Date.now(),name:"",amt:0,on:true}]}));
   const setDomainAmt=(v)=>setSched(s=>({...s,internet:s.internet.map(it=>it.k==="domain"?{...it,amt:Number(String(v).replace(/[^0-9]/g,""))||0,needs:false}:it)}));
   const domItem = sched && (sched.internet||[]).find(it=>it.k==="domain");
-  const domainNeeds = campaign!=="off" && domItem && (domItem.needs || !(Number(domItem.amt)>0)) && domItem.on!==false;
+  const domainNeeds = !schedOff(campaign) && domItem && (domItem.needs || !(Number(domItem.amt)>0)) && domItem.on!==false;
   const schedTot = sched ? schedTotal(sched) : 0;
 
   async function generate(){
@@ -6365,7 +6368,7 @@ function AuthoritySheet({ open, onClose, agentName }){
     try{
       const _cmp=SCHED_CAMPAIGNS.find(c=>c.id===campaign)||{};
       const campName=_cmp.quote||_cmp.name||"High Impact Digital Campaign";
-      const schedule = (campaign==="off"||!sched) ? null : { campaignName:campName, sched, total:schedTot, itemised };
+      const schedule = (schedOff(campaign)||!sched) ? null : { campaignName:campName, sched, total:schedTot, itemised };
       const common={ vendors, vendorAddr:effVendorAddr, propertyAddr, priceFrom, priceTo, period, possession, commission, commissionType, fixedCommission, schedule, vendorType, entityName, entityAcn, deceasedName, advocate, advocateName, advocateAddress };
       const bytes = authType==="auction"
         ? await fillAuctionAuthority({ ...common, auctionDate, auctionTime, reserve })
@@ -6383,7 +6386,7 @@ function AuthoritySheet({ open, onClose, agentName }){
     setErr(""); setSendState("sending");
     try{
       const b64=u8ToB64(pdfBytes);
-      const fields=signFields(campaign!=="off", named.length, authType, vendorType, advocate && (advocateName||"").trim());
+      const fields=signFields(!schedOff(campaign), named.length, authType, vendorType, advocate && (advocateName||"").trim());
       const submitters=named.map((v,i)=>({ role:"Vendor "+(i+1), name:v.name.trim(), email:v.email.trim() }));
       submitters.push({ role:"Agent", name:(agentName||"Savvi"), email:AGENT_EMAIL[agentName]||"hello@getsavvi.com.au" });
       const typeName = authType==="auction" ? "Exclusive Auction Authority" : "Exclusive Sale Authority";
@@ -6415,13 +6418,13 @@ function AuthoritySheet({ open, onClose, agentName }){
             <a href={pdfUrl} download={`${authType==="auction"?"Exclusive Auction Authority":"Exclusive Sale Authority"} - ${(propertyAddr||"property").replace(/[\\/:*?"<>|]/g,"")}.pdf`} className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px",background:BLUE_D}}>Download PDF</a>
             {sendState==="sent" ? (
               <div style={{margin:"0 0 10px",background:"#E8F5E9",color:"#2E7D32",borderRadius:12,padding:"13px 14px",fontSize:13,fontWeight:600,textAlign:"center"}}>
-                ✓ Sent to {vendors.filter(v=>(v.name||"").trim()).length>1?"all owners":(vendors[0]?.name||"the owner")} to sign{campaign!=="off"?" (authority + schedule)":""}. Each receives an email from Savvi.
+                ✓ Sent to {vendors.filter(v=>(v.name||"").trim()).length>1?"all owners":(vendors[0]?.name||"the owner")} to sign{!schedOff(campaign)?" (authority + schedule)":""}. Each receives an email from Savvi.
               </div>
             ) : (
               <button className="btn-dark" style={{width:"100%",margin:"0 0 10px"}} onClick={sendToSign} disabled={sendState==="sending"}>{sendState==="sending"?<><span className="sp-sm"/>Sending…</>:"Send to owner to sign →"}</button>
             )}
             {err&&<div style={{margin:"0 0 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
-            <button onClick={()=>{ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); setSendState("idle"); setStage(campaign==="off"?"details":"schedule"); }} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Edit details</button>
+            <button onClick={()=>{ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); setSendState("idle"); setStage(schedOff(campaign)?"details":"schedule"); }} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Edit details</button>
           </div>
         ) : stage==="schedule" ? (
           <div style={{paddingBottom:4}}>
@@ -6432,8 +6435,8 @@ function AuthoritySheet({ open, onClose, agentName }){
               <select className="fi" value={campaign} onChange={e=>pickCampaign(e.target.value)}>
                 {SCHED_CAMPAIGNS.filter(c=>c.id!=="custom"||canCustom).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
               </select></div>
-            {campaign==="off" ? (
-              <div style={{margin:"0 16px 12px",background:LINEN,borderRadius:10,padding:"12px 14px",fontSize:12.5,color:BROWN_M,lineHeight:1.5}}>No advertising schedule. Nothing is payable during the off-market period, and the authority's marketing expenses show NIL.</div>
+            {schedOff(campaign) ? (
+              <div style={{margin:"0 16px 12px",background:LINEN,borderRadius:10,padding:"12px 14px",fontSize:12.5,color:BROWN_M,lineHeight:1.5}}>{campaign==="none"?"No advertising schedule is attached to this authority. The marketing expenses section shows NIL.":"Off-market: no advertising. Nothing is payable during the off-market period, and the authority's marketing expenses show NIL."}</div>
             ) : sched ? (<>
               {domainNeeds && <div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12.5,lineHeight:1.4}}>
                 {band==="b3"?"This property is over $2.25m. ":""}Domain Platinum Edge isn't priced yet — phone Domain for the correct figure and enter it to continue.
@@ -6489,7 +6492,7 @@ function AuthoritySheet({ open, onClose, agentName }){
               )}
             </>) : null}
             {err&&<div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12}}>{err}</div>}
-            <div className="fg" style={{paddingBottom:6}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={generate} disabled={busy||domainNeeds}>{busy?<><span className="sp-sm"/>Generating…</>:campaign==="off"?"Generate authority →":"Generate authority + schedule →"}</button></div>
+            <div className="fg" style={{paddingBottom:6}}><button className="btn-dark" style={{margin:0,width:"100%"}} onClick={generate} disabled={busy||domainNeeds}>{busy?<><span className="sp-sm"/>Generating…</>:schedOff(campaign)?"Generate authority →":"Generate authority + schedule →"}</button></div>
             <div style={{display:"flex",gap:12,padding:"0 16px"}}>
               <button onClick={()=>setStage("details")} style={{flex:1,background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Back</button>
               <button onClick={()=>saveDraft(false)} style={{flex:1,background:"transparent",border:"none",color:BROWN_M,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>{savedMsg||"Save as draft"}</button>
@@ -7273,7 +7276,7 @@ function ProposalSheet({ open, onClose, agentName }){
   const suggestedFee=feeForPrice(priceForFee);
   const postcode=authPostcode(addr);
   const band=domainBand(priceForFee);
-  const sched=campaign==="off"?{internet:[],boards:[],photos:[],misc:[]}:defaultSched(postcode,band,campaign==="custom"?"hidc":campaign);
+  const sched=schedOff(campaign)?{internet:[],boards:[],photos:[],misc:[]}:defaultSched(postcode,band,campaign==="custom"?"hidc":campaign);
   const data={
     address:addr.split(",")[0].trim(), suburb:propSuburb(addr), beds, baths, car, sqm, floorNote, vendorNames, agent,
     price:{mode:priceMode, single, from:pFrom, to:pTo},
@@ -7360,9 +7363,9 @@ function ProposalSheet({ open, onClose, agentName }){
 
           <label className="fl" style={{marginTop:14}}>Advertising schedule</label>
           <select className="fi" value={campaign} onChange={e=>setCampaign(e.target.value)}>
-            {SCHED_CAMPAIGNS.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+            {SCHED_CAMPAIGNS.filter(c=>c.id!=="none").map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <div style={{fontSize:12,color:BROWN_L,marginTop:5}}>{campaign==="off"?"No advertising shown.":`Total ${"$"+schedTotal(sched).toLocaleString("en-AU")} inc GST · pulled from the schedule engine.`}</div>
+          <div style={{fontSize:12,color:BROWN_L,marginTop:5}}>{schedOff(campaign)?"No advertising shown.":`Total ${"$"+schedTotal(sched).toLocaleString("en-AU")} inc GST · pulled from the schedule engine.`}</div>
 
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:14,gap:10}}>
             <span style={{fontSize:13,fontWeight:700,color:BROWN}}>Staging furniture</span>
