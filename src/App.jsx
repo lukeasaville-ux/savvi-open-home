@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v163-align-finance-annexure-sign";
+const BUILD = "v164-preview-pinch-zoom";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3145,6 +3145,76 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
   return { bytes: await doc.save(), pages:[...touched].sort((a,b)=>a-b), pageInfo, signFields };
 }
 
+// Full-screen pinch-zoom / pan viewer for rendered contract pages. The app locks the global viewport
+// (user-scalable=no) so native pinch is off everywhere; this handles the gestures itself so an agent —
+// or anyone reviewing on a phone — can zoom right in to read the fine print. Pinch, double-tap to zoom,
+// drag to pan, + / − buttons, desktop wheel-zoom, and (when given many pages) prev/next paging.
+function ZoomViewer({ pages, index, onClose }){
+  const list = Array.isArray(pages) ? pages.filter(Boolean) : (pages?[pages]:[]);
+  const [i,setI] = useState(Math.max(0, index||0));
+  const pg = list[i] || null;
+  const boxRef = useRef(null), imgRef = useRef(null);
+  const S = useRef({ scale:1, tx:0, ty:0, baseH:0, w:0, h:0, d0:1, s0:1, fx:0, fy:0, pinch:false, pan:false, lx:0, ly:0, moved:0, lastTap:0 });
+  const [pct,setPct] = useState(100);
+  const clamp=(v,a,b)=>v<a?a:(v>b?b:v);
+  const bounds=()=>{ const s=S.current, cW=s.w*s.scale, cH=s.baseH*s.scale, b={};
+    if(cW<=s.w){ b.minTx=b.maxTx=(s.w-cW)/2; } else { b.minTx=s.w-cW; b.maxTx=0; }
+    if(cH<=s.h){ b.minTy=b.maxTy=Math.max(0,(s.h-cH)/2); } else { b.minTy=s.h-cH; b.maxTy=0; }
+    return b; };
+  const apply=()=>{ const s=S.current, b=bounds(); s.tx=clamp(s.tx,b.minTx,b.maxTx); s.ty=clamp(s.ty,b.minTy,b.maxTy);
+    if(imgRef.current) imgRef.current.style.transform=`translate(${s.tx}px,${s.ty}px) scale(${s.scale})`; };
+  const measure=()=>{ const box=boxRef.current, im=imgRef.current; if(!box||!im) return; const r=box.getBoundingClientRect();
+    S.current.w=r.width; S.current.h=r.height; const nw=im.naturalWidth||1, nh=im.naturalHeight||1; S.current.baseH=r.width*(nh/nw); apply(); };
+  const reset=()=>{ const s=S.current; s.scale=1; s.tx=0; s.ty=0; apply(); setPct(100); };
+  const zoomTo=(ns,fx,fy)=>{ const s=S.current; ns=clamp(ns,1,6); const k=ns/s.scale; s.tx=fx-(fx-s.tx)*k; s.ty=fy-(fy-s.ty)*k; s.scale=ns; apply(); setPct(Math.round(ns*100)); };
+  useEffect(()=>{ reset(); /* eslint-disable-next-line */ },[i]);
+  useEffect(()=>{
+    const box=boxRef.current; if(!box) return;
+    const D=(t)=>Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+    const M=(t,r)=>({x:(t[0].clientX+t[1].clientX)/2-r.left, y:(t[0].clientY+t[1].clientY)/2-r.top});
+    const ts=(e)=>{ const t=e.touches, r=box.getBoundingClientRect(), s=S.current;
+      if(t.length>=2){ e.preventDefault(); s.pinch=true; s.pan=false; s.d0=D(t)||1; s.s0=s.scale; const m=M(t,r); s.fx=m.x; s.fy=m.y; }
+      else if(t.length===1){ s.pan=true; s.pinch=false; s.lx=t[0].clientX; s.ly=t[0].clientY; s.moved=0; } };
+    const tm=(e)=>{ const t=e.touches, s=S.current;
+      if(s.pinch && t.length>=2){ e.preventDefault(); zoomTo(clamp(s.s0*(D(t)/s.d0),1,6), s.fx, s.fy); }
+      else if(s.pan && t.length===1){ const dx=t[0].clientX-s.lx, dy=t[0].clientY-s.ly; s.moved+=Math.abs(dx)+Math.abs(dy); const b=bounds();
+        if(b.minTx!==b.maxTx || b.minTy!==b.maxTy){ e.preventDefault(); s.lx=t[0].clientX; s.ly=t[0].clientY; s.tx+=dx; s.ty+=dy; apply(); } } };
+    const te=(e)=>{ const s=S.current;
+      if(e.touches.length===0){ if(s.pan && s.moved<10){ const now=Date.now(); if(now-s.lastTap<300){ const r=box.getBoundingClientRect(); zoomTo(s.scale>1.2?1:2.8, s.lx-r.left, s.ly-r.top); s.lastTap=0; } else s.lastTap=now; } s.pinch=false; s.pan=false; }
+      else if(e.touches.length===1){ s.pinch=false; s.pan=true; s.lx=e.touches[0].clientX; s.ly=e.touches[0].clientY; s.moved=99; } };
+    const wh=(e)=>{ e.preventDefault(); const r=box.getBoundingClientRect(), s=S.current; zoomTo(clamp(s.scale*(e.deltaY<0?1.15:1/1.15),1,6), e.clientX-r.left, e.clientY-r.top); };
+    const onR=()=>measure();
+    box.addEventListener("touchstart",ts,{passive:false}); box.addEventListener("touchmove",tm,{passive:false});
+    box.addEventListener("touchend",te,{passive:false}); box.addEventListener("touchcancel",te,{passive:false});
+    box.addEventListener("wheel",wh,{passive:false}); window.addEventListener("resize",onR);
+    return ()=>{ box.removeEventListener("touchstart",ts); box.removeEventListener("touchmove",tm); box.removeEventListener("touchend",te); box.removeEventListener("touchcancel",te); box.removeEventListener("wheel",wh); window.removeEventListener("resize",onR); };
+  /* eslint-disable-next-line */ },[]);
+  if(!pg) return null;
+  const hb={background:"rgba(255,255,255,.17)",border:"none",color:"#fff",borderRadius:9,padding:"8px 13px",fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:"inherit",lineHeight:1,minWidth:40};
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.94)",zIndex:1000,display:"flex",flexDirection:"column"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"calc(10px + env(safe-area-inset-top,0px)) calc(12px + env(safe-area-inset-right,0px)) 10px calc(12px + env(safe-area-inset-left,0px))",color:"#fff",flex:"0 0 auto"}}>
+        <div style={{fontSize:12.5,fontWeight:700,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Page {pg.page}{pg.label?` · ${pg.label}`:""}</div>
+        <div style={{display:"flex",gap:6,alignItems:"center",flex:"0 0 auto"}}>
+          <button onClick={()=>zoomTo(S.current.scale/1.5,S.current.w/2,S.current.h/2)} style={hb} aria-label="Zoom out">−</button>
+          <button onClick={reset} style={{...hb,fontSize:12,minWidth:56,fontWeight:800}} aria-label="Reset zoom">{pct}%</button>
+          <button onClick={()=>zoomTo(S.current.scale*1.5,S.current.w/2,S.current.h/2)} style={hb} aria-label="Zoom in">+</button>
+          <button onClick={onClose} style={{...hb,marginLeft:4}} aria-label="Close">✕</button>
+        </div>
+      </div>
+      <div ref={boxRef} style={{flex:"1 1 0",overflow:"hidden",touchAction:"none",position:"relative"}}>
+        <img ref={imgRef} src={pg.url} onLoad={measure} draggable={false} alt={`Page ${pg.page}`} style={{position:"absolute",top:0,left:0,width:"100%",height:"auto",transformOrigin:"0 0",pointerEvents:"none",userSelect:"none",willChange:"transform"}}/>
+      </div>
+      {list.length>1 && <div style={{flex:"0 0 auto",display:"flex",justifyContent:"center",alignItems:"center",gap:14,padding:"8px 0 4px",color:"#fff"}}>
+        <button onClick={()=>setI(v=>Math.max(0,v-1))} disabled={i===0} style={{...hb,opacity:i===0?.35:1}}>‹</button>
+        <div style={{fontSize:12,opacity:.85,minWidth:54,textAlign:"center"}}>{i+1} / {list.length}</div>
+        <button onClick={()=>setI(v=>Math.min(list.length-1,v+1))} disabled={i===list.length-1} style={{...hb,opacity:i===list.length-1?.35:1}}>›</button>
+      </div>}
+      <div style={{flex:"0 0 auto",textAlign:"center",color:"rgba(255,255,255,.72)",fontSize:11.5,padding:"4px 0 calc(12px + env(safe-area-inset-bottom,0px))"}}>Pinch or tap + / − to zoom · drag to move · double-tap to zoom in</div>
+    </div>
+  );
+}
+
 function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   const drag=useSheetDrag(onClose);
   const parsed=useMemo(()=>open&&buyer?parseOffer(buyer):null,[open,buyer]);
@@ -3415,16 +3485,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
         <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} disabled={filling} onClick={doFill}>{filling?"Filling…":"Fill contract →"}</button>
       </div>)}
     </div>
-    {zoomImg&&<div onClick={()=>{setZoomImg(null);setZoomScale(1);}} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.93)",zIndex:1000,display:"flex",flexDirection:"column"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 14px",color:"#fff",flex:"0 0 auto"}}>
-        <div style={{fontSize:12.5,fontWeight:700,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Page {zoomImg.page}{zoomImg.label?` · ${zoomImg.label}`:""}</div>
-        <button onClick={e=>{e.stopPropagation();setZoomImg(null);setZoomScale(1);}} style={{flex:"0 0 auto",marginLeft:10,background:"rgba(255,255,255,.16)",border:"none",color:"#fff",borderRadius:8,padding:"7px 14px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Close ✕</button>
-      </div>
-      <div onClick={e=>e.stopPropagation()} style={{flex:"1 1 0",overflow:"auto",WebkitOverflowScrolling:"touch",padding:10,textAlign:"center"}}>
-        <img src={zoomImg.url} onClick={()=>setZoomScale(s=>s>1?1:2.4)} style={{width:`${zoomScale*100}%`,maxWidth:"none",display:"inline-block",borderRadius:4,cursor:zoomScale>1?"zoom-out":"zoom-in"}} alt={`Page ${zoomImg.page}`}/>
-      </div>
-      <div style={{flex:"0 0 auto",textAlign:"center",color:"rgba(255,255,255,.72)",fontSize:11.5,padding:"8px 0 14px"}}>Tap the page to zoom in and out · scroll to move around</div>
-    </div>}
+    {zoomImg&&<ZoomViewer pages={(previewImgs&&previewImgs.length)?previewImgs:[zoomImg]} index={Math.max(0,((previewImgs||[]).findIndex(p=>p.page===zoomImg.page)))} onClose={()=>{setZoomImg(null);setZoomScale(1);}}/>}
   </div>;
 }
 
@@ -7114,6 +7175,7 @@ function ContractSheet({ open, onClose, agentName, listings }){
   const [err,setErr]=useState("");
   const [sendState,setSendState]=useState("idle");       // idle | sending | sent
   const [previews,setPreviews]=useState([]);             // [{page,url,w,h}] rendered pages with field boxes
+  const [zoomPv,setZoomPv]=useState(null);               // index of the page open in the full-screen zoom viewer
   const fileRef=useRef(null);
   const [cq,setCq]=useState(""); // search the contract list
 
@@ -7247,10 +7309,10 @@ function ContractSheet({ open, onClose, agentName, listings }){
             </div>
             {detected.fields.length>0 && <>
               {previews.length>0 && <div style={{marginBottom:14}}>
-                <div style={label}>We found these signing spots — check they look right before sending</div>
+                <div style={label}>We found these signing spots — check they look right before sending. <b>Tap a page to zoom.</b></div>
                 <div style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:4}}>
-                  {previews.map(pv=><div key={pv.page} style={{flex:"0 0 auto"}}>
-                    <img src={pv.url} alt={"Page "+pv.page} style={{width:Math.min(pv.w,250),borderRadius:8,border:`1px solid ${SAND_D}`,display:"block"}}/>
+                  {previews.map((pv,idx)=><div key={pv.page} style={{flex:"0 0 auto"}}>
+                    <img src={pv.url} alt={"Page "+pv.page} onClick={()=>setZoomPv(idx)} style={{width:Math.min(pv.w,250),borderRadius:8,border:`1px solid ${SAND_D}`,display:"block",cursor:"zoom-in"}}/>
                     <div style={{fontSize:11,color:BROWN_L,textAlign:"center",marginTop:3}}>Page {pv.page}</div>
                   </div>)}
                 </div>
@@ -7275,6 +7337,7 @@ function ContractSheet({ open, onClose, agentName, listings }){
           <div style={{height:20}}/>
         </div>)}
       </div>
+      {zoomPv!=null && <ZoomViewer pages={previews} index={zoomPv} onClose={()=>setZoomPv(null)}/>}
     </div>
   );
 }
