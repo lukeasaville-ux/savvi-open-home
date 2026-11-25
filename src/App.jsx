@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v151-agent-inbox";
+const BUILD = "v152-void-dragdrop";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5732,14 +5732,16 @@ function SignAnythingSheet({ open, onClose, agentName }){
   const [activeSigner,setActiveSigner]=useState("s1");
   const [sendState,setSendState]=useState("idle");
   const [showSigners,setShowSigners]=useState(true);
+  const [dragOver,setDragOver]=useState(false);
   const dragRef=useRef(null);
   const fileRef=useRef(null);
 
   function resetAll(){ setPdfBytes(null); setPages([]); setFields([]); setFileName(""); setStage("upload"); setErr(""); setSendState("idle"); setSigners([{id:"s1",role:"Signer 1",name:"",email:"",color:SIGN_COLORS[0]}]); setActiveSigner("s1"); setActiveType("signature"); }
 
-  async function onFile(e){
-    const f=e.target.files&&e.target.files[0]; if(!f) return;
-    if(f.type && !/pdf/i.test(f.type)){ setErr("Please choose a PDF file."); return; }
+  async function processFile(f){
+    if(!f) return;
+    const isPdf = f.type ? /pdf/i.test(f.type) : /\.pdf$/i.test(f.name||"");
+    if(!isPdf){ setErr("Please choose a PDF file."); return; }
     setErr(""); setRendering(true); setFileName(f.name||"document.pdf");
     try{
       const buf=new Uint8Array(await f.arrayBuffer());
@@ -5751,6 +5753,10 @@ function SignAnythingSheet({ open, onClose, agentName }){
     setRendering(false);
     if(fileRef.current) fileRef.current.value="";
   }
+  async function onFile(e){ await processFile(e.target.files&&e.target.files[0]); }
+  function onDragOver(e){ e.preventDefault(); e.stopPropagation(); if(!rendering) setDragOver(true); }
+  function onDragLeave(e){ e.preventDefault(); e.stopPropagation(); setDragOver(false); }
+  async function onDrop(e){ e.preventDefault(); e.stopPropagation(); setDragOver(false); if(rendering) return; await processFile(e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0]); }
 
   const signerOf=id=>signers.find(s=>s.id===id)||signers[0]||{role:"Signer 1",color:SIGN_COLORS[0],name:""};
   function addFieldAt(page, px, py){
@@ -5827,9 +5833,10 @@ function SignAnythingSheet({ open, onClose, agentName }){
         ) : stage==="upload" ? (
           <div style={{padding:"10px 16px 18px"}}>
             <button onClick={()=>fileRef.current&&fileRef.current.click()} disabled={rendering}
-              style={{width:"100%",border:`2px dashed ${SAND_D}`,borderRadius:14,background:LINEN,padding:"34px 16px",cursor:"pointer",fontFamily:"inherit",color:BROWN,display:"flex",flexDirection:"column",alignItems:"center",gap:8}}>
+              onDragOver={onDragOver} onDragEnter={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+              style={{width:"100%",border:`2px dashed ${dragOver?BLUE:SAND_D}`,borderRadius:14,background:dragOver?"#EEF2FB":LINEN,padding:"34px 16px",cursor:"pointer",fontFamily:"inherit",color:BROWN,display:"flex",flexDirection:"column",alignItems:"center",gap:8,transition:"background .12s,border-color .12s"}}>
               <span style={{fontSize:30}}>{rendering?"…":"⬆"}</span>
-              <span style={{fontWeight:700,fontSize:15}}>{rendering?"Reading the PDF":"Choose a PDF"}</span>
+              <span style={{fontWeight:700,fontSize:15}}>{rendering?"Reading the PDF":dragOver?"Drop the PDF to upload":"Drop a PDF here, or click to browse"}</span>
               <span style={{fontSize:12.5,color:BROWN_L,textAlign:"center",lineHeight:1.5}}>Any document: a deposit release, a variation, a letter of offer. You place the signing fields yourself on the next screen.</span>
             </button>
             <input ref={fileRef} type="file" accept="application/pdf,.pdf" onChange={onFile} style={{display:"none"}}/>
@@ -5907,6 +5914,75 @@ function SignAnythingSheet({ open, onClose, agentName }){
   );
 }
 
+// ============ Sent to sign — list & void outstanding e-sign documents ============
+function SignoutsSheet({ open, onClose }){
+  const [rows,setRows]=useState(null);   // null = loading
+  const [err,setErr]=useState("");
+  const [busyId,setBusyId]=useState(null);
+  const [confirmId,setConfirmId]=useState(null);
+  const KIND={ authority:"Authority", contract:"Contract of Sale", section32:"Vendor statement", document:"Document" };
+  const STAT={ sent:"sent, not opened", opened:"opened", completed:"signed", awaiting:"waiting their turn", declined:"declined", pending:"pending" };
+  async function load(){
+    setErr(""); setRows(null);
+    try{ const j=await call("listSignouts"); if(j&&j.ok&&Array.isArray(j.data)) setRows(j.data);
+      else { setRows([]); if(j&&j.error==="service_read_only") setErr("Please log out and back in to manage sent documents."); else setErr("Could not load sent documents."); } }
+    catch(e){ setRows([]); setErr("Could not load sent documents."); }
+  }
+  useEffect(()=>{ if(open) load(); else { setRows(null); setErr(""); setConfirmId(null); setBusyId(null); } },[open]);
+  async function voidOne(id){
+    setBusyId(id); setErr("");
+    try{ const j=await call("voidSignout",{submissionId:String(id)});
+      if(j&&j.ok){ setRows(a=>(a||[]).filter(r=>String(r.id)!==String(id))); }
+      else { setErr(j&&j.error==="service_read_only"?"Please log out and back in to void a document.":"Could not void that document."); } }
+    catch(e){ setErr("Could not void that document."); }
+    setBusyId(null); setConfirmId(null);
+  }
+  const partyLine=p=>(p.role||"Signer")+": "+(STAT[(p.status||"").toLowerCase()]||p.status||"—");
+  return (
+    <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
+        <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:10,right:12,width:32,height:32,borderRadius:16,border:"none",background:SAND,color:BROWN,fontSize:17,fontWeight:700,cursor:"pointer",lineHeight:"32px",zIndex:5}}>×</button>
+        <div className="hndl"/>
+        <div className="sh-ttl">Sent to sign</div>
+        <div className="sh-sub">Documents out for signature. Void any sent in error.</div>
+        <div style={{padding:"4px 16px 18px"}}>
+          {err&&<div style={{margin:"0 0 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12.5}}>{err}</div>}
+          {rows===null && <div style={{padding:"18px 2px",color:BROWN_L,fontSize:13}}><span className="sp-sm"/> Loading…</div>}
+          {rows!==null && rows.length===0 && !err && <div style={{padding:"18px 2px",color:BROWN_L,fontSize:13}}>Nothing out for signature right now.</div>}
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {(rows||[]).map(r=>{
+              const done=!!r.completed || r.status==="completed";
+              return (
+                <div key={r.id} style={{background:"#fff",border:`1px solid ${SAND_D}`,borderRadius:13,padding:"12px 14px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                    <span style={{flex:"0 0 auto",fontSize:10.5,fontWeight:800,letterSpacing:.3,textTransform:"uppercase",color:BLUE_D,background:"#EEF2FB",borderRadius:6,padding:"2px 7px"}}>{KIND[r.kind]||"Document"}</span>
+                    {done && <span style={{flex:"0 0 auto",fontSize:10.5,fontWeight:800,letterSpacing:.3,textTransform:"uppercase",color:"#1E7A46",background:"#E6F4EA",borderRadius:6,padding:"2px 7px"}}>Signed</span>}
+                  </div>
+                  <div style={{fontWeight:700,fontSize:14,color:BROWN,lineHeight:1.3}}>{r.name}</div>
+                  <div style={{fontSize:12,color:BROWN_L,marginTop:3}}>{(r.parties||[]).map(partyLine).join("  ·  ")}</div>
+                  {!done && (
+                    <div style={{marginTop:10,display:"flex",justifyContent:"flex-end"}}>
+                      {confirmId===r.id ? (
+                        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                          <button disabled={busyId===r.id} onClick={()=>voidOne(r.id)} style={{background:"#C0392B",border:"none",color:"#fff",fontWeight:800,fontSize:12.5,borderRadius:9,padding:"8px 14px",cursor:busyId===r.id?"default":"pointer",fontFamily:"inherit",opacity:busyId===r.id?.7:1}}>{busyId===r.id?"Voiding…":"Confirm void"}</button>
+                          <button disabled={busyId===r.id} onClick={()=>setConfirmId(null)} style={{background:"transparent",border:"none",color:BROWN_L,fontWeight:600,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+                        </div>
+                      ) : (
+                        <button onClick={()=>setConfirmId(r.id)} style={{background:"#fff",border:"1.5px solid #E2B4AE",color:"#C0392B",fontWeight:700,fontSize:12.5,borderRadius:9,padding:"8px 14px",cursor:"pointer",fontFamily:"inherit"}}>Void</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {rows!==null && <button onClick={load} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:10,marginTop:6}}>Refresh</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ============ Tools hub ============
 // One home for the one-off document generators (not tied to a live deal).
 function ToolsSheet({ open, onClose, crm }){
@@ -5914,6 +5990,7 @@ function ToolsSheet({ open, onClose, crm }){
     { k:"cal", ic:"▦", t:"Calendar of Events", d:"A one-off campaign calendar PDF", go:()=>crm.setShowCalendar(true) },
     { k:"sched", ic:"▦", t:"Advertising schedule", d:"A one-off marketing schedule PDF", go:()=>crm.setShowSchedule(true) },
     { k:"sign", ic:"✒", t:"Sign anything", d:"Upload any document, place fields, send to sign", go:()=>crm.setShowSign(true) },
+    { k:"void", ic:"⊘", t:"Sent to sign", d:"See documents out for signature, and void any sent in error", go:()=>crm.setShowSignouts(true) },
     { k:"calc", ic:"$", t:"Calculators", d:"Stamp duty, net proceeds, repayments, yield, timeline, grant", go:()=>crm.setShowCalc(true) },
   ];
   return (
@@ -7530,6 +7607,7 @@ export default function App(){
   const[showTools,setShowTools]=useState(false);
   const[showSchedule,setShowSchedule]=useState(false);
   const[showSign,setShowSign]=useState(false);
+  const[showSignouts,setShowSignouts]=useState(false);
   const[showCalc,setShowCalc]=useState(false);
   const[showContract,setShowContract]=useState(false);
   const[showAssistant,setShowAssistant]=useState(false);
@@ -8285,7 +8363,7 @@ export default function App(){
 
   // Everything the desktop shell needs to drive the phone's flows (sheets, open-scoped
   // buyer state, mutations) without re-implementing them.
-  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, sumStats, setSumStats, setSumStart, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setShowCalendar, setShowProposal, setShowTools, setShowSchedule, setShowSign, setShowCalc, setBFilters, fmtDay, addNote, openOfferContract:(b)=>{ setOfferContractBuyer(b); setShowOfferContract(true); }, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
+  const crm={ openHome, enterOpenHome, applyContractUrl, pb, propAll, propReal, enquiries, propOpens, buyersLoading, refreshBuyers, setActive, setShowDetail, setShowAdd, setShowBulk, setShowSum, setSumSel, sumStats, setSumStats, setSumStart, setShowMatch, setShowAssistant, setShowGeneral, setShowAddListing, setShowAuthority, setShowContract, setShowCalendar, setShowProposal, setShowTools, setShowSchedule, setShowSign, setShowSignouts, setShowCalc, setBFilters, fmtDay, addNote, openOfferContract:(b)=>{ setOfferContractBuyer(b); setShowOfferContract(true); }, openQuickContract:(prop)=>{ setQuickContractProp(prop); setShowQuickContract(true); } };
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
@@ -8620,6 +8698,7 @@ export default function App(){
     <ToolsSheet open={showTools} onClose={()=>setShowTools(false)} crm={crm}/>
     <ScheduleSheet open={showSchedule} onClose={()=>setShowSchedule(false)} agentName={agentName}/>
     <SignAnythingSheet open={showSign} onClose={()=>setShowSign(false)} agentName={agentName}/>
+    <SignoutsSheet open={showSignouts} onClose={()=>setShowSignouts(false)}/>
     <CalculatorsSheet open={showCalc} onClose={()=>setShowCalc(false)}/>
     <ProposalSheet open={showProposal} onClose={()=>setShowProposal(false)} agentName={agentName}/>
     <ContractSheet open={showContract} onClose={()=>setShowContract(false)} agentName={agentName} listings={allListings}/>
