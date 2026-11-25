@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v154-authority-file";
+const BUILD = "v155-netcopy-authpriv";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -2175,7 +2175,10 @@ function OpenListingInfo({ openHome, onContractUploaded }){
       </div>}
       {!contractUrl&&onContractUploaded&&pid&&<div style={{marginBottom:10}}><div style={{fontSize:12,color:BROWN_L,marginBottom:6}}>No contract on this listing yet. Add the PDF and it's ready to send straight away.</div><ContractUpload propertyId={pid} onUploaded={onContractUploaded}/></div>}
       {contractUrl&&<a href={contractUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none",marginBottom:(authorityUrl||notes)?8:0}}>Open / read the full contract</a>}
-      {authorityUrl&&<a href={authorityUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none",marginBottom:notes?8:0}}>Signed agency agreement (certified)</a>}
+      {authorityUrl&&<div style={{marginBottom:notes?8:0}}>
+        <a href={authorityUrl} target="_blank" rel="noopener noreferrer" style={{display:"block",padding:"11px 13px",background:"#FBF0DC",border:`1px solid #E7C98A`,borderRadius:10,fontSize:13.5,fontWeight:700,color:ESPRESSO,textDecoration:"none"}}>🔒 Signed agency agreement (certified)</a>
+        <div style={{fontSize:10.5,fontWeight:800,color:"#B7770D",textTransform:"uppercase",letterSpacing:.6,margin:"5px 2px 0"}}>Office use only. Never send to buyers.</div>
+      </div>}
       {notes&&<div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"12px 13px",fontSize:13,lineHeight:1.5,color:ESPRESSO,whiteSpace:"pre-wrap"}}>{notes}</div>}
     </div>
   );
@@ -6218,6 +6221,7 @@ function NetProceedsPanel(){
   const [repay,setRepay]=useState("");
   const [rent,setRent]=useState("");
   const [days,setDays]=useState(60);
+  const [copied,setCopied]=useState(false);
   const pv=calcNum(priceVac), pt=calcNum(priceTen), cp=calcNum(commPct);
   const months=Number(days)/30.44, weeks=Number(days)/7;
   const stg=calcNum(staging), adv=calcNum(advertising), rp=calcNum(repay), rnt=calcNum(rent);
@@ -6230,6 +6234,36 @@ function NetProceedsPanel(){
   const ready = pv>0 && pt>0;
   const diffFmt = !ready?"—":(diff<0?"−"+calcMoney(-diff):"+"+calcMoney(diff));
   const money=v=>v<0?"−"+calcMoney(-v):calcMoney(v);
+  // Professional, send-ready side by side an investor can read in a text or email. Word based
+  // (less/plus) so no stray minus signs, and no em dashes per house style.
+  const buildText=()=>{
+    const L=[];
+    L.push("Selling comparison: vacant vs tenant in place");
+    L.push("");
+    L.push("Option A, vacant and staged, on market");
+    L.push("Expected sale price: "+calcMoney(pv));
+    L.push("Less agent commission ("+(commPct||"0")+"% inc GST): "+calcMoney(commV));
+    if(stg>0) L.push("Less styling and staging: "+calcMoney(stg));
+    if(adv>0) L.push("Less advertising: "+calcMoney(adv));
+    if(holding>0) L.push("Less loan repayments ("+Math.round(days)+" days vacant): "+calcMoney(holding));
+    L.push("Net in your pocket: "+calcMoney(netVac));
+    L.push("");
+    L.push("Option B, tenant in place, off market");
+    L.push("Expected sale price: "+calcMoney(pt));
+    L.push("Less agent commission ("+(commPct||"0")+"% inc GST): "+calcMoney(commT));
+    if(rentKept>0) L.push("Plus rent kept to settlement ("+Math.round(days)+" days): "+calcMoney(rentKept));
+    L.push("Net in your pocket: "+calcMoney(netTen));
+    L.push("");
+    L.push(diff>=0
+      ? "Selling vacant and staged nets "+calcMoney(diff)+" more."
+      : "Keeping the tenant and selling off market nets "+calcMoney(-diff)+" more.");
+    L.push("");
+    L.push("Estimate only. Excludes discharge fees, and rate and owners corporation adjustments.");
+    return L.join("\n");
+  };
+  const doCopy=()=>{ navigator.clipboard?.writeText(buildText()).catch(()=>{}); setCopied(true); setTimeout(()=>setCopied(false),2000); };
+  const canShare = typeof navigator!=="undefined" && !!navigator.share;
+  const doShare=()=>{ try{ navigator.share({title:"Selling comparison",text:buildText()}).catch(()=>{}); }catch(e){} };
   return (<>
     <div style={{fontSize:12.5,fontWeight:700,color:BROWN,margin:"2px 0 8px"}}>Vacant &amp; staged — on market</div>
     <label className="fl">Expected sale price</label>
@@ -6266,6 +6300,10 @@ function NetProceedsPanel(){
       {diff>=0
         ? "Going vacant and staged nets "+calcMoney(diff)+" more, after staging, advertising and "+Math.round(days)+" days of holding costs with no rent."
         : "Keeping the tenant and selling off market nets "+calcMoney(-diff)+" more once staging, advertising and the vacant holding costs are counted."}
+    </div>}
+    {ready&&<div style={{display:"flex",gap:8,marginTop:14}}>
+      <button className="btn-cream" style={{flex:1}} onClick={doCopy}>{copied?"✓ Copied":"Copy comparison"}</button>
+      {canShare&&<button className="btn-cream" style={{flex:1}} onClick={doShare}>Send</button>}
     </div>}
     <Disc>Estimate only. Commission is shown inclusive of GST. Repayments are counted as a holding cost only for the vacant scenario, where no rent is coming in; under the tenanted scenario the rent is kept through to settlement. It excludes discharge fees, rate and owners corporation adjustments, and any difference in days on market.</Disc>
   </>);
