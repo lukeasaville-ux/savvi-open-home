@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v155-netcopy-authpriv";
+const BUILD = "v156-calendar-rebuild";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5437,133 +5437,268 @@ async function appendSchedulePage(doc,rgb,{ propertyAddr, campaignName, sched, i
 // rebuild the calendar in HTML, the PP Editorial serif banners only exist inside these PDFs. Each
 // day cell gets either the real date (campaign start snapped to the Monday of that week) or "Day N",
 // centred in the cell, in Neue Haas Medium (the artwork's own day-label font), at the original baseline.
-const CAL_BASE = { "auction":"/calendar-auction-base.pdf", "private-sale":"/calendar-private-sale-base.pdf", "offmkt-auction":"/calendar-offmkt-auction-base.pdf", "offmkt-private":"/calendar-offmkt-private-base.pdf" };
+// ============ Calendar of Events — data-driven rebuild (v156) ============
+// Drawn entirely in code (no baked Canva master): one uniform cream page, no darker frame, no
+// bottom rule, no top-right date. Events are DATA, so the on-screen editor can drag / delete / add
+// them and the very same model renders to PDF. Keep: logo, serif title, method label (no date),
+// day-of-week header, section bands (Off Market / Auction / Private Sale), cream cells, orange
+// circles (First Open / Launch Online), blue circle (Auction Day). Anchor date = the real date the
+// user picks: the auction day for auction variants, else the first open.
 const CAL_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const CAL_LABEL = { "private-sale":"Private Sale · 5 weeks", "auction":"Auction · 5 weeks", "offmkt-private":"Off Market + Private Sale · 6 weeks", "offmkt-auction":"Off Market + Auction · 6 weeks" };
-// where the auction date prints (centred x + baseline y, native pt from top) under the top-right "Auction" label
-const CAL_AUCT_LBL = { "auction":{cx:516.05,by:136}, "offmkt-auction":{cx:471.45,by:155} };
+const CAL_DOW = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
+const CAL_ORANGE = "#FE5310", CAL_BLUE = "#8AACE3", CAL_CREAM = "#FFF4D5", CAL_INK = "#311E10";
+const CAL_METHOD_LABEL = { "auction":"Auction", "private-sale":"Private Sale", "offmkt-auction":"Two Stage Auction", "offmkt-private":"Two Stage Private Sale" };
 function calVariant(method, offMarket){ return (offMarket?"offmkt-":"")+(method==="auction"?"auction":"private-sale"); }
-function calSnapMonday(iso){ if(!iso) return null; const d=new Date(iso+"T00:00:00"); if(isNaN(d)) return null; const dow=(d.getDay()+6)%7; d.setDate(d.getDate()-dow); return d; }
-let _calMeta=null;
-async function calMeta(){ if(!_calMeta) _calMeta=await fetch("/calendar-meta.json").then(r=>r.json()); return _calMeta; }
-// The source masters are mixed sizes (single-stage = US Letter, two-stage = A4). Normalise EVERY
-// calendar onto one A4 page (to match the marketing schedule + authority) by embedding the pristine
-// artwork scaled-to-fit and centred on a full-bleed cream page — the letterbox is invisible because
-// the artwork's background is the same cream (#FFF4D5). Dates are drawn on the A4 page at scaled coords.
-const CAL_A4W=595.28, CAL_A4H=841.89;
-async function appendCalendarPage(doc, rgb, { variant, startDate }){
-  const { PDFDocument }=await import("pdf-lib");
-  const fontkit=(await import("@pdf-lib/fontkit")).default;
-  try{ doc.registerFontkit(fontkit); }catch(e){}
-  const medBytes=await fetch("/fonts/NeueHaasUnicaPro-Medium.ttf").then(r=>r.arrayBuffer());
-  const med=await doc.embedFont(medBytes,{ subset:true });
-  const baseBytes=await fetch(CAL_BASE[variant]||CAL_BASE["private-sale"]).then(r=>r.arrayBuffer());
-  const src=await PDFDocument.load(baseBytes);
-  const sp=src.getPage(0); const nw=sp.getWidth(), nh=sp.getHeight();
-  const emb=await doc.embedPage(sp);
-  const s=Math.min(CAL_A4W/nw, CAL_A4H/nh);
-  const xoff=(CAL_A4W-nw*s)/2, yoff=(CAL_A4H-nh*s)/2;
-  const page=doc.addPage([CAL_A4W, CAL_A4H]);
-  page.drawRectangle({ x:0, y:0, width:CAL_A4W, height:CAL_A4H, color:rgb(255/255,244/255,213/255) });
-  page.drawPage(emb, { x:xoff, y:yoff, width:nw*s, height:nh*s });
-  const INK=rgb(49/255,30/255,16/255); // #311E10
-  const all=await calMeta(); const meta=all[variant]||all["private-sale"];
-  const mon=startDate?calSnapMonday(startDate):null;
-  for(let n=1;n<=meta.days;n++){
-    const slot=meta.slots[String(n)]; if(!slot) continue;
-    let label;
-    if(mon){ const d=new Date(mon); d.setDate(d.getDate()+(n-1)); label=d.getDate()+" "+CAL_MONTHS[d.getMonth()]; }
-    else label="Day "+n;
-    let size=slot.size*s; const maxW=(meta.step-12)*s; let w=med.widthOfTextAtSize(label,size);
-    if(w>maxW){ size=size*(maxW/w); w=med.widthOfTextAtSize(label,size); }
-    page.drawText(label,{ x:xoff+slot.cx*s-w/2, y:yoff+(nh-slot.ty)*s, size, font:med, color:INK });
-  }
-  // cover the faint decorative top + bottom rules the masters carry (Luke flagged them), clear of the
-  // Savvi logo (~25pt) and the grid's own bottom border (~55pt native from the bottom)
-  const cream=rgb(255/255,244/255,213/255);
-  page.drawRectangle({ x:0, y:yoff+(nh-21)*s, width:CAL_A4W, height:CAL_A4H-(yoff+(nh-21)*s), color:cream });
-  page.drawRectangle({ x:0, y:0, width:CAL_A4W, height:yoff+21*s, color:cream });
-  // auction variants with real dates: the auction date (the last Saturday) under the top-right
-  // "Auction" label, in the same font as the dates on the page (Neue Haas)
-  const lbl=CAL_AUCT_LBL[variant];
-  if(mon && lbl){
-    const ad=new Date(mon); ad.setDate(ad.getDate()+(meta.days-2));
-    const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][ad.getDay()];
-    const txt=`${WD} ${ad.getDate()} ${CAL_MONTHS[ad.getMonth()]} ${ad.getFullYear()}`;
-    const asz=12.5; const aw=med.widthOfTextAtSize(txt,asz);
-    page.drawText(txt,{ x:xoff+lbl.cx*s-aw/2, y:yoff+(nh-lbl.by)*s, size:asz, font:med, color:INK });
-  }
+function calWeeks(variant){ return variant.indexOf("offmkt")===0 ? 6 : 5; }
+function calBands(variant){
+  if(variant==="offmkt-auction") return [{label:"Off Market",w0:0,w1:1},{label:"Auction",w0:2,w1:5}];
+  if(variant==="offmkt-private") return [{label:"Off Market",w0:0,w1:1},{label:"Private Sale",w0:2,w1:5}];
+  if(variant==="auction") return [{label:"Auction",w0:0,w1:4}];
+  return [{label:"Private Sale",w0:0,w1:4}];
 }
-async function buildCalendarPdf({ variant, startDate }){
-  const { PDFDocument, rgb }=await import("pdf-lib");
+function calDay(w,dow){ return w*7+dow+1; }           // 0-based week + 0-based weekday (Mon=0) → 1-based day
+let _calEid=0; function calEid(){ return "ce"+(++_calEid); }
+// Default schedules. shape: "none" | "circleO" (orange circle) | "ellipseO" (orange oval) | "circleB" (blue circle).
+function calDefaults(variant, staging){
+  const E=(w,dow,text,shape)=>({ id:calEid(), day:calDay(w,dow), text, shape:shape||"none" });
+  const stg = staging ? [E(0,0,"Staging furniture installed")] : [];
+  if(variant==="offmkt-auction") return [...stg,
+    E(0,1,"Walkthrough video & photos"), E(0,3,"Launch Social Media Strategy"), E(0,5,"First Open For Inspection","circleO"),
+    E(1,0,"Buyer callbacks"), E(1,3,"Photography, floorplan & copywriting"), E(1,5,"Open For Inspection"),
+    E(2,0,"Proof marketing collateral"), E(2,1,"Launch Online","ellipseO"), E(2,4,"Sign board installed"), E(2,5,"Open For Inspection"),
+    E(3,0,"Buyer callbacks"), E(3,1,"Campaign report"), E(3,3,"Open For Inspection"), E(3,5,"Open For Inspection"),
+    E(4,0,"Buyer callbacks"), E(4,1,"Campaign report"), E(4,3,"Open For Inspection"), E(4,5,"Open For Inspection"),
+    E(5,0,"Buyer callbacks"), E(5,2,"Pre-auction meeting"), E(5,3,"Open For Inspection"), E(5,4,"SMS & email auction invitations"), E(5,5,"Auction Day","circleB") ];
+  if(variant==="offmkt-private") return [...stg,
+    E(0,1,"Walkthrough video & photos"), E(0,3,"Launch Social Media Strategy"), E(0,5,"First Open For Inspection","circleO"),
+    E(1,0,"Buyer callbacks"), E(1,3,"Photography, floorplan & copywriting"), E(1,5,"Open For Inspection"),
+    E(2,0,"Proof marketing collateral"), E(2,1,"Launch Online","ellipseO"), E(2,4,"Sign board installed"), E(2,5,"Open For Inspection"),
+    E(3,0,"Buyer callbacks"), E(3,1,"Campaign report"), E(3,3,"Open For Inspection"), E(3,5,"Open For Inspection"),
+    E(4,0,"Buyer callbacks"), E(4,1,"Campaign report"), E(4,3,"Open For Inspection"), E(4,5,"Open For Inspection"),
+    E(5,0,"Buyer callbacks"), E(5,1,"Campaign report"), E(5,3,"Open For Inspection"), E(5,5,"Open For Inspection") ];
+  if(variant==="auction") return [...stg,
+    E(0,1,"Photography, floorplan & copywriting"), E(0,2,"Social media walkthrough"), E(0,3,"Launch Online","ellipseO"), E(0,4,"Launch Online","ellipseO"),
+    E(1,0,"Proof marketing collateral"), E(1,2,"Sign board installed"), E(1,5,"First Open For Inspection","circleO"),
+    E(2,0,"Buyer callbacks"), E(2,1,"Campaign report"), E(2,3,"Open For Inspection"), E(2,5,"Open For Inspection"),
+    E(3,0,"Buyer callbacks"), E(3,1,"Campaign report"), E(3,3,"Open For Inspection"), E(3,5,"Open For Inspection"),
+    E(4,0,"Buyer callbacks"), E(4,2,"Pre-auction meeting"), E(4,3,"Open For Inspection"), E(4,4,"SMS & email auction invitations"), E(4,5,"Auction Day","circleB") ];
+  return [...stg,  // private-sale (straight)
+    E(0,1,"Walkthrough video & photos"), E(0,2,"Photography, floorplan & copywriting"),
+    E(1,0,"Proof marketing collateral"), E(1,1,"Launch Online","ellipseO"), E(1,4,"Sign board installed"), E(1,5,"First Open For Inspection","circleO"),
+    E(2,0,"Buyer callbacks"), E(2,1,"Campaign report"), E(2,3,"Open For Inspection"), E(2,5,"Open For Inspection"),
+    E(3,0,"Buyer callbacks"), E(3,1,"Campaign report"), E(3,3,"Open For Inspection"), E(3,5,"Open For Inspection"),
+    E(4,0,"Buyer callbacks"), E(4,1,"Campaign report"), E(4,3,"Open For Inspection"), E(4,5,"Open For Inspection") ];
+}
+// The anchor day index = the date the user actually picks (auction day for auction variants, else first open).
+function calAnchorDay(variant, events){
+  const want = variant.indexOf("auction")>=0 ? "circleB" : "circleO";
+  const hit = events.filter(e=>e.shape===want).sort((a,b)=>a.day-b.day)[0];
+  return hit ? hit.day : null;
+}
+function calAnchorLabel(variant){ return variant.indexOf("auction")>=0 ? "Auction date" : "First open date"; }
+function calDateOf(n, anchorDay, anchorDate){
+  if(!anchorDate || !anchorDay) return null;
+  const base=new Date(anchorDate+"T00:00:00"); if(isNaN(base)) return null;
+  const d=new Date(base); d.setDate(d.getDate()+(n-anchorDay)); return d;
+}
+// Auction day + first open are Saturdays; snap the picked date to that week's Saturday so the Mon–Sun grid stays honest.
+function calSnapSat(iso){ if(!iso) return ""; const d=new Date(iso+"T00:00:00"); if(isNaN(d)) return iso; const add=(6-((d.getDay()+6)%7)+7-1)%7; d.setDate(d.getDate()+add); return d.toISOString().slice(0,10); }
+function calFmtDate(d){ return d ? (d.getDate()+" "+CAL_MONTHS[d.getMonth()]) : ""; }
+const CAL_A4W=595.28, CAL_A4H=841.89;
+function calHexRgb(rgb,hex){ const n=parseInt(hex.slice(1),16); return rgb(((n>>16)&255)/255,((n>>8)&255)/255,(n&255)/255); }
+function calWrap(font,size,text,maxW){ const words=String(text).split(" "); const lines=[]; let cur=""; words.forEach(wd=>{ const t=cur?cur+" "+wd:wd; if(font.widthOfTextAtSize(t,size)>maxW && cur){ lines.push(cur); cur=wd; } else cur=t; }); if(cur) lines.push(cur); return lines; }
+async function buildCalendarPdfV2({ variant, events, anchorDate, useDates }){
+  const { PDFDocument, StandardFonts, rgb }=await import("pdf-lib");
   const doc=await PDFDocument.create();
-  await appendCalendarPage(doc, rgb, { variant, startDate });
+  const serif=await doc.embedFont(StandardFonts.TimesRomanBold);
+  const serifR=await doc.embedFont(StandardFonts.TimesRoman);
+  let med; try{ const fontkit=(await import("@pdf-lib/fontkit")).default; doc.registerFontkit(fontkit); const mb=await fetch("/fonts/NeueHaasUnicaPro-Medium.ttf").then(r=>r.arrayBuffer()); med=await doc.embedFont(mb,{ subset:true }); }catch(e){ med=await doc.embedFont(StandardFonts.Helvetica); }
+  let logo=null; try{ const lb=await fetch("/savvi-wordmark-black.png").then(r=>r.arrayBuffer()); logo=await doc.embedPng(lb); }catch(e){}
+  const W=CAL_A4W, H=CAL_A4H, page=doc.addPage([W,H]);
+  const INK=calHexRgb(rgb,CAL_INK), CREAM=calHexRgb(rgb,CAL_CREAM), ORANGE=calHexRgb(rgb,CAL_ORANGE), BLUE=calHexRgb(rgb,CAL_BLUE);
+  page.drawRectangle({ x:0, y:0, width:W, height:H, color:CREAM });
+  const mL=26, mR=26, gridW=W-mL-mR;
+  let yTop=H-38;
+  if(logo){ const lw=148, lh=logo.height*(lw/logo.width); page.drawImage(logo,{ x:(W-lw)/2, y:yTop-lh, width:lw, height:lh }); yTop=yTop-lh-22; } else { yTop-=10; }
+  const titleSize=37;
+  page.drawText("Calendar of Events",{ x:mL, y:yTop-titleSize, size:titleSize, font:serif, color:INK });
+  const mlbl=CAL_METHOD_LABEL[variant]||""; const mlSize=16, mlMaxW=gridW*0.32;
+  const mlLines=calWrap(serifR,mlSize,mlbl,mlMaxW);
+  mlLines.forEach((ln,i)=>{ const w=serifR.widthOfTextAtSize(ln,mlSize); page.drawText(ln,{ x:W-mR-w, y:yTop-mlSize-2-i*(mlSize+3), size:mlSize, font:serifR, color:INK }); });
+  const gridTop=yTop-titleSize-24, gridBottom=24;
+  const weeks=calWeeks(variant), bands=calBands(variant);
+  const dayHdrH=25, bandH=25, colW=gridW/7;
+  const rowH=(gridTop-gridBottom-dayHdrH-bands.length*bandH)/weeks;
+  let y=gridTop;
+  page.drawRectangle({ x:mL, y:y-dayHdrH, width:gridW, height:dayHdrH, color:INK });
+  for(let c=0;c<7;c++){ const sz=10.5, w=serifR.widthOfTextAtSize(CAL_DOW[c],sz); page.drawText(CAL_DOW[c],{ x:mL+c*colW+(colW-w)/2, y:y-dayHdrH/2-sz*0.34, size:sz, font:serifR, color:CREAM }); }
+  y-=dayHdrH;
+  const anchorDay=useDates?calAnchorDay(variant,events):null;
+  const evByDay={}; events.forEach(e=>{ (evByDay[e.day]=evByDay[e.day]||[]).push(e); });
+  bands.forEach(bd=>{
+    page.drawRectangle({ x:mL, y:y-bandH, width:gridW, height:bandH, color:INK });
+    const bsz=15, bw=serif.widthOfTextAtSize(bd.label,bsz); page.drawText(bd.label,{ x:mL+(gridW-bw)/2, y:y-bandH/2-bsz*0.34, size:bsz, font:serif, color:CREAM });
+    y-=bandH;
+    for(let w=bd.w0; w<=bd.w1; w++){
+      for(let c=0;c<7;c++){
+        const x=mL+c*colW, cy=y-rowH, n=calDay(w,c);
+        page.drawRectangle({ x, y:cy, width:colW, height:rowH, borderColor:INK, borderWidth:0.6 });
+        const dt=calDateOf(n,anchorDay,anchorDate), dlab=(useDates&&dt)?calFmtDate(dt):("Day "+n);
+        const dsz=11, dw=med.widthOfTextAtSize(dlab,dsz); page.drawText(dlab,{ x:x+(colW-dw)/2, y:y-14, size:dsz, font:med, color:INK });
+        const evs=evByDay[n]||[]; let ey=y-30;
+        evs.forEach(ev=>{
+          if(ev.shape==="circleO"||ev.shape==="circleB"){
+            const r=Math.min(colW*0.44, rowH*0.33), cx=x+colW/2, ccy=cy+rowH*0.40;
+            page.drawEllipse({ x:cx, y:ccy, xScale:r, yScale:r, color:ev.shape==="circleB"?BLUE:ORANGE });
+            const lines=calWrap(med,7.5,ev.text,r*1.7), lh=8.6;
+            lines.forEach((ln,i)=>{ const lw=med.widthOfTextAtSize(ln,7.5); page.drawText(ln,{ x:cx-lw/2, y:ccy+(lines.length-1)*lh/2-i*lh-3, size:7.5, font:med, color:INK }); });
+          } else if(ev.shape==="ellipseO"){
+            const exr=colW*0.46, eyr=Math.min(rowH*0.19,14), cx=x+colW/2, ccy=cy+rowH*0.42;
+            page.drawEllipse({ x:cx, y:ccy, xScale:exr, yScale:eyr, color:ORANGE });
+            const lines=calWrap(med,8.5,ev.text,exr*1.85), lh=9.5;
+            lines.forEach((ln,i)=>{ const lw=med.widthOfTextAtSize(ln,8.5); page.drawText(ln,{ x:cx-lw/2, y:ccy+(lines.length-1)*lh/2-i*lh-3, size:8.5, font:med, color:INK }); });
+          } else {
+            const lines=calWrap(med,8.5,ev.text,colW-12), lh=10;
+            lines.forEach((ln,i)=>{ const lw=med.widthOfTextAtSize(ln,8.5); page.drawText(ln,{ x:x+(colW-lw)/2, y:ey-i*lh, size:8.5, font:med, color:INK }); });
+            ey-=lines.length*lh+6;
+          }
+        });
+      }
+      y-=rowH;
+    }
+  });
   return doc.save();
 }
 function CalendarSheet({ open, onClose }){
   const [method,setMethod]=useState("private-sale");  // private-sale | auction
   const [offMarket,setOffMarket]=useState(false);     // true → add an Off Market first stage (6 weeks)
+  const [staging,setStaging]=useState(true);
   const [useDates,setUseDates]=useState(true);        // real dates vs plain Day 1…N
-  const [startDate,setStartDate]=useState("");
+  const [anchorDate,setAnchorDate]=useState("");
   const [addr,setAddr]=useState("");
+  const [events,setEvents]=useState(()=>calDefaults("private-sale",true));
+  const [selId,setSelId]=useState(null);
+  const [ghost,setGhost]=useState(null);              // {x,y,text,shape} while dragging
+  const dragRef=useRef(null);                         // {id,sx,sy,moved}
   const [busy,setBusy]=useState(false);
   const [err,setErr]=useState("");
   const [pdfUrl,setPdfUrl]=useState(null);
   const variant=calVariant(method,offMarket);
-  const mon=(useDates&&startDate)?calSnapMonday(startDate):null;
-  const monLabel=mon?mon.toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"}):"";
+  // Regenerate the schedule when the campaign structure changes (method / off-market).
+  const firstRun=useRef(true);
+  useEffect(()=>{ if(firstRun.current){ firstRun.current=false; return; } setEvents(calDefaults(variant,staging)); setSelId(null); },[variant]);
+  function toggleStaging(next){
+    setStaging(next);
+    setEvents(evs=>{
+      const has=evs.some(e=>e.text==="Staging furniture installed");
+      if(next&&!has) return [{id:calEid(),day:1,text:"Staging furniture installed",shape:"none"},...evs];
+      if(!next&&has) return evs.filter(e=>e.text!=="Staging furniture installed");
+      return evs;
+    });
+  }
+  const weeks=calWeeks(variant), bands=calBands(variant);
+  const anchorDay=useDates?calAnchorDay(variant,events):null;
+  const sel=events.find(e=>e.id===selId)||null;
+  function upd(id,patch){ setEvents(evs=>evs.map(e=>e.id===id?{...e,...patch}:e)); }
+  function del(id){ setEvents(evs=>evs.filter(e=>e.id!==id)); if(selId===id) setSelId(null); }
+  function addAt(n){ const id=calEid(); setEvents(evs=>[...evs,{id,day:n,text:"New event",shape:"none"}]); setSelId(id); }
+  function resetDefaults(){ setEvents(calDefaults(variant,staging)); setSelId(null); }
+  // drag a chip between cells (pointer events + hit-test on release; tap = select)
+  function chipDown(e,ev){ e.stopPropagation(); dragRef.current={id:ev.id,sx:e.clientX,sy:e.clientY,moved:false}; try{ e.currentTarget.setPointerCapture(e.pointerId); }catch(_){}
+  }
+  function chipMove(e){ const d=dragRef.current; if(!d) return; if(!d.moved && Math.hypot(e.clientX-d.sx,e.clientY-d.sy)>6){ d.moved=true; const ev=events.find(x=>x.id===d.id); if(ev) setGhost({x:e.clientX,y:e.clientY,text:ev.text,shape:ev.shape}); } if(d.moved) setGhost(g=>g?{...g,x:e.clientX,y:e.clientY}:g); }
+  function chipUp(e){ const d=dragRef.current; dragRef.current=null; setGhost(null); if(!d) return; if(d.moved){ const el=document.elementFromPoint(e.clientX,e.clientY); const cell=el&&el.closest&&el.closest("[data-calcell]"); if(cell){ const n=parseInt(cell.getAttribute("data-calcell"),10); if(n>=1) upd(d.id,{day:n}); } } else { setSelId(d.id); } }
   function reset(){ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); setErr(""); }
   function handleClose(){ reset(); onClose(); }
   async function generate(){
-    if(useDates&&!startDate){ setErr("Pick a campaign start date, or switch to Day numbers."); return; }
+    if(useDates&&!anchorDate){ setErr(`Pick the ${calAnchorLabel(variant).toLowerCase()}, or switch to Day numbers.`); return; }
     setErr(""); setBusy(true);
     try{
-      const bytes=await buildCalendarPdf({ variant, startDate: useDates?startDate:null });
+      const bytes=await buildCalendarPdfV2({ variant, events, anchorDate: useDates?anchorDate:null, useDates });
       const blob=new Blob([bytes],{type:"application/pdf"});
       if(pdfUrl)URL.revokeObjectURL(pdfUrl);
       setPdfUrl(URL.createObjectURL(blob));
-    }catch(e){ setErr("Could not generate. "+(e?.message||"")); }
+    }catch(e){ setErr("Could not build the PDF. "+(e?.message||"")); }
     setBusy(false);
   }
-  const seg=(active)=>({ flex:1, padding:"10px 8px", border:"none", borderRadius:9, cursor:"pointer", fontFamily:"inherit", fontWeight:700, fontSize:13, background:active?BROWN:"transparent", color:active?"#fff":BROWN });
+  const seg=(active)=>({ flex:1, padding:"9px 6px", border:"none", borderRadius:9, cursor:"pointer", fontFamily:"inherit", fontWeight:700, fontSize:12.5, background:active?BROWN:"transparent", color:active?"#fff":BROWN });
   const segWrap={ display:"flex", gap:4, background:SAND, borderRadius:11, padding:4 };
   const dlName=`Calendar of Events - ${(addr||"Savvi").replace(/[\\/:*?"<>|]/g,"")}.pdf`;
+  const chipBg=sh=>sh==="circleB"?CAL_BLUE:(sh==="circleO"||sh==="ellipseO")?CAL_ORANGE:"#EFE6CF";
+  const anchorNote = variant.indexOf("auction")>=0 ? "This is the auction date (a Saturday). Every other event is spaced around it." : "This is the first open for inspection (a Saturday). Every other event is spaced around it.";
+  // Render the grid: day-of-week header, then each band followed by its week rows.
+  const cell=(w,c)=>{ const n=calDay(w,c); const dt=calDateOf(n,anchorDay,anchorDate); const dlab=(useDates&&dt)?calFmtDate(dt):("Day "+n); const evs=events.filter(e=>e.day===n);
+    return <div key={c} data-calcell={n} style={{position:"relative",minHeight:72,border:`0.6px solid ${BROWN}`,background:CAL_CREAM,padding:"17px 3px 5px",display:"flex",flexDirection:"column",gap:3,alignItems:"center"}}>
+      <div style={{position:"absolute",top:3,left:0,right:0,textAlign:"center",fontSize:9.5,fontWeight:800,color:BROWN,pointerEvents:"none"}}>{dlab}</div>
+      <button onClick={()=>addAt(n)} title="Add event" style={{position:"absolute",top:2,right:3,width:15,height:15,lineHeight:"13px",borderRadius:8,border:"none",background:"rgba(49,30,16,0.12)",color:BROWN,fontSize:12,fontWeight:700,cursor:"pointer",padding:0}}>+</button>
+      {evs.map(ev=><div key={ev.id} onPointerDown={e=>chipDown(e,ev)} onPointerMove={chipMove} onPointerUp={chipUp} style={{touchAction:"none",cursor:"grab",width:"100%",background:chipBg(ev.shape),borderRadius:ev.shape==="circleO"||ev.shape==="circleB"?13:7,padding:"3px 5px",fontSize:8.5,fontWeight:700,color:BROWN,textAlign:"center",lineHeight:1.15,wordBreak:"break-word",outline:selId===ev.id?`2px solid ${BROWN}`:"none"}}>{ev.text}</div>)}
+    </div>;
+  };
   return (
     <div className={`ov ${open?"s":"h"}`} onClick={e=>{ if(e.target===e.currentTarget) handleClose(); }}>
       <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative"}}>
         <button onClick={handleClose} aria-label="Close" style={{position:"absolute",top:10,right:12,width:32,height:32,borderRadius:16,border:"none",background:SAND,color:BROWN,fontSize:17,fontWeight:700,cursor:"pointer",lineHeight:"32px",zIndex:5}}>×</button>
         <div className="hndl"/>
         <div className="sh-ttl">{pdfUrl?"Calendar ready":"Calendar of Events"}</div>
-        <div className="sh-sub">{pdfUrl?CAL_LABEL[variant]:"For the proposal — pick the campaign and the start date"}</div>
+        <div className="sh-sub">{pdfUrl?CAL_METHOD_LABEL[variant]:"Drag events between days, tap to edit, + to add, then save to PDF"}</div>
         {pdfUrl ? (
           <div style={{padding:"4px 16px 16px"}}>
-            <div style={{border:"1px solid #E7DFD3",borderRadius:10,overflow:"hidden",height:420,marginBottom:12,background:"#fff"}}>
+            <div style={{border:"1px solid #E7DFD3",borderRadius:10,overflow:"hidden",height:440,marginBottom:12,background:"#fff"}}>
               <iframe title="Calendar preview" src={pdfUrl} style={{width:"100%",height:"100%",border:"none"}}/>
             </div>
             <a href={pdfUrl} target="_blank" rel="noreferrer" className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px"}}>Open full screen</a>
             <a href={pdfUrl} download={dlName} className="btn-dark" style={{display:"block",textAlign:"center",textDecoration:"none",margin:"0 0 10px",background:BLUE_D}}>Download PDF</a>
-            <button onClick={()=>{ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); }} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Change the details</button>
+            <button onClick={()=>{ if(pdfUrl)URL.revokeObjectURL(pdfUrl); setPdfUrl(null); }} style={{width:"100%",background:"transparent",border:"none",color:BROWN_L,fontWeight:600,cursor:"pointer",fontFamily:"inherit",padding:8}}>← Back to the editor</button>
           </div>
         ) : (
           <div style={{padding:"4px 16px 16px"}}>
-            <label className="fl">Method</label>
-            <div style={segWrap}><button style={seg(method==="private-sale")} onClick={()=>setMethod("private-sale")}>Private Sale</button><button style={seg(method==="auction")} onClick={()=>setMethod("auction")}>Auction</button></div>
-            <label className="fl" style={{marginTop:14}}>Campaign shape</label>
-            <div style={segWrap}><button style={seg(!offMarket)} onClick={()=>setOffMarket(false)}>Straight to market</button><button style={seg(offMarket)} onClick={()=>setOffMarket(true)}>Off market first</button></div>
-            <div style={{fontSize:12,color:BROWN_L,marginTop:6}}>{offMarket?"6 weeks — two weeks off market, then launch.":"5 weeks from launch."}</div>
-            <label className="fl" style={{marginTop:14}}>Dates</label>
-            <div style={segWrap}><button style={seg(useDates)} onClick={()=>setUseDates(true)}>Real dates</button><button style={seg(!useDates)} onClick={()=>setUseDates(false)}>Day numbers</button></div>
-            {useDates && <div style={{marginTop:10}}>
-              <input className="fi" type="date" value={startDate} onChange={e=>setStartDate(e.target.value)}/>
-              <div style={{fontSize:12,color:BROWN_L,marginTop:6}}>{monLabel?`Day 1 lands on ${monLabel} (snapped to the Monday).`:"Pick any day that week — it snaps to the Monday."}</div>
+            <div style={{display:"flex",gap:8}}>
+              <div style={{flex:1}}><label className="fl">Method</label><div style={segWrap}><button style={seg(method==="private-sale")} onClick={()=>setMethod("private-sale")}>Private</button><button style={seg(method==="auction")} onClick={()=>setMethod("auction")}>Auction</button></div></div>
+              <div style={{flex:1}}><label className="fl">Campaign</label><div style={segWrap}><button style={seg(!offMarket)} onClick={()=>setOffMarket(false)}>Straight</button><button style={seg(offMarket)} onClick={()=>setOffMarket(true)}>Off market</button></div></div>
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:12}}>
+              <div style={{flex:1}}><label className="fl">Staging</label><div style={segWrap}><button style={seg(staging)} onClick={()=>toggleStaging(true)}>Staged</button><button style={seg(!staging)} onClick={()=>toggleStaging(false)}>No staging</button></div></div>
+              <div style={{flex:1}}><label className="fl">Dates</label><div style={segWrap}><button style={seg(useDates)} onClick={()=>setUseDates(true)}>Real dates</button><button style={seg(!useDates)} onClick={()=>setUseDates(false)}>Day No.</button></div></div>
+            </div>
+            {useDates && <div style={{marginTop:12}}>
+              <label className="fl">{calAnchorLabel(variant)}</label>
+              <input className="fi" type="date" value={anchorDate} onChange={e=>setAnchorDate(calSnapSat(e.target.value))}/>
+              <div style={{fontSize:11.5,color:BROWN_L,marginTop:5,lineHeight:1.4}}>{anchorDate?anchorNote:anchorNote}</div>
             </div>}
+            <label className="fl" style={{marginTop:14}}>Campaign calendar</label>
+            <div style={{fontSize:11.5,color:BROWN_L,marginBottom:7,lineHeight:1.4}}>Drag an event to another day. Tap an event to edit or recolour it. Use + on a day to add your own.</div>
+            <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",border:`1px solid ${SAND_D}`,borderRadius:10}}>
+              <div style={{minWidth:520,background:CAL_CREAM}}>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)"}}>
+                  {CAL_DOW.map(d=><div key={d} style={{background:BROWN,color:CAL_CREAM,fontFamily:"'Newsreader',serif",fontWeight:700,fontSize:11,textAlign:"center",padding:"6px 0"}}>{d}</div>)}
+                </div>
+                {bands.map((bd,bi)=><div key={bi}>
+                  <div style={{background:BROWN,color:CAL_CREAM,fontFamily:"'Newsreader',serif",fontWeight:700,fontSize:15,textAlign:"center",padding:"6px 0"}}>{bd.label}</div>
+                  {Array.from({length:bd.w1-bd.w0+1}).map((_,wi)=>{ const w=bd.w0+wi; return <div key={w} style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)"}}>{Array.from({length:7}).map((__,c)=>cell(w,c))}</div>; })}
+                </div>)}
+              </div>
+            </div>
+            {sel && <div style={{marginTop:12,background:"#fff",border:`1px solid ${SAND_D}`,borderRadius:12,padding:"12px 13px"}}>
+              <div style={{fontSize:11,fontWeight:800,color:BROWN_L,textTransform:"uppercase",letterSpacing:.5,marginBottom:7}}>Edit event</div>
+              <input className="fi" type="text" value={sel.text} onChange={e=>upd(sel.id,{text:e.target.value})} placeholder="Event text"/>
+              <div style={{display:"flex",gap:6,marginTop:9,flexWrap:"wrap"}}>
+                {[["none","Plain","#EFE6CF"],["circleO","Orange circle",CAL_ORANGE],["ellipseO","Orange oval",CAL_ORANGE],["circleB","Blue circle",CAL_BLUE]].map(([s,lbl,bg])=>
+                  <button key={s} onClick={()=>upd(sel.id,{shape:s})} style={{flex:"1 0 44%",padding:"8px 6px",borderRadius:9,border:sel.shape===s?`2px solid ${BROWN}`:`1px solid ${SAND_D}`,background:bg,color:BROWN,fontWeight:700,fontSize:11.5,cursor:"pointer",fontFamily:"inherit"}}>{lbl}</button>)}
+              </div>
+              <div style={{display:"flex",gap:8,marginTop:10}}>
+                <button onClick={()=>del(sel.id)} style={{flex:1,padding:"10px",borderRadius:9,border:"none",background:"#FDECEA",color:"#C0392B",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"}}>Delete</button>
+                <button onClick={()=>setSelId(null)} style={{flex:1,padding:"10px",borderRadius:9,border:"none",background:SAND,color:BROWN,fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
+              </div>
+            </div>}
+            <button onClick={resetDefaults} style={{width:"100%",marginTop:10,background:"transparent",border:`1px solid ${SAND_D}`,borderRadius:10,color:BROWN_L,fontWeight:600,fontSize:12.5,cursor:"pointer",fontFamily:"inherit",padding:"9px"}}>↺ Reset to the default schedule</button>
             <label className="fl" style={{marginTop:14}}>Property (for the file name)</label>
             <input className="fi" type="text" value={addr} onChange={e=>setAddr(e.target.value)} placeholder="e.g. 8/2 Grattan Street, Hawthorn"/>
             {err&&<div style={{margin:"12px 0 0",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:12.5}}>{err}</div>}
-            <button className="btn-dark" style={{width:"100%",marginTop:16}} onClick={generate} disabled={busy}>{busy?<><span className="sp-sm"/>Building…</>:"Generate calendar"}</button>
+            <button className="btn-dark" style={{width:"100%",marginTop:16}} onClick={generate} disabled={busy}>{busy?<><span className="sp-sm"/>Building…</>:"Save as PDF"}</button>
           </div>
         )}
       </div>
+      {ghost && <div style={{position:"fixed",left:ghost.x,top:ghost.y,transform:"translate(-50%,-50%)",pointerEvents:"none",zIndex:9999,background:ghost.shape==="circleB"?CAL_BLUE:(ghost.shape==="circleO"||ghost.shape==="ellipseO")?CAL_ORANGE:"#EFE6CF",color:BROWN,borderRadius:10,padding:"5px 9px",fontSize:10,fontWeight:700,boxShadow:"0 6px 18px rgba(0,0,0,.25)",maxWidth:120,textAlign:"center",lineHeight:1.15}}>{ghost.text}</div>}
     </div>
   );
 }
