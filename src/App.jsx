@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v162-review-filled-pages-zoom";
+const BUILD = "v163-align-finance-annexure-sign";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3043,7 +3043,9 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
   // Some contract PDFs have a MediaBox pdf-lib can't parse, so prefer the page height the
   // mapper recorded (map.pageSizes) and only fall back to pdf-lib / A4.
   const pageH=(idx,pg)=>{ const ps=(map.pageSizes||{})[String(idx)]; if(ps&&ps[1]) return ps[1]; try{ return pg.getHeight(); }catch(e){ return 841.89; } };
-  const put=(f,text)=>{ if(!f||text==null||text==="")return; const pg=pages[f.page]; if(!pg)return; touched.add(f.page+1); pg.drawText(String(text),{x:f.x,y:pageH(f.page,pg)-f.y+LIFT,size:f.size||10,font,color:INK}); };
+  // f.prefix (e.g. "$") is drawn immediately before the value — used on the "no more than ___"
+  // finance edition where the printed form has no preprinted $ (the $-edition maps omit it).
+  const put=(f,text)=>{ if(!f||text==null||text==="")return; const pg=pages[f.page]; if(!pg)return; touched.add(f.page+1); pg.drawText(String((f.prefix||"")+text),{x:f.x,y:pageH(f.page,pg)-f.y+LIFT,size:f.size||10,font,color:INK}); };
   const tick=(f)=>{ if(!f)return; const pg=pages[f.page]; if(!pg)return; touched.add(f.page+1); pg.drawText("X",{x:f.x,y:pageH(f.page,pg)-f.y,size:f.size||9,font,color:INK}); };
   // Multi-line, word-wrapped special-condition text in the contract's special-conditions area.
   const drawSpecial=(sc,text)=>{ const pg=pages[sc.page]; if(!pg)return; touched.add(sc.page+1); markLbl(sc.page+1,"Special conditions"); const size=sc.size||9, lh=sc.lineHeight||12.5, maxW=sc.width||448; let y=pageH(sc.page,pg)-sc.y;
@@ -3052,7 +3054,8 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
       if(line){ pg.drawText(line,{x:sc.x,y,size,font:ff,color:INK}); y-=lh; } y-=4; }); };
   // Fallback: append a clean page with the special condition (contracts that already carry
   // special conditions, or have no empty box to write into).
-  const appendSpecial=(text,title,subtitle,intro,reviewLabel)=>{ const W=595.28,H=841.89,MG=56,maxW=W-2*MG,size=10,lh=14; let pg=doc.addPage([W,H]); let y=H-72;
+  const SA_W=595.28, SA_H=841.89, SA_MG=56;
+  const appendSpecial=(text,title,subtitle,intro,reviewLabel)=>{ const W=SA_W,H=SA_H,MG=SA_MG,maxW=W-2*MG,size=10,lh=14; let pg=doc.addPage([W,H]); let y=H-72;
     const mark=()=>{ const n=doc.getPageCount(); touched.add(n); markLbl(n, reviewLabel||"Special conditions"); }; mark();
     const nl=()=>{ y-=lh; if(y<MG){ pg=doc.addPage([W,H]); y=H-72; mark(); } };
     const line=(s,ff,z)=>{ pg.drawText(s,{x:MG,y,size:z||size,font:ff||font,color:INK}); nl(); };
@@ -3060,7 +3063,39 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
     pg.drawText(title||"ADDITIONAL SPECIAL CONDITION",{x:MG,y,size:11,font:fontB,color:INK}); y-=18;
     if(subtitle){ pg.drawText(String(subtitle),{x:MG,y,size:9.5,font,color:INK}); y-=16; }
     if(intro){ wrap(intro); y-=8; } else y-=6;
-    String(text).split("\n").forEach(para=>{ if(!para.trim()){ y-=6; return; } wrap(para, /^SPECIAL CONDITION/i.test(para)?fontB:font); y-=6; }); };
+    String(text).split("\n").forEach(para=>{ if(!para.trim()){ y-=6; return; } wrap(para, /^SPECIAL CONDITION/i.test(para)?fontB:font); y-=6; });
+    return { pg, y }; };
+  // Convert a pdf-lib box (bottom-left origin) to a DocuSeal field area (page ratios, top-left
+  // origin), matching contractDetect's output so injected fields merge with detected ones.
+  const areaOf=(pageNo1,x0,yb,x1,yt)=>({ x:x0/SA_W, y:(SA_H-yt)/SA_H, w:(x1-x0)/SA_W, h:(yt-yb)/SA_H, page:pageNo1 });
+  // Draw an execution block at the end of the special-conditions annexure so ALL parties sign
+  // it, and return the signature/date field areas to merge into the e-sign set. Uses lowercase
+  // "Signed by the …" headings so the UPPERCASE-only detector does not also place duplicates.
+  const drawExecBlock=(pg0,y0,purchaserName)=>{
+    const W=SA_W,H=SA_H,MG=SA_MG,maxW=W-2*MG; let pg=pg0, y=y0;
+    if(y < MG+190){ pg=doc.addPage([W,H]); y=H-72; const n=doc.getPageCount(); touched.add(n); markLbl(n,"Special conditions"); }
+    const pageNo1=doc.getPages().indexOf(pg)+1;
+    const flds=[];
+    pg.drawText("EXECUTION",{x:MG,y,size:11,font:fontB,color:INK}); y-=16;
+    const intro="This annexure forms part of, and is to be read with, the Contract of Sale. The parties sign below to adopt these special conditions as part of the Contract.";
+    (function(){ let ln=""; intro.split(/\s+/).forEach(w=>{ const t=ln?ln+" "+w:w; if(font.widthOfTextAtSize(t,9)>maxW && ln){ pg.drawText(ln,{x:MG,y,size:9,font,color:INK}); y-=12; ln=w; } else ln=t; }); if(ln){ pg.drawText(ln,{x:MG,y,size:9,font,color:INK}); y-=12; } })();
+    y-=18;
+    const row=(role,name)=>{
+      pg.drawText("Signed by the "+role,{x:MG,y,size:10,font:fontB,color:INK});
+      pg.drawText("Date",{x:MG+300,y,size:10,font:fontB,color:INK});
+      const lineY=y-26;
+      pg.drawLine({start:{x:MG,y:lineY},end:{x:MG+250,y:lineY},thickness:0.8,color:rgb(0.55,0.55,0.55)});
+      pg.drawLine({start:{x:MG+300,y:lineY},end:{x:MG+470,y:lineY},thickness:0.8,color:rgb(0.55,0.55,0.55)});
+      flds.push({ role, type:"signature", page:pageNo1, area:areaOf(pageNo1, MG, lineY, MG+250, lineY+22) });
+      flds.push({ role, type:"date", page:pageNo1, area:areaOf(pageNo1, MG+300, lineY, MG+470, lineY+20) });
+      if(name) pg.drawText("Name: "+name,{x:MG,y:lineY-14,size:9,font,color:INK});
+      y=lineY-46;
+    };
+    row("Purchaser", purchaserName||"");
+    row("Vendor", "");
+    return flds;
+  };
+  let signFields=[];   // execution-block fields injected on the special-conditions annexure
   const names=v.purchaserName||[v.p1,v.p2].filter(Boolean).join(" & ");
   put(T.purchaserName, names);
   put(T.purchaserAddr, v.purchaserAddr);
@@ -3095,8 +3130,10 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
   // pre-settlement works). Added as a clean Special Conditions annexure so arbitrary
   // length never overflows a fixed box; the parties sign the whole PDF, annexure included.
   if(v.special && String(v.special).trim()){
-    appendSpecial(String(v.special).trim(), "SPECIAL CONDITIONS", v.propertyAddr||"",
+    const r=appendSpecial(String(v.special).trim(), "SPECIAL CONDITIONS", v.propertyAddr||"",
       "The following special conditions form part of this Contract of Sale and do not merge on settlement. Where a special condition is inconsistent with a printed or general condition, the special condition prevails.", "Special conditions");
+    // All parties sign the annexure (Luke: special conditions must be signed by all parties).
+    signFields=drawExecBlock(r.pg, r.y, names);
   }
   // Short, human labels for the review preview (what landed on each page).
   lblPage(T.price,"Price & deposit"); lblPage(T.deposit,"Price & deposit");
@@ -3105,7 +3142,7 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
   if(v.loan){ lblPage(T.lender,"Finance condition"); lblPage(T.loanAmount,"Finance condition"); }
   lblPage(T.s32PurchaserName,"Section 32 — purchaser");
   lblPage(T.signPurchaserName,"Signature");
-  return { bytes: await doc.save(), pages:[...touched].sort((a,b)=>a-b), pageInfo };
+  return { bytes: await doc.save(), pages:[...touched].sort((a,b)=>a-b), pageInfo, signFields };
 }
 
 function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
@@ -3153,7 +3190,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
         bp, bpDays:(bpDays||"14"),
         special:special.trim(), propertyAddr:openHome?.address||"" };
       const res=await fillOfferContractPdf({ contractUrl:openHome?.contractUrl, propertyId:openHome?.propertyId, v });
-      setFilledFile({ bytes:res.bytes, name:fileName(), filledPages:res.pages||[], pageInfo:res.pageInfo||{} });
+      setFilledFile({ bytes:res.bytes, name:fileName(), filledPages:res.pages||[], pageInfo:res.pageInfo||{}, extraSignFields:res.signFields||[] });
     }catch(e){ setFillErr(e?.code==="NO_MAP" ? "This contract isn't set up for auto-fill yet. I map each contract once when it's added — tell Luke which listing and it takes a few minutes." : (e?.message||"Couldn't fill the contract.")); }
     setFilling(false);
   };
@@ -3173,7 +3210,11 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
     setConvPur(parsed?.convEmail||""); setConvVen("");
     try{ const vr=await call("getVendor",{propertyId:openHome?.propertyId}); if(vr&&vr.ok){ if(vr.vendor){ setVenName(vr.vendor.name||""); setVenEmail(vr.vendor.email||""); } setEsignCount(Number(vr.esignCount)||0); } }catch(e){ setEsignCount(0); }
     setVenLoading(false);
-    try{ const mod=await import("./contractDetect.js"); const purCount=(p2&&p2.trim())?2:1; const res=await mod.detectContractFields(filledFile.bytes.slice(0), undefined, { purchasers:purCount, vendors:1 }); setSignDetected(res);
+    try{ const mod=await import("./contractDetect.js"); const purCount=(p2&&p2.trim())?2:1; const res=await mod.detectContractFields(filledFile.bytes.slice(0), undefined, { purchasers:purCount, vendors:1 });
+      // Merge the execution-block fields we drew on the special-conditions annexure (deterministic,
+      // not re-detected) so all parties sign the annexure too.
+      const extra=filledFile.extraSignFields||[]; if(extra.length){ res.fields=res.fields.concat(extra); res.roles=[...new Set(res.fields.map(f=>f.role))]; }
+      setSignDetected(res);
       // prefill conveyancer emails: purchaser from the offer, vendor from the contract particulars
       const c=res.conveyancers||{}; setConvPur(prev=>prev||parsed?.convEmail||c.purchaser?.email||""); setConvVen(c.vendor?.email||"");
       if(!res.fields.length) setSignErr("No standard signing blocks were found in this contract, so it can't be sent for e-signing. You can still download the PDF and send it manually.");

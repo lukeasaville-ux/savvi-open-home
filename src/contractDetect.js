@@ -228,8 +228,12 @@ export async function detectContractFields(data, pdfjsOverride, opts) {
           const role = roleAt(y); if (role) cells.push({ role, type: "date", y, box: [it.x1 + 2, y - 8, W - 45, y + 9] });
         }
       }
+      // The Section 32 Vendor Statement is signed by the VENDOR and given to the purchaser
+      // BEFORE the purchaser signs (a legal precondition), so by the time it is e-sent the
+      // vendor's signature already exists on it. Collect ONLY the purchaser's acknowledgement
+      // here — never ask the vendor to sign/date the Vendor Statement a second time.
       const cap = { Vendor: nVen, Purchaser: nPur };
-      for (const role of ["Vendor", "Purchaser"]) for (const type of ["signature", "date"]) {
+      for (const role of ["Purchaser"]) for (const type of ["signature", "date"]) {
         cells.filter(c => c.role === role && c.type === type)
           .sort((a, b) => a.y - b.y).slice(0, cap[role])
           .forEach(c => push(c.role, c.type, pg.p, c.box[0], c.box[1], c.box[2], c.box[3]));
