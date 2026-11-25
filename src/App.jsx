@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v159-calendar-centred-clean";
+const BUILD = "v160-special-conditions-annexure";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3046,11 +3046,14 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
       if(line){ pg.drawText(line,{x:sc.x,y,size,font:ff,color:INK}); y-=lh; } y-=4; }); };
   // Fallback: append a clean page with the special condition (contracts that already carry
   // special conditions, or have no empty box to write into).
-  const appendSpecial=(text)=>{ const W=595.28,H=841.89,MG=56,maxW=W-2*MG,size=10,lh=14; const pg=doc.addPage([W,H]); let y=H-72;
-    pg.drawText("ADDITIONAL SPECIAL CONDITION",{x:MG,y,size:11,font:fontB,color:INK}); y-=24;
-    String(text).split("\n").forEach(para=>{ const bold=/^SPECIAL CONDITION/i.test(para); const ff=bold?fontB:font; const words=para.split(/\s+/); let line="";
-      words.forEach(w=>{ const t=line?line+" "+w:w; if(ff.widthOfTextAtSize(t,size)>maxW && line){ pg.drawText(line,{x:MG,y,size,font:ff,color:INK}); y-=lh; line=w; } else line=t; });
-      if(line){ pg.drawText(line,{x:MG,y,size,font:ff,color:INK}); y-=lh; } y-=6; }); };
+  const appendSpecial=(text,title,subtitle,intro)=>{ const W=595.28,H=841.89,MG=56,maxW=W-2*MG,size=10,lh=14; let pg=doc.addPage([W,H]); let y=H-72;
+    const nl=()=>{ y-=lh; if(y<MG){ pg=doc.addPage([W,H]); y=H-72; } };
+    const line=(s,ff,z)=>{ pg.drawText(s,{x:MG,y,size:z||size,font:ff||font,color:INK}); nl(); };
+    const wrap=(s,ff,z)=>{ const f=ff||font, zz=z||size; let ln=""; String(s).split(/\s+/).forEach(w=>{ const t=ln?ln+" "+w:w; if(f.widthOfTextAtSize(t,zz)>maxW && ln){ line(ln,f,zz); ln=w; } else ln=t; }); if(ln) line(ln,f,zz); };
+    pg.drawText(title||"ADDITIONAL SPECIAL CONDITION",{x:MG,y,size:11,font:fontB,color:INK}); y-=18;
+    if(subtitle){ pg.drawText(String(subtitle),{x:MG,y,size:9.5,font,color:INK}); y-=16; }
+    if(intro){ wrap(intro); y-=8; } else y-=6;
+    String(text).split("\n").forEach(para=>{ if(!para.trim()){ y-=6; return; } wrap(para, /^SPECIAL CONDITION/i.test(para)?fontB:font); y-=6; }); };
   const names=v.purchaserName||[v.p1,v.p2].filter(Boolean).join(" & ");
   put(T.purchaserName, names);
   put(T.purchaserAddr, v.purchaserAddr);
@@ -3081,6 +3084,13 @@ async function fillOfferContractPdf({ contractUrl, propertyId, v }){
     else if(B.building||B.pest){ tick(B.building); tick(B.pest); }
     else { appendSpecial(bpSpecialConditionText(v.bpDays||"14")); }
   }
+  // Free-text special conditions typed on the prepare-contract screen (e.g. agreed
+  // pre-settlement works). Added as a clean Special Conditions annexure so arbitrary
+  // length never overflows a fixed box; the parties sign the whole PDF, annexure included.
+  if(v.special && String(v.special).trim()){
+    appendSpecial(String(v.special).trim(), "SPECIAL CONDITIONS", v.propertyAddr||"",
+      "The following special conditions form part of this Contract of Sale and do not merge on settlement. Where a special condition is inconsistent with a printed or general condition, the special condition prevails.");
+  }
   return await doc.save();
 }
 
@@ -3090,6 +3100,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   const [p1,setP1]=useState(""),[p2,setP2]=useState(""),[padr,setPadr]=useState(""),[price,setPrice]=useState(""),[depAmt,setDepAmt]=useState(""),[depWhen,setDepWhen]=useState("on signing the contract"),[settle,setSettle]=useState(""),[fin,setFin]=useState(false),[lender,setLender]=useState(""),[loanMax,setLoanMax]=useState(""),[finDays,setFinDays]=useState("14"),[approval,setApproval]=useState(""),[bp,setBp]=useState(false),[vacant,setVacant]=useState(true),[copied,setCopied]=useState(false);
   const [bpDays,setBpDays]=useState("14");
   const [depUpfront,setDepUpfront]=useState("");
+  const [special,setSpecial]=useState("");
   const [filling,setFilling]=useState(false),[fillErr,setFillErr]=useState(""),[filledFile,setFilledFile]=useState(null);
   // Digital-signing (DocuSeal) sub-flow: purchaser signs first, then the vendor automatically.
   const [signOpen,setSignOpen]=useState(false),[signStep,setSignStep]=useState("prep"),[signErr,setSignErr]=useState(""),[sendState,setSendState]=useState("idle");
@@ -3104,6 +3115,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
     setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); setDepWhen(parsed.depositBy||"on signing"); setDepUpfront(parsed.depositPaid||"");
     // Settlement period ("60 days") becomes a real date from today; the agent can still edit it.
     setSettle(computeSettleDate(parsed.settlement, new Date())); setFin(!!parsed.finance); setLender(parsed.lender||"An approved lending institution"); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setBpDays(parsed.bpDays||"14"); setVacant(true); setCopied(false);
+    setSpecial("");
     setFilling(false); setFillErr(""); setFilledFile(null);
     setSignOpen(false); setSignStep("prep"); setSignErr(""); setSendState("idle"); setPurEmail(""); setVenName(""); setVenEmail(""); setVenLoading(false); setSignDetected(null);
     setConvPur(""); setConvVen(""); setPreviewImgs(null); setPreviewing(false);
@@ -3122,7 +3134,8 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
         balance:money(balance), settlement:settle, p1, p2,
         loan:fin, lender:lender||"An approved lending institution", loanAmount:money(balance),
         approval:apprDate?fmtContractDate(apprDate):"", approvalD:apprDate?apprDate.getDate():"", approvalM:apprDate?(apprDate.getMonth()+1):"", approvalYY:apprDate?String(apprDate.getFullYear()).slice(-2):"",
-        bp, bpDays:(bpDays||"14") };
+        bp, bpDays:(bpDays||"14"),
+        special:special.trim(), propertyAddr:openHome?.address||"" };
       const bytes=await fillOfferContractPdf({ contractUrl:openHome?.contractUrl, propertyId:openHome?.propertyId, v });
       setFilledFile({ bytes, name:fileName() });
     }catch(e){ setFillErr(e?.code==="NO_MAP" ? "This contract isn't set up for auto-fill yet. I map each contract once when it's added — tell Luke which listing and it takes a few minutes." : (e?.message||"Couldn't fill the contract.")); }
@@ -3255,6 +3268,11 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
           <label style={fl}>Report period (days)</label>
           <input style={fi} value={bpDays} onChange={e=>setBpDays(e.target.value)} inputMode="numeric" placeholder="14"/>
         </div>}
+        <div style={{marginTop:12}}>
+          <label style={fl}>Special conditions (added to the contract)</label>
+          <textarea style={{...fi,minHeight:96,resize:"vertical",lineHeight:1.5}} value={special} onChange={e=>setSpecial(e.target.value)} placeholder={"e.g. works the vendor will complete before settlement. One per line.\n\nLeave blank if there are none."}/>
+          <div style={{fontSize:11,color:BROWN_L,marginTop:4,lineHeight:1.45}}>Anything typed here is added to the filled contract as a Special Conditions annexure. Start a line with "SPECIAL CONDITION" for a bold heading.</div>
+        </div>
         {parsed.conditions&&<div style={{marginTop:12}}>
           <label style={fl}>Buyer's offer notes (reference)</label>
           <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:9,padding:"9px 11px",fontSize:12.5,color:BROWN_M,whiteSpace:"pre-wrap",maxHeight:120,overflowY:"auto"}}>{parsed.conditions}</div>
