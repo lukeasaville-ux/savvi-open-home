@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v150-addr-suffix";
+const BUILD = "v151-agent-inbox";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -959,7 +959,7 @@ const AVATAR_COLS=["#C75B3A","#5A7FBF","#8B4513","#2B5F3A","#6B4EAF","#1A5276","
 // Same link for every buyer.
 const SOFT_LAUNCH_URL="https://www.instagram.com/channel/AbaX4MTIDSizmiyT/";
 // Full agent name for the sign-off (backend `who` may be a first name only).
-const AGENT_FULL={ "Luke":"Luke Saville", "Sam":"Sam Robinson" };
+const AGENT_FULL={ "Luke":"Luke Saville", "Sam":"Sam Robinson", "Madeline":"Madeline Evans" };
 // Vendor-facing interest groupings for the FULL campaign report. Buyers are bucketed by
 // their actual interest, each heading a bold sub-head in the update. Contract status is
 // NOT a group — a contract-taker isn't automatically serious — it's woven into the
@@ -6407,7 +6407,7 @@ function AuthoritySheet({ open, onClose, agentName }){
       const b64=u8ToB64(pdfBytes);
       const fields=signFields(!schedOff(campaign), named.length, authType, vendorType, advocate && (advocateName||"").trim());
       const submitters=named.map((v,i)=>({ role:"Vendor "+(i+1), name:v.name.trim(), email:v.email.trim() }));
-      submitters.push({ role:"Agent", name:(agentName||"Savvi"), email:AGENT_EMAIL[agentName]||"hello@getsavvi.com.au" });
+      submitters.push({ role:"Agent", name:(AGENT_FULL[agentName]||agentName||"Savvi"), email:AGENT_EMAIL[AGENT_FULL[agentName]||agentName]||"hello@getsavvi.com.au" });
       const typeName = authType==="auction" ? "Exclusive Auction Authority" : "Exclusive Sale Authority";
       // Once signed, email the executed authority to the owner(s).
       const distribution={ kind:"authority", authTypeName:typeName, address:propertyAddr||"property", agentName:(AGENT_FULL[agentName]||agentName||""), agentEmail:(AGENT_EMAIL[AGENT_FULL[agentName]||agentName]||""), vendorName:(named[0]?.name||""), vendorEmails:named.map(v=>v.email.trim()).filter(Boolean) };
