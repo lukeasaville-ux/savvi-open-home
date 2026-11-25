@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v149-offmarket-one";
+const BUILD = "v150-addr-suffix";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -6223,6 +6223,22 @@ function formatAUAddress(item){
   const tail=[sub,[st,pc].filter(Boolean).join(" ")].filter(Boolean).join(" ");
   return [line,tail].filter(Boolean).join(", ") || (item.display_name||"");
 }
+// Google Place Details sometimes strips an alpha suffix off the street number when it
+// resolves a picked prediction (e.g. "124b" → "124"), even though the prediction TEXT
+// and the Geocoding API both keep it. Restore it from the prediction text when the only
+// difference is a trailing building letter. predText = the prediction's display string.
+function restoreStreetSuffix(f, predText){
+  if(!f || !predText) return f;
+  const pm=(predText.match(/^\s*([\d/\-]+[A-Za-z])(?=\s|,|$)/)||[])[1];  // e.g. "5/124b" (must end in a letter)
+  if(!pm) return f;
+  const fm=(f.match(/^\s*([\d/\-]+[A-Za-z]?)(?=\s|,|$)/)||[])[1];        // e.g. "5/124" or already "5/124B"
+  if(!fm || fm.toLowerCase()===pm.toLowerCase()) return f;              // nothing to do / already has it
+  if(fm.toLowerCase()===pm.slice(0,-1).toLowerCase()){                  // fm is pm minus its trailing letter → restore
+    const fixed=pm.slice(0,-1)+pm.slice(-1).toUpperCase();              // "5/124B"
+    return f.replace(/^\s*[\d/\-]+[A-Za-z]?(?=\s|,|$)/, fixed);
+  }
+  return f;
+}
 function AddressInput({ value, onChange, placeholder }){
   const [sugs,setSugs]=useState([]); const [listOpen,setListOpen]=useState(false); const [loading,setLoading]=useState(false);
   const tRef=useRef(null);
@@ -6255,10 +6271,12 @@ function AddressInput({ value, onChange, placeholder }){
   // On pick, resolve the prediction's placeId to full components (incl. postcode) before filling.
   async function pick(item){
     setListOpen(false); setSugs([]);
+    const predText=item.display_name||"";   // prediction text keeps the building letter Place Details drops
     let it=item;
     if(item.placeId){ try{ const j=await call("geocode",{placeId:item.placeId}); if(j&&j.ok&&j.result) it=j.result; }catch(e){} }
     let f = it.address ? formatAUAddress(it) : (it.display_name||"");
     if(unitPrefix && !/^\s*\d+[A-Za-z]?\s*\//.test(f)) f=unitPrefix+f;
+    f=restoreStreetSuffix(f,predText);
     onChange(f);
   }
   return (
