@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v173-today-targets-redesign";
+const BUILD = "v174-real-targets";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4997,11 +4997,14 @@ const svK = n => { n=Math.round(n||0);
   if(n>=1e3) return "$"+(n/1e3).toFixed(1).replace(/\.0$/,"")+"k";
   return "$"+n; };
 
-// TODO: confirm with Luke — every figure here is a placeholder, not yet signed off.
+// Savvi 2026 targets — confirmed by Luke 27 Nov 2026. Per-agent sold-value target is the
+// sales target × Luke's stated average-price target (Luke 90×$700k, Sam 15×$550k). avgGci
+// target is team-level only (Luke's stretch figure, not netGci/sales); agents carry an
+// avg-price target instead.
 const SV_TARGETS = {
-  team: { netGci:1200000, sales:100, soldValue:60000000, listingsWon:120, avgGci:12000 },
-  luke: { netGci:1000000, sales:85,  soldValue:50000000, listingsWon:100 },
-  sam:  { netGci:200000,  sales:15,  soldValue:10000000, listingsWon:20 },
+  team: { netGci:1100000, sales:100, soldValue:70000000, listingsWon:100, avgGci:13000, avgPrice:700000 },
+  luke: { netGci:950000,  sales:90,  soldValue:63000000, listingsWon:95,  avgPrice:700000 },
+  sam:  { netGci:175000,  sales:15,  soldValue:8250000,  listingsWon:17,  avgPrice:550000 },
 };
 
 // Period maths. Only the 2026 calendar year is wired to live data today.
@@ -5118,7 +5121,7 @@ function svMetricRows(a, t){
     { label:"Sold value",   cells:svCells({actual:a.soldValue,   target:t&&t.soldValue,   paced:true, fmt:svFull, elapsedPct:ep}) },
     { label:"Listings won", cells:svCells({actual:a.listingsWon, target:t&&t.listingsWon, paced:true, fmt:svNum,  elapsedPct:ep}) },
     { label:"Avg GCI",      cells:svCells({actual:avgGci,        target:t&&t.avgGci,      paced:false, fmt:svFull}) },
-    { label:"Avg price",    cells:svCells({actual:avgPrice,      target:null,             paced:false, fmt:svFull}) },
+    { label:"Avg price",    cells:svCells({actual:avgPrice,      target:t&&t.avgPrice,    paced:false, fmt:svFull}) },
     { label:"Off-market %", cells:svCells({actual:a.offMarketPct,target:null,             paced:false, fmt:n=>Math.round(n)+"%"}) },
   ];
 }
