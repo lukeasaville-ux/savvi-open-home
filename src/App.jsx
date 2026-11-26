@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v178-pace-strip-fix";
+const BUILD = "v179-today-scope-dropdown";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4814,6 +4814,7 @@ const SV_CSS = `
 .sv-scope{font-family:var(--font-sans);font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:#fff;border:1px solid var(--hairline);border-radius:0;padding:6px 28px 6px 11px;appearance:none;-webkit-appearance:none;cursor:pointer;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%23311E10'/></svg>");background-repeat:no-repeat;background-position:right 10px center;}
 .sv-scope:hover{border-color:var(--ink-muted);}
 .sv-scope:focus{outline:none;border-color:var(--savvi-brown);}
+.sv-scopebar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 2px 12px;}
 .sv-gci-avg{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;padding:14px 20px;border-bottom:1px solid var(--hairline);}
 .sv-gci-avg .v{font-size:14px;}
 .sv-gci-avg .v b{font-family:var(--font-display);font-weight:400;font-size:20px;letter-spacing:-.01em;}
@@ -5262,6 +5263,8 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   // Net-GCI-by-month chart scope: "team" or an agent code (LS/SR). Per Luke, the director
   // (Luke) defaults to Team; other sales agents default to their own column.
   const [gciScope,setGciScope]=useState(()=> (agentName && agentName!=="Luke" && SV_AGENT_CODE[agentName]) ? SV_AGENT_CODE[agentName] : "team");
+  // Today-band scope (Team / per agent). Same default as the chart: Luke sees the team, others see themselves.
+  const [todayScope,setTodayScope]=useState(()=> (agentName && agentName!=="Luke" && SV_AGENT_CODE[agentName]) ? SV_AGENT_CODE[agentName] : "team");
   useEffect(()=>{ let on=true; (async()=>{ try{ const j=await call("getTargets"); if(on) setTdata(j&&j.ok?(j.data||null):null); }catch(e){ if(on) setTdata(null); } })(); return ()=>{on=false;}; },[]);
 
   const loadIndex=useCallback(async(force)=>{ if(indexing) return; if(!force&&index&&Date.now()-indexAt<60*1000) return; setIndexing(true); try{ const ix=await Attio.getCrmIndex(); if(ix) { setIndex(ix); setIndexAt(Date.now()); } }catch(e){} setIndexing(false); },[index,indexAt,indexing]);
@@ -5506,10 +5509,17 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const _avgGciGoal = (_gciTgtObj&&_gciTgtObj.avgGci) || 0;
   const _avgGciPct = _avgGciGoal ? Math.round(_avgGciActual/_avgGciGoal*100) : null;
   const _gciScopeLabel = gciScope==="team" ? "Team" : (_gciAgent ? _gciAgent.name : "");
-  const todayBandCells = svModel ? [
-    { label:"Net GCI", lead:true, value:svK(svModel.team.netGci), sub:"of "+svK(_tgtTeam.netGci)+" target", pct:svModel.team.netGci/_tgtTeam.netGci*100, elapsedPct:_per.elapsedPct },
-    { label:"Team sales", value:svNum(svModel.team.sales), sub:"of "+_tgtTeam.sales+" target", pct:svModel.team.sales/_tgtTeam.sales*100, elapsedPct:_per.elapsedPct },
-    { label:"Avg price", value:svK(svModel.team.soldValue/Math.max(1,svModel.team.sales)), sub:"of "+svK(_tgtTeam.avgPrice)+" target", pct:(svModel.team.soldValue/Math.max(1,svModel.team.sales))/_tgtTeam.avgPrice*100 },
+  // Today band follows its own scope dropdown (Team / each agent).
+  const _tAgent = (todayScope!=="team" && svModel) ? svModel.agents.find(a=>a.code===todayScope) : null;
+  const _tM = svModel ? (todayScope==="team" ? svModel.team : (_tAgent||svModel.team)) : null;
+  const _tTgt = (todayScope==="team" || !_tAgent) ? _tgtTeam : (SV_TARGETS[String(_tAgent.name).toLowerCase()]||_tgtTeam);
+  const _tIsTeam = todayScope==="team" || !_tAgent;
+  const _tScopeLabel = _tIsTeam ? "Team" : _tAgent.name;
+  const _tAvgPrice = _tM ? (_tIsTeam ? _tM.soldValue/Math.max(1,_tM.sales) : (_tM.avgPrice||0)) : 0;
+  const todayBandCells = (svModel && _tM) ? [
+    { label:"Net GCI", lead:true, value:svK(_tM.netGci), sub:"of "+svK(_tTgt.netGci)+" target", pct:_tM.netGci/_tTgt.netGci*100, elapsedPct:_per.elapsedPct },
+    { label:_tIsTeam?"Team sales":"Sales", value:svNum(_tM.sales), sub:"of "+_tTgt.sales+" target", pct:_tM.sales/_tTgt.sales*100, elapsedPct:_per.elapsedPct },
+    { label:"Avg price", value:svK(_tAvgPrice), sub:"of "+svK(_tTgt.avgPrice)+" target", pct:_tTgt.avgPrice?_tAvgPrice/_tTgt.avgPrice*100:null },
     { label:"Active listings", value:activeCount, sub:"on the market now" },
   ] : [
     { label:"Net GCI", lead:true, value:"—", sub:"loading…" }, { label:"Team sales", value:"—", sub:"" },
@@ -5573,6 +5583,13 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
       <div className="crm-body">
         <div className="crm-scroll">
           {tab==="today"&&<div className="sv-today">
+            <div className="sv-scopebar">
+              <span className="t-label">{_tIsTeam?"Whole team":_tScopeLabel} · {_per.year} CY</span>
+              <select className="sv-scope" value={todayScope} onChange={e=>setTodayScope(e.target.value)}>
+                <option value="team">Team</option>
+                {(svModel?svModel.agents:[]).map(a=><option key={a.code} value={a.code}>{a.name}</option>)}
+              </select>
+            </div>
             <SvBand cells={todayBandCells}/>
             <div className="sv-agents">{agentPanels}</div>
             <div className="sv-2col">
