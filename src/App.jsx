@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v181-todo-backend";
+const BUILD = "v182-todo-open-link";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4930,11 +4930,11 @@ function SvTodo({agent,index,indexing,suggestions,onOpenContact}){
   const itemRow=(x)=>(
     <div key={x.id} className={"sv-todo-row"+(x.done?" done":"")}>
       <button className={"sv-tick"+(x.done?" on":"")} aria-label={x.done?"Undo":"Done"} onClick={()=>toggle(x.id)}>{x.done?"✓":""}</button>
-      <div className="sv-todo-main" onClick={()=>x.contactId&&onOpenContact&&onOpenContact(x.contactId,x.propertyRef)}>
+      <div className="sv-todo-main" style={x.link?{cursor:"pointer"}:undefined} onClick={()=>{ if(x.contactId&&onOpenContact){onOpenContact(x.contactId,x.propertyRef);} else if(x.link){ try{window.open(x.link,"_blank","noopener");}catch(e){} } }}>
         <div className="sv-todo-nm">{x.name||x.text}{x.name&&x.kind?<span className="sv-todo-kind">{TODO_KINDS[x.kind]||x.kind}</span>:null}</div>
         {x.sub?<div className="sv-todo-sub">{x.sub}</div>:null}
       </div>
-      {x.mobile&&!x.done?<div className="sv-todo-act"><a className="sv-cta" href={tel(x.mobile)}>Call</a><a className="sv-cta" href={sms(x.mobile)}>Text</a></div>:null}
+      {x.mobile&&!x.done?<div className="sv-todo-act"><a className="sv-cta" href={tel(x.mobile)}>Call</a><a className="sv-cta" href={sms(x.mobile)}>Text</a></div>:x.link&&!x.done?<div className="sv-todo-act"><a className="sv-cta" href={x.link} target="_blank" rel="noopener">Open</a></div>:null}
       <button className="sv-todo-x" aria-label="Remove" onClick={()=>del(x.id)}>×</button>
     </div>
   );
