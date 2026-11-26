@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v180-today-todo-feedright";
+const BUILD = "v181-todo-backend";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4904,7 +4904,7 @@ function crmBuildTodos(index){
   });
   return out.sort((a,b)=>new Date(b.ts||0)-new Date(a.ts||0));
 }
-const TODO_KINDS={ second:"Second inspection", contract:"Reading the contract", callback:"Asked for a call" };
+const TODO_KINDS={ second:"Second inspection", contract:"Reading the contract", callback:"Asked for a call", email:"Email reply", text:"Text reply", whatsapp:"WhatsApp", instagram:"Instagram", call:"Missed call", proposal:"Proposal follow-up", appraisal:"Appraisal follow-up", vendor:"Vendor report", buyercall:"Buyer calls" };
 function _todoKey(agent){ return "savvi_todo_"+(agent||"x")+"_"+new Date().toISOString().slice(0,10); }
 function _todoLoad(agent){ try{ return JSON.parse(localStorage.getItem(_todoKey(agent))||"[]"); }catch(e){ return []; } }
 function _todoSave(agent,list){ try{ localStorage.setItem(_todoKey(agent),JSON.stringify(list)); }catch(e){} }
@@ -4913,29 +4913,42 @@ function _doneSave(agent,set){ try{ localStorage.setItem(_todoKey(agent)+"_done"
 
 /* Today to-do list: manual lines + CRM suggestions, tick -> strike -> drop to the bottom. */
 function SvTodo({agent,index,indexing,suggestions,onOpenContact}){
-  const [items,setItems]=useState(()=>_todoLoad(agent));
-  const [done,setDone]=useState(()=>_doneLoad(agent));
+  const [items,setItems]=useState([]);          // manual + scan items, from the per-agent backend store
+  const [done,setDone]=useState(()=>_doneLoad(agent));  // dismissed CRM suggestions (per day, local)
   const [txt,setTxt]=useState("");
-  useEffect(()=>{ setItems(_todoLoad(agent)); setDone(_doneLoad(agent)); },[agent]);
-  const add=()=>{ const t=txt.trim(); if(!t) return; const next=[...items,{id:"m"+Date.now(),text:t,done:false}]; setItems(next); _todoSave(agent,next); setTxt(""); };
-  const toggleM=id=>{ const next=items.map(x=>x.id===id?{...x,done:!x.done}:x); setItems(next); _todoSave(agent,next); };
-  const delM=id=>{ const next=items.filter(x=>x.id!==id); setItems(next); _todoSave(agent,next); };
+  const [loaded,setLoaded]=useState(false);
+  const refresh=()=>{ call("getTodos").then(r=>{ if(r&&r.ok&&Array.isArray(r.data)) setItems(r.data); setLoaded(true); }).catch(()=>setLoaded(true)); };
+  useEffect(()=>{ setDone(_doneLoad(agent)); refresh(); },[agent]); // eslint-disable-line react-hooks/exhaustive-deps
+  const add=()=>{ const t=txt.trim(); if(!t) return; setTxt(""); setItems(xs=>[...xs,{id:"tmp"+Date.now(),text:t,kind:"manual",done:false}]); call("addTodo",{text:t,kind:"manual"}).then(refresh).catch(refresh); };
+  const toggle=id=>{ setItems(xs=>xs.map(x=>x.id===id?{...x,done:!x.done}:x)); call("toggleTodo",{id}).then(refresh).catch(()=>{}); };
+  const del=id=>{ setItems(xs=>xs.filter(x=>x.id!==id)); call("removeTodo",{id}).catch(()=>{}); };
   const toggleS=id=>{ const n=new Set(done); n.has(id)?n.delete(id):n.add(id); setDone(n); _doneSave(agent,n); };
   const tel=m=>"tel:"+(toE164AU(m)||m), sms=m=>"sms:"+(toE164AU(m)||m);
-  const openM=items.filter(x=>!x.done), doneM=items.filter(x=>x.done);
+  const openI=items.filter(x=>!x.done), doneI=items.filter(x=>x.done);
   const openS=suggestions.filter(s=>!done.has(s.id)), doneS=suggestions.filter(s=>done.has(s.id));
-  const empty=!openM.length&&!openS.length&&!doneM.length&&!doneS.length;
+  const empty=loaded&&!openI.length&&!openS.length&&!doneI.length&&!doneS.length;
+  const itemRow=(x)=>(
+    <div key={x.id} className={"sv-todo-row"+(x.done?" done":"")}>
+      <button className={"sv-tick"+(x.done?" on":"")} aria-label={x.done?"Undo":"Done"} onClick={()=>toggle(x.id)}>{x.done?"✓":""}</button>
+      <div className="sv-todo-main" onClick={()=>x.contactId&&onOpenContact&&onOpenContact(x.contactId,x.propertyRef)}>
+        <div className="sv-todo-nm">{x.name||x.text}{x.name&&x.kind?<span className="sv-todo-kind">{TODO_KINDS[x.kind]||x.kind}</span>:null}</div>
+        {x.sub?<div className="sv-todo-sub">{x.sub}</div>:null}
+      </div>
+      {x.mobile&&!x.done?<div className="sv-todo-act"><a className="sv-cta" href={tel(x.mobile)}>Call</a><a className="sv-cta" href={sms(x.mobile)}>Text</a></div>:null}
+      <button className="sv-todo-x" aria-label="Remove" onClick={()=>del(x.id)}>×</button>
+    </div>
+  );
   const sugRow=(s,isDone)=>(
     <div key={s.id} className={"sv-todo-row"+(isDone?" done":"")}>
-      <button className="sv-tick" aria-label="Done" onClick={()=>toggleS(s.id)}>{isDone?"✓":""}</button>
+      <button className={"sv-tick"+(isDone?" on":"")} aria-label="Done" onClick={()=>toggleS(s.id)}>{isDone?"✓":""}</button>
       <div className="sv-todo-main" onClick={()=>onOpenContact&&onOpenContact(s.contactId,s.propertyRef)}>
         <div className="sv-todo-nm">{s.name}<span className="sv-todo-kind">{TODO_KINDS[s.kind]||""}</span></div>
         <div className="sv-todo-sub">{s.sub}</div>
       </div>
-      {s.mobile&&!isDone&&<div className="sv-todo-act"><a className="sv-cta" href={tel(s.mobile)}>Call</a><a className="sv-cta" href={sms(s.mobile)}>Text</a></div>}
+      {s.mobile&&!isDone?<div className="sv-todo-act"><a className="sv-cta" href={tel(s.mobile)}>Call</a><a className="sv-cta" href={sms(s.mobile)}>Text</a></div>:null}
     </div>
   );
-  return <SvPanel title="To-do" badge={openM.length+openS.length||null} scroll
+  return <SvPanel title="To-do" badge={openI.length+openS.length||null} scroll
       actions={<span className="t-label" style={{color:index&&!indexing?"#1E8C50":"var(--ink-muted)"}}>{!index?(indexing?"Reading CRM…":""):(indexing?"Updating…":new Date().toLocaleDateString("en-AU",{weekday:"long"}))}</span>}>
     <div className="sv-todo-add">
       <input value={txt} onChange={e=>setTxt(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") add(); }} placeholder="Add a follow-up…"/>
@@ -4943,18 +4956,10 @@ function SvTodo({agent,index,indexing,suggestions,onOpenContact}){
     </div>
     {empty&&<div className="sv-empty">Nothing outstanding. Add a line above, or follow-ups will land here as buyers act.</div>}
     <div className="sv-todo-list">
-      {openM.map(x=><div key={x.id} className="sv-todo-row">
-        <button className="sv-tick" aria-label="Done" onClick={()=>toggleM(x.id)}></button>
-        <div className="sv-todo-main"><div className="sv-todo-nm">{x.text}</div></div>
-        <button className="sv-todo-x" aria-label="Remove" onClick={()=>delM(x.id)}>×</button>
-      </div>)}
+      {openI.map(itemRow)}
       {openS.map(s=>sugRow(s,false))}
-      {(doneM.length||doneS.length)>0&&<div className="sv-todo-divider t-label">Done</div>}
-      {doneM.map(x=><div key={x.id} className="sv-todo-row done">
-        <button className="sv-tick on" aria-label="Undo" onClick={()=>toggleM(x.id)}>✓</button>
-        <div className="sv-todo-main"><div className="sv-todo-nm">{x.text}</div></div>
-        <button className="sv-todo-x" aria-label="Remove" onClick={()=>delM(x.id)}>×</button>
-      </div>)}
+      {(doneI.length||doneS.length)>0&&<div className="sv-todo-divider t-label">Done</div>}
+      {doneI.map(itemRow)}
       {doneS.map(s=>sugRow(s,true))}
     </div>
   </SvPanel>;
