@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v179-today-scope-dropdown";
+const BUILD = "v180-today-todo-feedright";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4766,6 +4766,28 @@ const SV_CSS = `
 .sv-feed .fr .dt{font-size:12px;color:var(--ink-muted);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .sv-feed .fr .when{font-size:11.5px;color:var(--ink-muted);white-space:nowrap;}
 .sv-empty{padding:34px 20px;text-align:center;color:var(--ink-muted);font-size:13.5px;}
+.sv-todo-add{display:flex;gap:8px;padding:12px 20px;border-bottom:1px solid var(--hairline);}
+.sv-todo-add input{flex:1;min-width:0;border:1px solid var(--hairline);border-radius:0;padding:9px 12px;font-family:var(--font-sans);font-weight:500;font-size:14px;color:var(--ink);background:#fff;}
+.sv-todo-add input:focus{outline:none;border-color:var(--savvi-brown);}
+.sv-todo-add button{flex:0 0 auto;border:none;background:var(--savvi-brown);color:var(--savvi-butter);font-family:var(--font-sans);font-weight:500;font-size:12px;letter-spacing:.04em;text-transform:uppercase;padding:0 16px;cursor:pointer;}
+.sv-todo-add button:disabled{opacity:.4;cursor:default;}
+.sv-todo-list{display:flex;flex-direction:column;}
+.sv-todo-row{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:12px;align-items:center;padding:11px 20px;border-top:1px solid var(--hairline);}
+.sv-todo-row:first-child{border-top:none;}
+.sv-todo-main{min-width:0;cursor:pointer;}
+.sv-todo-nm{font-size:14px;font-weight:600;color:var(--ink);display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;}
+.sv-todo-kind{font-size:10.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-muted);}
+.sv-todo-sub{font-size:12px;color:var(--ink-muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sv-todo-row.done .sv-todo-nm,.sv-todo-row.done .sv-todo-sub{text-decoration:line-through;color:var(--ink-muted);}
+.sv-tick{flex:0 0 auto;width:20px;height:20px;border:1.5px solid var(--hairline);background:#fff;border-radius:0;cursor:pointer;color:var(--savvi-butter);font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;}
+.sv-tick:hover{border-color:var(--ink-muted);}
+.sv-tick.on{background:var(--savvi-brown);border-color:var(--savvi-brown);}
+.sv-todo-act{display:flex;gap:6px;}
+.sv-cta{display:inline-flex;align-items:center;border:1px solid var(--hairline);background:#fff;color:var(--ink);font-size:11.5px;font-weight:600;letter-spacing:.02em;padding:5px 11px;text-decoration:none;cursor:pointer;}
+.sv-cta:hover{border-color:var(--savvi-brown);}
+.sv-todo-x{flex:0 0 auto;border:none;background:none;color:var(--ink-muted);font-size:18px;line-height:1;cursor:pointer;padding:0 2px;}
+.sv-todo-x:hover{color:var(--savvi-orange);}
+.sv-todo-divider{padding:12px 20px 6px;border-top:1px solid var(--hairline);}
 
 /* Targets page head */
 .sv-head{display:flex;align-items:flex-end;gap:18px;}
@@ -4860,6 +4882,83 @@ function crmBuildFeed(index, auctionByProp){
   const seen=new Set(); return out.filter(r=>{ const k=r.k+"|"+r.c.contactId+"|"+r.i.propertyRef; if(seen.has(k)) return false; seen.add(k); return true; }).sort((a,b)=>new Date(b.when||0)-new Date(a.when||0));
 }
 const FEED_KINDS={ contract:{t:"Contract opened",why:"they're reading it: call while it's warm",ic:"📄"}, offer:{t:"Offer submitted",why:"act on it today",ic:"✅"}, bid:{t:"Registered to bid",why:"confirm they're set for auction day",ic:"🔨"}, form:{t:"Form opened, not submitted",why:"a nudge usually gets it over the line",ic:"📝"} };
+
+/* ── Today to-do: follow-up suggestions computed from the CRM index (Phase-2 auto items). ──
+   Each carries name + mobile + a one-line reason + a stable id so a "done" tick sticks for the day.
+   (Manual lines + these suggestions share one list; external email/text/IG scans will append here later.) */
+function crmBuildTodos(index){
+  if(!index) return [];
+  const now=Date.now(), day=864e5, out=[], seen=new Set();
+  const snip=t=>String(t||"").replace(/\s+/g," ").trim().slice(0,80);
+  const push=(kind,c,ref,address,sub,ts)=>{ const id=kind+"|"+c.contactId+"|"+(ref||""); if(seen.has(id))return; seen.add(id); out.push({id,kind,contactId:c.contactId,propertyRef:ref,name:c.name,mobile:c.mobile||"",address:address||"",sub,ts:ts||now}); };
+  index.contacts.forEach(c=>{
+    const byProp={};
+    c.insps.forEach(i=>{ if(isDeadListing(i.statusText))return; (byProp[i.propertyRef]=byProp[i.propertyRef]||[]).push(i); });
+    Object.entries(byProp).forEach(([ref,list])=>{
+      const i0=list[0], addr=streetLine(i0.address,i0.suburb);
+      const visits=list.filter(i=>!i.isEnquiry).length;
+      if(visits>=2) push("second",c,ref,addr,"Second inspection · "+addr,null);
+      list.forEach(i=>{ const op=contractClicks(i.contractOpens,i.resendId).filter(t=>now-new Date(t)<day); if(op.length>=2) push("contract",c,ref,addr,"Opened the contract "+op.length+"× in 24h · "+addr,op[op.length-1]); });
+      list.forEach(i=>(i.notes||[]).forEach(n=>{ if(/needs? to call|call (?:luke|back)|luke to call|luke needs/i.test(n.text||"")) push("callback",c,ref,addr,snip(n.text),n.ts); }));
+    });
+  });
+  return out.sort((a,b)=>new Date(b.ts||0)-new Date(a.ts||0));
+}
+const TODO_KINDS={ second:"Second inspection", contract:"Reading the contract", callback:"Asked for a call" };
+function _todoKey(agent){ return "savvi_todo_"+(agent||"x")+"_"+new Date().toISOString().slice(0,10); }
+function _todoLoad(agent){ try{ return JSON.parse(localStorage.getItem(_todoKey(agent))||"[]"); }catch(e){ return []; } }
+function _todoSave(agent,list){ try{ localStorage.setItem(_todoKey(agent),JSON.stringify(list)); }catch(e){} }
+function _doneLoad(agent){ try{ return new Set(JSON.parse(localStorage.getItem(_todoKey(agent)+"_done")||"[]")); }catch(e){ return new Set(); } }
+function _doneSave(agent,set){ try{ localStorage.setItem(_todoKey(agent)+"_done",JSON.stringify([...set])); }catch(e){} }
+
+/* Today to-do list: manual lines + CRM suggestions, tick -> strike -> drop to the bottom. */
+function SvTodo({agent,index,indexing,suggestions,onOpenContact}){
+  const [items,setItems]=useState(()=>_todoLoad(agent));
+  const [done,setDone]=useState(()=>_doneLoad(agent));
+  const [txt,setTxt]=useState("");
+  useEffect(()=>{ setItems(_todoLoad(agent)); setDone(_doneLoad(agent)); },[agent]);
+  const add=()=>{ const t=txt.trim(); if(!t) return; const next=[...items,{id:"m"+Date.now(),text:t,done:false}]; setItems(next); _todoSave(agent,next); setTxt(""); };
+  const toggleM=id=>{ const next=items.map(x=>x.id===id?{...x,done:!x.done}:x); setItems(next); _todoSave(agent,next); };
+  const delM=id=>{ const next=items.filter(x=>x.id!==id); setItems(next); _todoSave(agent,next); };
+  const toggleS=id=>{ const n=new Set(done); n.has(id)?n.delete(id):n.add(id); setDone(n); _doneSave(agent,n); };
+  const tel=m=>"tel:"+(toE164AU(m)||m), sms=m=>"sms:"+(toE164AU(m)||m);
+  const openM=items.filter(x=>!x.done), doneM=items.filter(x=>x.done);
+  const openS=suggestions.filter(s=>!done.has(s.id)), doneS=suggestions.filter(s=>done.has(s.id));
+  const empty=!openM.length&&!openS.length&&!doneM.length&&!doneS.length;
+  const sugRow=(s,isDone)=>(
+    <div key={s.id} className={"sv-todo-row"+(isDone?" done":"")}>
+      <button className="sv-tick" aria-label="Done" onClick={()=>toggleS(s.id)}>{isDone?"✓":""}</button>
+      <div className="sv-todo-main" onClick={()=>onOpenContact&&onOpenContact(s.contactId,s.propertyRef)}>
+        <div className="sv-todo-nm">{s.name}<span className="sv-todo-kind">{TODO_KINDS[s.kind]||""}</span></div>
+        <div className="sv-todo-sub">{s.sub}</div>
+      </div>
+      {s.mobile&&!isDone&&<div className="sv-todo-act"><a className="sv-cta" href={tel(s.mobile)}>Call</a><a className="sv-cta" href={sms(s.mobile)}>Text</a></div>}
+    </div>
+  );
+  return <SvPanel title="To-do" badge={openM.length+openS.length||null} scroll
+      actions={<span className="t-label" style={{color:index&&!indexing?"#1E8C50":"var(--ink-muted)"}}>{!index?(indexing?"Reading CRM…":""):(indexing?"Updating…":new Date().toLocaleDateString("en-AU",{weekday:"long"}))}</span>}>
+    <div className="sv-todo-add">
+      <input value={txt} onChange={e=>setTxt(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") add(); }} placeholder="Add a follow-up…"/>
+      <button onClick={add} disabled={!txt.trim()}>Add</button>
+    </div>
+    {empty&&<div className="sv-empty">Nothing outstanding. Add a line above, or follow-ups will land here as buyers act.</div>}
+    <div className="sv-todo-list">
+      {openM.map(x=><div key={x.id} className="sv-todo-row">
+        <button className="sv-tick" aria-label="Done" onClick={()=>toggleM(x.id)}></button>
+        <div className="sv-todo-main"><div className="sv-todo-nm">{x.text}</div></div>
+        <button className="sv-todo-x" aria-label="Remove" onClick={()=>delM(x.id)}>×</button>
+      </div>)}
+      {openS.map(s=>sugRow(s,false))}
+      {(doneM.length||doneS.length)>0&&<div className="sv-todo-divider t-label">Done</div>}
+      {doneM.map(x=><div key={x.id} className="sv-todo-row done">
+        <button className="sv-tick on" aria-label="Undo" onClick={()=>toggleM(x.id)}>✓</button>
+        <div className="sv-todo-main"><div className="sv-todo-nm">{x.text}</div></div>
+        <button className="sv-todo-x" aria-label="Remove" onClick={()=>delM(x.id)}>×</button>
+      </div>)}
+      {doneS.map(s=>sugRow(s,true))}
+    </div>
+  </SvPanel>;
+}
 
 /* ── The desktop buyer record (drawer). Same props as DetailSheet. ── */
 function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpdateInterest,onSendContract,onTextContract,onAddNote,onEditNote,onSetProfile,onUpdateDetails,onRemoveBuyer,onTransferBuyer,onRequestContract,onOpenContact,onSendLink,onCheckIn,onPrepareContract}){
@@ -5283,6 +5382,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const auctionByProp=useMemo(()=>{ const m={}; [...(allListings||[]),...(opens||[])].forEach(o=>{ const pid=o.propertyId||o.id; if(o.auctionDate&&pid&&!m[pid]) m[pid]=o.auctionDate; }); return m; },[allListings,opens]);
   const activeCount=(allListings||[]).filter(p=>!["sold","withdrawn","off-market","under offer"].includes(String(p.statusText||"").toLowerCase())).length;
   const feed=useMemo(()=>crmBuildFeed(index,auctionByProp),[index,auctionByProp]);
+  const todoSuggestions=useMemo(()=>crmBuildTodos(index),[index]);
   const contacts=index?index.contacts:null;
   const hotCount=(contacts||[]).filter(c=>c.liveInterest==="hot").length;
 
@@ -5593,20 +5693,21 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
             <SvBand cells={todayBandCells}/>
             <div className="sv-agents">{agentPanels}</div>
             <div className="sv-2col">
-              <SvPanel title="Action feed" badge={feedRows.length} scroll
-                actions={<span className="t-label" style={{color:index&&!indexing?"#1E8C50":"var(--ink-muted)"}}>{!index?(indexing?"Reading buyers…":""):(indexing?"Updating…":"● Live")}</span>}>
-                {!index&&<div className="sv-empty">Reading every buyer…</div>}
-                {index&&feedRows.length===0&&<div className="sv-empty">Nothing waiting. Every hot buyer has a recent note and every opened contract has been followed up.</div>}
-                <div className="sv-feed">{index&&Object.keys(FEED_KINDS).filter(k=>feedRows.some(r=>r.k===k)).map(k=><div key={k} className="fg">
-                  <div className="fgh">{FEED_KINDS[k].ic} {FEED_KINDS[k].t} <span className="why">· {FEED_KINDS[k].why}</span></div>
-                  {feedRows.filter(r=>r.k===k).map((r,i)=><div key={r.c.contactId+r.i.id+i} className="fr" onClick={()=>onOpenContact(r.c.contactId,r.i.propertyRef)}>
-                    <div className="av" style={{background:crmColor(r.c.name)}}>{crmInitials(r.c.name)}</div>
-                    <div style={{minWidth:0}}><div className="nm">{r.c.name}</div><div className="dt">{r.i.address?streetLine(r.i.address,r.i.suburb)+" · ":""}{r.reason}</div></div>
-                    <div className="when">{crmAgo(r.when)}</div>
-                  </div>)}
-                </div>)}</div>
-              </SvPanel>
+              <SvTodo agent={agentName} index={index} indexing={indexing} suggestions={todoSuggestions} onOpenContact={onOpenContact}/>
               <div style={{display:"flex",flexDirection:"column",gap:22,minWidth:0}}>
+                <SvPanel title="Action feed" badge={feedRows.length} scroll
+                  actions={<span className="t-label" style={{color:index&&!indexing?"#1E8C50":"var(--ink-muted)"}}>{!index?(indexing?"Reading buyers…":""):(indexing?"Updating…":"● Live")}</span>}>
+                  {!index&&<div className="sv-empty">Reading every buyer…</div>}
+                  {index&&feedRows.length===0&&<div className="sv-empty">Nothing waiting. Every hot buyer has a recent note and every opened contract has been followed up.</div>}
+                  <div className="sv-feed">{index&&Object.keys(FEED_KINDS).filter(k=>feedRows.some(r=>r.k===k)).map(k=><div key={k} className="fg">
+                    <div className="fgh">{FEED_KINDS[k].ic} {FEED_KINDS[k].t} <span className="why">· {FEED_KINDS[k].why}</span></div>
+                    {feedRows.filter(r=>r.k===k).map((r,i)=><div key={r.c.contactId+r.i.id+i} className="fr" onClick={()=>onOpenContact(r.c.contactId,r.i.propertyRef)}>
+                      <div className="av" style={{background:crmColor(r.c.name)}}>{crmInitials(r.c.name)}</div>
+                      <div style={{minWidth:0}}><div className="nm">{r.c.name}</div><div className="dt">{r.i.address?streetLine(r.i.address,r.i.suburb)+" · ":""}{r.reason}</div></div>
+                      <div className="when">{crmAgo(r.when)}</div>
+                    </div>)}
+                  </div>)}</div>
+                </SvPanel>
                 <SvPanel title={opensStale?"Last week's opens":"This week's opens"} badge={opens.length}>
                   {todayOpens.length===0&&<div className="sv-empty">No opens scheduled.</div>}
                   {todayOpens.map(({d,list})=><div key={d}><div className="sv-open-day t-label">{crm.fmtDay?crm.fmtDay(d):d}</div>{list.map(o=><div key={o.id} className="sv-open" onClick={()=>{ setTab("opens"); select(o); }}><span className="bar"/><div className="ad">{streetLine(o.address,o.suburb)}</div><div className="tm">{[o.time,o.suburb].filter(Boolean).join(" · ")}</div></div>)}</div>)}
