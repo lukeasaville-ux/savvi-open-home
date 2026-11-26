@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v170-contract-zoom-sig";
+const BUILD = "v171-today-targets-tiles";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -421,6 +421,12 @@ const Attio = {
   async getGci() {
     const j = await call("getGci");
     return j?.ok ? (j.data || null) : null;
+  },
+  // Per-agent + team sales targets (Sold 2026 CY). Written nightly by the refresh from
+  // the Stocklist sheet; read by the desktop Today screen's targets tiles.
+  async getTargets() {
+    const j = await call("getTargets");
+    return j?.ok ? { data: j.data || null, updatedAt: j.updatedAt || null } : null;
   },
   // Warm the shared inspection/people cache in the background (called on the home
   // screen) so the first tap into an open renders its buyer list instantly.
@@ -4483,6 +4489,17 @@ const CRM_CSS = `
 .crm-stat .n{font-family:'Newsreader',serif;font-size:30px;font-weight:700;color:${ESPRESSO};line-height:1;font-variant-numeric:tabular-nums;}
 .crm-stat .l{font-size:12px;color:${BROWN_L};margin-top:6px;font-weight:600;}
 .crm-stat.hot .n{color:#C0392B;}.crm-stat.due .n{color:#FE5310;}
+.crm-tgt{margin-bottom:18px;}
+.crm-tgt-top{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px;}
+.crm-tgt-agents{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.crm-tgt-card{background:${WHITE};border:1px solid ${SAND_D};border-radius:16px;padding:16px 18px 18px;}
+.crm-tgt-card .ah{display:flex;align-items:center;gap:9px;margin-bottom:14px;}
+.crm-tgt-card .ah .av{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:12px;}
+.crm-tgt-card .ah .nm{font-size:15px;font-weight:800;color:${ESPRESSO};}
+.crm-tgt-card .ah .yr{font-size:10.5px;font-weight:700;color:${BROWN_L};letter-spacing:.6px;text-transform:uppercase;margin-left:auto;}
+.crm-tgt-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:15px 10px;}
+.crm-tgt-grid .tn{font-family:'Newsreader',serif;font-size:23px;font-weight:700;color:${ESPRESSO};line-height:1;font-variant-numeric:tabular-nums;}
+.crm-tgt-grid .tl{font-size:10.5px;color:${BROWN_L};margin-top:5px;font-weight:600;letter-spacing:.2px;}
 .crm-2col{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(320px,1fr);gap:18px;align-items:start;}
 .crm-empty{padding:40px 20px;text-align:center;color:${BROWN_L};font-size:13.5px;}
 .crm-empty .em{font-size:30px;margin-bottom:8px;}
@@ -4838,6 +4855,37 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
 }
 function DetailHost(props){ const {desktop,...rest}=props; return desktop?<DesktopRecord {...rest}/>:<DetailSheet {...rest}/>; }
 
+/* ── Targets tiles (desktop Today) — team + per-agent Sold 2026 CY stats ── */
+function TargetsTiles({activeCount,onListings}){
+  const [t,setT]=useState(undefined);   // undefined = loading, null = unavailable
+  useEffect(()=>{ let on=true; (async()=>{ try{ const j=await call("getTargets"); if(!on) return; setT(j&&j.ok?(j.data||null):null); }catch(e){ if(on) setT(null); } })(); return ()=>{on=false;}; },[]);
+  // Compact money: $47.7M · $898k · $11.8k. Net column throughout (vendor-advocacy
+  // referral fees excluded), matching what each agent actually brought into the business.
+  const kM=n=>{ n=Math.round(n||0); if(n>=1e6) return "$"+(n/1e6).toFixed(1)+"M"; if(n>=1e5) return "$"+Math.round(n/1e3)+"k"; if(n>=1e3) return "$"+(n/1e3).toFixed(1).replace(/\.0$/,"")+"k"; return "$"+n; };
+  const team=t&&t.team; const agents=(t&&t.agents)||[];
+  return (<div className="crm-tgt">
+    <div className="crm-tgt-top">
+      <div className="crm-stat" onClick={onListings}><div className="n">{activeCount}</div><div className="l">Active listings</div></div>
+      <div className="crm-stat"><div className="n">{team?team.sales:"—"}</div><div className="l">Team sales · 2026</div></div>
+      <div className="crm-stat"><div className="n">{team?kM(team.totalValue):"—"}</div><div className="l">Sold value · 2026</div></div>
+      <div className="crm-stat"><div className="n">{team?kM(team.netComm):"—"}</div><div className="l">Net GCI · 2026</div></div>
+    </div>
+    {agents.length>0&&<div className="crm-tgt-agents">
+      {agents.map(a=>(<div key={a.code} className="crm-tgt-card">
+        <div className="ah"><div className="av" style={{background:crmColor(a.name)}}>{crmInitials(a.name)}</div><span className="nm">{a.name}</span><span className="yr">2026 CY</span></div>
+        <div className="crm-tgt-grid">
+          <div><div className="tn">{a.sales}</div><div className="tl">Sales</div></div>
+          <div><div className="tn">{kM(a.netComm)}</div><div className="tl">Net GCI</div></div>
+          <div><div className="tn">{kM(a.avgNet)}</div><div className="tl">Avg GCI</div></div>
+          <div><div className="tn">{kM(a.avgPrice)}</div><div className="tl">Avg price</div></div>
+          <div><div className="tn">{a.offMktPct}%</div><div className="tl">Off-market</div></div>
+          <div><div className="tn">{kM(a.totalValue)}</div><div className="tl">Sold value</div></div>
+        </div>
+      </div>))}
+    </div>}
+  </div>);
+}
+
 /* ── Pipeline / GCI dashboard (desktop) — banked commission by month + forecast ── */
 function GciPanel(){
   const [g,setG]=useState(null); const [err,setErr]=useState(false); const [upd,setUpd]=useState(null);
@@ -5163,12 +5211,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
       <div className="crm-body">
         <div className="crm-scroll">
           {tab==="today"&&<>
-            <div className="crm-stats">
-              <div className="crm-stat due" onClick={()=>setFeedFilter("all")}><div className="n">{feed.length}</div><div className="l">Actions waiting</div></div>
-              <div className="crm-stat" onClick={()=>setTab("opens")}><div className="n">{opens.length}</div><div className="l">Opens this week</div></div>
-              <div className="crm-stat" onClick={()=>setTab("listings")}><div className="n">{activeCount}</div><div className="l">Active listings</div></div>
-              <div className="crm-stat hot" onClick={()=>{ setTab("contacts"); setCf("hot"); }}><div className="n">{hotCount}</div><div className="l">Hot buyers</div></div>
-            </div>
+            <TargetsTiles activeCount={activeCount} onListings={()=>setTab("listings")}/>
             <div className="crm-2col">
               <div style={{display:"flex",flexDirection:"column",gap:18,minWidth:0}}>
               <div className="crm-card mail">
