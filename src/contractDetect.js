@@ -218,6 +218,15 @@ export async function detectContractFields(data, pdfjsOverride, opts) {
       // Collect every candidate cell, then keep only the first N rows per party —
       // the printed statement has a row per possible signatory (two purchaser rows,
       // etc.), so a single buyer must not be asked to sign the empty 2nd row.
+      // Geometry for a Section 32 acknowledgement signing row. The signature sits ON the
+      // printed underline as a compact rectangle over the left half of the row (not the old
+      // full-width band), and the date stamps immediately to its right on the same line —
+      // mirroring how the vendor has already hand-signed and dated above. Universal across
+      // editions: anchored to the "…'s signature" caption, with the underline a fixed drop
+      // below it (these cells carry no dotted write-on line to measure against).
+      const SIG_W = (RM - 165) * 0.5;      // half the old full-row width
+      const SIG_H = 39;                    // ~1.5x the old 26pt height
+      const LINE_DY = 44;                  // caption centre -> signing underline
       const cells = [];
       for (const it of pg.items) {
         const s = it.str.replace(/\s+/g, " ").trim().toLowerCase().replace(/:/g, "");
@@ -225,12 +234,16 @@ export async function detectContractFields(data, pdfjsOverride, opts) {
         // Match a bare "signature" OR a combined "<role>'s signature" caption — some
         // contract editions (e.g. the REIV Vendor Statement) emit the whole caption as a
         // single text item, so an exact === "signature" check silently misses it and the
-        // purchaser's signing box never appears even though the date box does.
-        if (it.x0 < 200 && /(^|\s)signature$/.test(s)) {    // signature cell, signing space to the right
+        // purchaser's signing box never appears. The date box is derived from the signature
+        // (same row, just to the right) rather than from the "Date" label, which sits up on
+        // the name row — so the stamped date lands on the signing line, beside the signature.
+        if (it.x0 < 200 && /(^|\s)signature$/.test(s)) {
           const role = /vendor/.test(s) ? "Vendor" : /purchaser/.test(s) ? "Purchaser" : roleAt(y);
-          if (role) cells.push({ role, type: "signature", y, box: [165, y - 15, RM, y + 11] });
-        } else if (/(^|\s)date$/.test(s) && it.x0 > 380) {  // date cell, right-hand column
-          const role = roleAt(y); if (role) cells.push({ role, type: "date", y, box: [it.x1 + 2, y - 8, W - 45, y + 9] });
+          if (role) {
+            const lineY = y + LINE_DY, sigX1 = 165 + SIG_W, dateX0 = sigX1 + 10;
+            cells.push({ role, type: "signature", y, box: [165, lineY - SIG_H, sigX1, lineY] });
+            cells.push({ role, type: "date", y, box: [dateX0, lineY - SIG_H + 4, Math.min(dateX0 + 150, W - 45), lineY] });
+          }
         }
       }
       // The Section 32 Vendor Statement is signed by the VENDOR and given to the purchaser

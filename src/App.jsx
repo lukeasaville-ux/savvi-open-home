@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v169-editable-conveyancer";
+const BUILD = "v170-contract-zoom-sig";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3189,12 +3189,22 @@ function ZoomViewer({ pages, index, onClose }){
     const te=(e)=>{ const s=S.current;
       if(e.touches.length===0){ if(s.pan && s.moved<10){ const now=Date.now(); if(now-s.lastTap<300){ const r=box.getBoundingClientRect(); zoomTo(s.scale>1.2?1:2.8, s.lx-r.left, s.ly-r.top); s.lastTap=0; } else s.lastTap=now; } s.pinch=false; s.pan=false; }
       else if(e.touches.length===1){ s.pinch=false; s.pan=true; s.lx=e.touches[0].clientX; s.ly=e.touches[0].clientY; s.moved=99; } };
-    const wh=(e)=>{ e.preventDefault(); const r=box.getBoundingClientRect(), s=S.current; zoomTo(clamp(s.scale*(e.deltaY<0?1.15:1/1.15),1,6), e.clientX-r.left, e.clientY-r.top); };
+    // Smooth, continuous zoom: a trackpad pinch arrives as a wheel event with ctrlKey set
+    // (stronger factor); a two-finger scroll zooms too. Replaces the old stepped 1.15x jumps
+    // so you can pinch in freely on a laptop, not just tap + / −.
+    const wh=(e)=>{ e.preventDefault(); const r=box.getBoundingClientRect(), s=S.current;
+      const f=Math.exp(-e.deltaY*(e.ctrlKey?0.012:0.0045));
+      zoomTo(clamp(s.scale*f,1,6), e.clientX-r.left, e.clientY-r.top); };
+    // Mouse drag to pan once zoomed in (desktop; touch pan is handled above).
+    const md=(e)=>{ const s=S.current; if(s.scale<=1) return; s.mdn=true; s.lx=e.clientX; s.ly=e.clientY; e.preventDefault(); };
+    const mm=(e)=>{ const s=S.current; if(!s.mdn) return; const b=bounds(); if(b.minTx!==b.maxTx||b.minTy!==b.maxTy){ s.tx+=e.clientX-s.lx; s.ty+=e.clientY-s.ly; s.lx=e.clientX; s.ly=e.clientY; apply(); } };
+    const mu=()=>{ S.current.mdn=false; };
     const onR=()=>measure();
     box.addEventListener("touchstart",ts,{passive:false}); box.addEventListener("touchmove",tm,{passive:false});
     box.addEventListener("touchend",te,{passive:false}); box.addEventListener("touchcancel",te,{passive:false});
     box.addEventListener("wheel",wh,{passive:false}); window.addEventListener("resize",onR);
-    return ()=>{ box.removeEventListener("touchstart",ts); box.removeEventListener("touchmove",tm); box.removeEventListener("touchend",te); box.removeEventListener("touchcancel",te); box.removeEventListener("wheel",wh); window.removeEventListener("resize",onR); };
+    box.addEventListener("mousedown",md); window.addEventListener("mousemove",mm); window.addEventListener("mouseup",mu);
+    return ()=>{ box.removeEventListener("touchstart",ts); box.removeEventListener("touchmove",tm); box.removeEventListener("touchend",te); box.removeEventListener("touchcancel",te); box.removeEventListener("wheel",wh); window.removeEventListener("resize",onR); box.removeEventListener("mousedown",md); window.removeEventListener("mousemove",mm); window.removeEventListener("mouseup",mu); };
   /* eslint-disable-next-line */ },[]);
   if(!pg) return null;
   const hb={background:"rgba(255,255,255,.17)",border:"none",color:"#fff",borderRadius:9,padding:"8px 13px",fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:"inherit",lineHeight:1,minWidth:40};
@@ -3217,7 +3227,7 @@ function ZoomViewer({ pages, index, onClose }){
         <div style={{fontSize:12,opacity:.85,minWidth:54,textAlign:"center"}}>{i+1} / {list.length}</div>
         <button onClick={()=>setI(v=>Math.min(list.length-1,v+1))} disabled={i===list.length-1} style={{...hb,opacity:i===list.length-1?.35:1}}>›</button>
       </div>}
-      <div style={{flex:"0 0 auto",textAlign:"center",color:"rgba(255,255,255,.72)",fontSize:11.5,padding:"4px 0 calc(12px + env(safe-area-inset-bottom,0px))"}}>Pinch or tap + / − to zoom · drag to move · double-tap to zoom in</div>
+      <div style={{flex:"0 0 auto",textAlign:"center",color:"rgba(255,255,255,.72)",fontSize:11.5,padding:"4px 0 calc(12px + env(safe-area-inset-bottom,0px))"}}>Pinch, scroll or tap + / − to zoom · drag to move · double-tap to zoom in</div>
     </div>
   );
 }
