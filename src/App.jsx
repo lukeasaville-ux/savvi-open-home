@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v175-gci-chart-scope";
+const BUILD = "v176-avgprice-avggci";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4814,6 +4814,10 @@ const SV_CSS = `
 .sv-scope{font-family:var(--font-sans);font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:#fff;border:1px solid var(--hairline);border-radius:0;padding:6px 28px 6px 11px;appearance:none;-webkit-appearance:none;cursor:pointer;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%23311E10'/></svg>");background-repeat:no-repeat;background-position:right 10px center;}
 .sv-scope:hover{border-color:var(--ink-muted);}
 .sv-scope:focus{outline:none;border-color:var(--savvi-brown);}
+.sv-gci-avg{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;padding:14px 20px;border-bottom:1px solid var(--hairline);}
+.sv-gci-avg .v{font-size:14px;}
+.sv-gci-avg .v b{font-family:var(--font-display);font-weight:400;font-size:20px;letter-spacing:-.01em;}
+.sv-gci-avg .mut{color:var(--ink-muted);}
 
 .sv-note{font-size:12px;color:var(--ink-muted);line-height:1.5;}
 @media (max-width:1200px){ .sv-agents{grid-template-columns:1fr;} .sv-2col{grid-template-columns:1fr !important;} }
@@ -5006,8 +5010,8 @@ const svK = n => { n=Math.round(n||0);
 // avg-price target instead.
 const SV_TARGETS = {
   team: { netGci:1100000, sales:100, soldValue:70000000, listingsWon:100, avgGci:13000, avgPrice:700000 },
-  luke: { netGci:950000,  sales:90,  soldValue:63000000, listingsWon:95,  avgPrice:700000 },
-  sam:  { netGci:175000,  sales:15,  soldValue:8250000,  listingsWon:17,  avgPrice:550000 },
+  luke: { netGci:950000,  sales:90,  soldValue:63000000, listingsWon:95,  avgGci:13500, avgPrice:700000 },
+  sam:  { netGci:175000,  sales:15,  soldValue:8250000,  listingsWon:17,  avgGci:12000, avgPrice:550000 },
 };
 // Logged-in agent name -> their Sold-2026 agent code, for the by-month chart default + scope.
 const SV_AGENT_CODE = { Luke:"LS", Sam:"SR" };
@@ -5123,7 +5127,6 @@ function svMetricRows(a, t){
   return [
     { label:"Net GCI",      cells:svCells({actual:a.netGci,      target:t&&t.netGci,      paced:true, fmt:svFull, elapsedPct:ep, lead:true}) },
     { label:"Sales",        cells:svCells({actual:a.sales,       target:t&&t.sales,       paced:true, fmt:svNum,  elapsedPct:ep}) },
-    { label:"Sold value",   cells:svCells({actual:a.soldValue,   target:t&&t.soldValue,   paced:true, fmt:svFull, elapsedPct:ep}) },
     { label:"Listings won", cells:svCells({actual:a.listingsWon, target:t&&t.listingsWon, paced:true, fmt:svNum,  elapsedPct:ep}) },
     { label:"Avg GCI",      cells:svCells({actual:avgGci,        target:t&&t.avgGci,      paced:false, fmt:svFull}) },
     { label:"Avg price",    cells:svCells({actual:avgPrice,      target:t&&t.avgPrice,    paced:false, fmt:svFull}) },
@@ -5498,19 +5501,25 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const _gciTgtObj = gciScope==="team" ? _tgtTeam : (_gciAgent ? SV_TARGETS[String(_gciAgent.name).toLowerCase()] : null);
   const _gciTargetLine = (_gciTgtObj&&_gciTgtObj.netGci) ? _gciTgtObj.netGci/12 : 0;
   const _gciScopeName = gciScope==="team" ? "the team" : (_gciAgent ? _gciAgent.name : "this agent");
+  // Avg GCI actual vs goal for the selected scope (follows the chart dropdown).
+  const _gciScopeM = gciScope==="team" ? (svModel&&svModel.team) : _gciAgent;
+  const _avgGciActual = _gciScopeM ? (gciScope==="team" ? _gciScopeM.netGci/Math.max(1,_gciScopeM.sales) : (_gciScopeM.avgGci||0)) : 0;
+  const _avgGciGoal = (_gciTgtObj&&_gciTgtObj.avgGci) || 0;
+  const _avgGciPct = _avgGciGoal ? Math.round(_avgGciActual/_avgGciGoal*100) : null;
+  const _gciScopeLabel = gciScope==="team" ? "Team" : (_gciAgent ? _gciAgent.name : "");
   const todayBandCells = svModel ? [
     { label:"Net GCI", lead:true, value:svK(svModel.team.netGci), sub:"of "+svK(_tgtTeam.netGci)+" target", pct:svModel.team.netGci/_tgtTeam.netGci*100, elapsedPct:_per.elapsedPct },
     { label:"Team sales", value:svNum(svModel.team.sales), sub:"of "+_tgtTeam.sales+" target", pct:svModel.team.sales/_tgtTeam.sales*100, elapsedPct:_per.elapsedPct },
-    { label:"Sold value", value:svK(svModel.team.soldValue), sub:"of "+svK(_tgtTeam.soldValue)+" target", pct:svModel.team.soldValue/_tgtTeam.soldValue*100, elapsedPct:_per.elapsedPct },
+    { label:"Avg price", value:svK(svModel.team.soldValue/Math.max(1,svModel.team.sales)), sub:"of "+svK(_tgtTeam.avgPrice)+" target", pct:(svModel.team.soldValue/Math.max(1,svModel.team.sales))/_tgtTeam.avgPrice*100 },
     { label:"Active listings", value:activeCount, sub:"on the market now" },
   ] : [
     { label:"Net GCI", lead:true, value:"—", sub:"loading…" }, { label:"Team sales", value:"—", sub:"" },
-    { label:"Sold value", value:"—", sub:"" }, { label:"Active listings", value:activeCount, sub:"on the market now" },
+    { label:"Avg price", value:"—", sub:"" }, { label:"Active listings", value:activeCount, sub:"on the market now" },
   ];
   const targetsBandCells = svModel ? [
     { label:"Net GCI", lead:true, value:svK(svModel.team.netGci), sub:"of "+svK(_tgtTeam.netGci)+" target", pct:svModel.team.netGci/_tgtTeam.netGci*100, elapsedPct:_per.elapsedPct },
     { label:"Team sales", value:svNum(svModel.team.sales), sub:"of "+_tgtTeam.sales+" target", pct:svModel.team.sales/_tgtTeam.sales*100, elapsedPct:_per.elapsedPct },
-    { label:"Sold value", value:svK(svModel.team.soldValue), sub:"of "+svK(_tgtTeam.soldValue)+" target", pct:svModel.team.soldValue/_tgtTeam.soldValue*100, elapsedPct:_per.elapsedPct },
+    { label:"Avg price", value:svK(svModel.team.soldValue/Math.max(1,svModel.team.sales)), sub:"of "+svK(_tgtTeam.avgPrice)+" target", pct:(svModel.team.soldValue/Math.max(1,svModel.team.sales))/_tgtTeam.avgPrice*100 },
     { label:"Listings won", value:svNum(svModel.team.listingsWon), sub:"of "+_tgtTeam.listingsWon+" target", pct:svModel.team.listingsWon/_tgtTeam.listingsWon*100, elapsedPct:_per.elapsedPct },
   ] : [];
   const agentPanels = (svModel? svModel.agents: []).map(a=>{
@@ -5518,7 +5527,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
     return <AgentPanel key={a.code||a.name} name={full} role={a.name==="Luke"?"Director":"Sales executive"} period={_per.year+" CY"}
       color={crmColor(a.name)} init={crmInitials(full)} heroVal={svK(a.netGci)}
       heroSub={t.netGci?("of "+svK(t.netGci)+" target"):"net to the business"} pct={t.netGci?a.netGci/t.netGci*100:0} elapsedPct={_per.elapsedPct}
-      stats={[ {l:"Listings",v:svNum(a.listingsWon)}, {l:"Sales",v:svNum(a.sales)}, {l:"Sold value",v:svK(a.soldValue)}, {l:"Avg GCI",v:svK(a.avgGci)}, {l:"Avg price",v:svK(a.avgPrice)}, {l:"Off-market",v:(a.offMarketPct||0)+"%"} ]}/>;
+      stats={[ {l:"Listings",v:svNum(a.listingsWon)}, {l:"Sales",v:svNum(a.sales)}, {l:"Avg GCI",v:svK(a.avgGci)}, {l:"Avg price",v:svK(a.avgPrice)}, {l:"Off-market",v:(a.offMarketPct||0)+"%"} ]}/>;
   });
   // Targets tables + pace strip
   const teamRows = svModel? svMetricRows(svModel.team,_tgtTeam):[];
@@ -5620,6 +5629,12 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
                   {svModel&&svModel.agents.map(a=><option key={a.code} value={a.code}>{a.name}</option>)}
                 </select>
               }>
+                <div className="sv-gci-avg">
+                  <span className="t-label">Avg GCI · {_gciScopeLabel}</span>
+                  {_avgGciGoal
+                    ? <span className="v"><b>{svK(_avgGciActual)}</b> actual <span className="mut">vs {svK(_avgGciGoal)} goal</span> · {_avgGciPct}%</span>
+                    : <span className="v"><b>{svK(_avgGciActual)}</b> actual</span>}
+                </div>
                 <div style={{padding:"2px 0 4px"}}><MonthBars monthly={_gciMonthly} monthlyTarget={_gciTargetLine}/></div>
                 {!_gciMonthly&&<div className="sv-note" style={{padding:"4px 20px 16px"}}>No settled sales yet for {_gciScopeName} this year. The faint bar shows {svK(_gciTargetLine)} as the monthly target.</div>}
               </SvPanel>
