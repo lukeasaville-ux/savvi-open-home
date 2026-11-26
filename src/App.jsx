@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v172-targets-listings-won";
+const BUILD = "v173-today-targets-redesign";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4688,6 +4688,135 @@ const CRM_CSS = `
 .crm-mode .sh.offer-sh .offer-pv{max-height:none;overflow:visible;}
 `;
 
+/* ═══════════════════════════════════════════════════════════════════
+   SAVVI DESIGN SYSTEM — Today + Targets (approved "Option B").
+   Scoped under .crm so the phone layout is untouched. Four colours,
+   two typefaces, square corners by default, no shadows, no gradients.
+═══════════════════════════════════════════════════════════════════ */
+const SV_CSS = `
+.crm{
+  --savvi-brown:#311E10; --savvi-butter:#FFF4D5; --savvi-sky:#8AACE3; --savvi-orange:#FE5310;
+  --surface:#FFFFFF; --surface-muted:#F4F2F0;
+  --ink:#311E10; --ink-muted:#75685F; --on-brown:#FFF4D5;
+  --hairline:#E2DFDE; --hairline-on-butter:rgba(49,30,16,.17); --hairline-on-brown:rgba(255,244,213,.22);
+  --font-display:'PP Editorial New',Georgia,'Times New Roman',serif;
+  --font-sans:'Neue Haas Unica Pro','Helvetica Neue',Helvetica,Arial,sans-serif;
+}
+.sv-today,.sv-targets{display:flex;flex-direction:column;gap:22px;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;color:var(--ink);}
+.sv-today *,.sv-targets *{box-sizing:border-box;}
+.sv-disp{font-family:var(--font-display);font-weight:400;font-synthesis:none;letter-spacing:-.01em;}
+.t-label{font-family:var(--font-sans);font-size:11px;line-height:1.2;font-weight:500;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-muted);}
+
+/* Progress rule (shared) */
+.sv-rule{position:relative;height:3px;margin-top:10px;width:100%;}
+.sv-rule .trk{position:absolute;inset:0;}
+.sv-rule .fil{position:absolute;left:0;top:0;bottom:0;}
+.sv-rule .tick{position:absolute;top:-3px;height:9px;width:1px;transform:translateX(-50%);}
+.sv-rule.onBrown .trk{background:rgba(255,244,213,.22);} .sv-rule.onBrown .fil{background:var(--savvi-butter);} .sv-rule.onBrown .tick{background:rgba(255,244,213,.75);}
+.sv-rule.onButter .trk{background:var(--hairline-on-butter);} .sv-rule.onButter .fil{background:var(--savvi-brown);} .sv-rule.onButter .tick{background:rgba(49,30,16,.55);}
+.sv-rule.onWhite .trk{background:var(--hairline);} .sv-rule.onWhite .fil{background:var(--savvi-brown);} .sv-rule.onWhite .tick{background:rgba(49,30,16,.55);}
+.sv-spacer3{height:3px;margin-top:10px;}
+
+/* Hero band */
+.sv-band{display:grid;grid-template-columns:1fr 1px 1fr 1px 1fr 1px 1fr;background:var(--savvi-brown);color:var(--on-brown);}
+.sv-band .vr{background:rgba(255,244,213,.22);}
+.sv-cell{padding:26px 28px 28px;min-width:0;}
+.sv-cell .lbl{color:rgba(255,244,213,.62);}
+.sv-cell .val{font-family:var(--font-display);font-weight:400;font-synthesis:none;letter-spacing:-.01em;font-size:40px;line-height:.9;margin-top:13px;color:var(--savvi-butter);}
+.sv-cell.lead .val{font-size:62px;}
+.sv-cell .sub{font-size:12px;color:rgba(255,244,213,.7);margin-top:7px;}
+
+/* Agent panels */
+.sv-agents{display:grid;grid-template-columns:1fr 1fr;gap:22px;}
+.sv-agent{background:var(--savvi-butter);padding:24px 26px 26px;}
+.sv-agent .ah{display:flex;align-items:center;gap:11px;margin-bottom:16px;}
+.sv-agent .ah .av{width:30px;height:30px;border-radius:9999px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;flex-shrink:0;}
+.sv-agent .ah .nm{font-family:var(--font-display);font-weight:400;font-synthesis:none;letter-spacing:-.01em;font-size:23px;}
+.sv-agent .ah .rp{margin-left:auto;text-align:right;}
+.sv-agent .hero-val{font-family:var(--font-display);font-weight:400;font-synthesis:none;letter-spacing:-.01em;font-size:54px;line-height:.9;margin-top:8px;}
+.sv-agent .hero-sub{font-size:12px;color:var(--ink-muted);margin-top:7px;}
+.sv-stats{display:grid;grid-template-columns:1fr 1fr;gap:0 26px;border-top:1px solid var(--hairline-on-butter);margin-top:20px;}
+.sv-stats .st{display:flex;justify-content:space-between;align-items:baseline;padding:10px 0;border-bottom:1px solid var(--hairline-on-butter);min-width:0;}
+.sv-stats .st .v{font-size:16px;white-space:nowrap;}
+
+/* Panel */
+.sv-panel{background:var(--surface);border:1px solid var(--hairline);}
+.sv-panel .ph{display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--hairline);}
+.sv-panel .ph .ttl{font-size:13px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink);font-weight:500;}
+.sv-panel .ph .pill{background:var(--savvi-brown);color:var(--savvi-butter);font-size:11px;padding:3px 8px;letter-spacing:.03em;}
+.sv-panel .ph .sp{margin-left:auto;}
+.sv-panel .pbody{max-height:520px;overflow-y:auto;}
+
+/* Opens rows */
+.sv-open-day{padding:13px 20px 5px;}
+.sv-open{display:flex;align-items:stretch;gap:14px;padding:11px 20px;border-top:1px solid var(--hairline);cursor:pointer;}
+.sv-open:hover{background:var(--surface-muted);}
+.sv-open .bar{width:3px;background:var(--savvi-orange);flex-shrink:0;}
+.sv-open .ad{font-size:13.5px;color:var(--ink);align-self:center;}
+.sv-open .tm{font-size:12px;color:var(--ink-muted);margin-left:auto;align-self:center;white-space:nowrap;}
+
+/* Feed rows (restyled, square) */
+.sv-feed .fg{padding:4px 0;}
+.sv-feed .fgh{display:flex;gap:7px;align-items:baseline;padding:12px 20px 5px;font-size:12px;font-weight:600;color:var(--ink);}
+.sv-feed .fgh .why{font-weight:500;color:var(--ink-muted);}
+.sv-feed .fr{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 20px;border-top:1px solid var(--hairline);cursor:pointer;}
+.sv-feed .fr:hover{background:var(--surface-muted);}
+.sv-feed .fr .av{width:32px;height:32px;border-radius:9999px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;}
+.sv-feed .fr .nm{font-size:13.5px;font-weight:600;color:var(--ink);}
+.sv-feed .fr .dt{font-size:12px;color:var(--ink-muted);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sv-feed .fr .when{font-size:11.5px;color:var(--ink-muted);white-space:nowrap;}
+.sv-empty{padding:34px 20px;text-align:center;color:var(--ink-muted);font-size:13.5px;}
+
+/* Targets page head */
+.sv-head{display:flex;align-items:flex-end;gap:18px;}
+.sv-head h2{font-family:var(--font-display);font-weight:400;font-synthesis:none;letter-spacing:-.01em;font-size:38px;line-height:1;margin:0;color:var(--ink);}
+.sv-head .yg{font-size:13px;color:var(--ink-muted);padding-bottom:4px;}
+.sv-seg{margin-left:auto;display:flex;border:1px solid var(--hairline);}
+.sv-seg button{font-family:var(--font-sans);border:none;background:transparent;color:var(--ink);font-size:12px;padding:7px 14px;cursor:pointer;border-right:1px solid var(--hairline);}
+.sv-seg button:last-child{border-right:none;}
+.sv-seg button.on{background:var(--savvi-brown);color:var(--savvi-butter);}
+.sv-seg button:disabled{color:var(--ink-muted);opacity:.5;cursor:not-allowed;}
+
+/* Pace strip */
+.sv-pace{background:var(--savvi-butter);padding:22px 26px;display:flex;align-items:center;gap:34px;}
+.sv-pace .seg{display:flex;flex-direction:column;gap:6px;}
+.sv-pace .seg .big{font-family:var(--font-display);font-weight:400;font-synthesis:none;letter-spacing:-.01em;font-size:34px;line-height:1;}
+.sv-pace .vr{width:1px;align-self:stretch;background:var(--hairline-on-butter);}
+.sv-pace .say{font-size:15px;line-height:1.5;max-width:560px;}
+.sv-pace .say b{font-weight:700;}
+
+/* Metric table */
+.sv-mt{width:100%;border-collapse:collapse;}
+.sv-mt th{text-align:right;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-muted);font-weight:500;padding:11px 20px;border-bottom:1px solid var(--hairline);white-space:nowrap;}
+.sv-mt th:first-child{text-align:left;}
+.sv-mt td{text-align:right;padding:0 20px;height:50px;border-bottom:1px solid var(--hairline);font-size:15px;vertical-align:middle;white-space:nowrap;}
+.sv-mt td:first-child{text-align:left;}
+.sv-mt td.m{color:var(--ink-muted);font-size:11px;letter-spacing:.09em;text-transform:uppercase;}
+.sv-mt td.lead-actual{font-family:var(--font-display);font-weight:400;font-synthesis:none;letter-spacing:-.01em;font-size:22px;}
+.sv-mt tr.grp td{background:var(--surface-muted);height:40px;font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:19px;text-align:left;color:var(--ink);}
+.sv-mt td.prog{width:190px;}
+.sv-mt td.prog .sv-rule{margin-top:0;}
+.sv-sq{display:inline-block;width:9px;height:9px;margin-right:7px;position:relative;top:0;}
+.sv-sq.o{background:var(--savvi-orange);} .sv-sq.b{background:var(--savvi-brown);}
+.sv-dash{color:var(--ink-muted);}
+
+/* By-month */
+.sv-month{display:grid;grid-template-columns:repeat(12,1fr);}
+.sv-month .m{text-align:center;padding:16px 4px 14px;border-left:1px solid var(--hairline);}
+.sv-month .m:first-child{border-left:none;}
+.sv-month .m.empty{background:var(--surface-muted);}
+.sv-month .m .fig{font-family:var(--font-display);font-weight:400;font-synthesis:none;letter-spacing:-.01em;font-size:22px;line-height:1;margin-top:6px;}
+.sv-month .m .bars{height:62px;display:flex;align-items:flex-end;justify-content:center;gap:3px;margin-top:10px;}
+.sv-month .m .bars .ba{width:14px;}
+.sv-month .m .bars .ba.a{background:var(--savvi-brown);}
+.sv-month .m .bars .ba.t{background:var(--hairline);}
+.sv-month .m .cnt{font-size:11px;color:var(--ink-muted);margin-top:6px;}
+
+.sv-note{font-size:12px;color:var(--ink-muted);line-height:1.5;}
+@media (max-width:1200px){ .sv-agents{grid-template-columns:1fr;} .sv-2col{grid-template-columns:1fr !important;} }
+.sv-2col{display:grid;grid-template-columns:minmax(0,1fr) 440px;gap:22px;align-items:start;}
+`;
+
 function crmInitials(n){ return (String(n||"").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2))||"?"; }
 function crmColor(n){ const p=["#5A7FBF","#C0392B","#B7770D","#2D8A5E","#7A5C48","#8A5FBF"]; let h=0; for(const c of String(n||"")) h=(h*31+c.charCodeAt(0))>>>0; return p[h%p.length]; }
 const crmAgo=(ts)=>{ if(!ts) return ""; const d=(Date.now()-new Date(ts).getTime())/864e5; if(d<0.04) return "just now"; if(d<1) return `${Math.max(1,Math.round(d*24))}h ago`; if(d<14) return `${Math.round(d)}d ago`; return fmtDateTime(ts).split(",")[0]; };
@@ -4855,6 +4984,162 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
 }
 function DetailHost(props){ const {desktop,...rest}=props; return desktop?<DesktopRecord {...rest}/>:<DetailSheet {...rest}/>; }
 
+/* ════════════════════════════════════════════════════════════════════
+   SAVVI DESIGN-SYSTEM PRIMITIVES — shared by the Today and Targets screens.
+   Money: svK = compact ($1.03M / $898k / $11.8k); svFull = $1,027,535.
+════════════════════════════════════════════════════════════════════ */
+const svFull = n => "$"+Math.round(n||0).toLocaleString("en-AU");
+const svNum  = n => Math.round(n||0).toLocaleString("en-AU");
+const svK = n => { n=Math.round(n||0);
+  if(n>=1e7) return "$"+(n/1e6).toFixed(1)+"M";
+  if(n>=1e6) return "$"+(n/1e6).toFixed(2)+"M";
+  if(n>=1e5) return "$"+Math.round(n/1e3)+"k";
+  if(n>=1e3) return "$"+(n/1e3).toFixed(1).replace(/\.0$/,"")+"k";
+  return "$"+n; };
+
+// TODO: confirm with Luke — every figure here is a placeholder, not yet signed off.
+const SV_TARGETS = {
+  team: { netGci:1200000, sales:100, soldValue:60000000, listingsWon:120, avgGci:12000 },
+  luke: { netGci:1000000, sales:85,  soldValue:50000000, listingsWon:100 },
+  sam:  { netGci:200000,  sales:15,  soldValue:10000000, listingsWon:20 },
+};
+
+// Period maths. Only the 2026 calendar year is wired to live data today.
+function svPeriod(key){
+  const now=new Date(); let start,end,label;
+  if(key==='FY'){ const y=now.getMonth()>=6?now.getFullYear():now.getFullYear()-1; start=new Date(y,6,1); end=new Date(y+1,6,1); label="Financial year "+String(y).slice(2)+"/"+String(y+1).slice(2); }
+  else { const y=now.getFullYear(); start=new Date(y,0,1); end=new Date(y+1,0,1); label="Calendar year "+y; }
+  const total=(end-start)/86400000, elapsed=(now-start)/86400000, monthLen=total/12;
+  const elapsedPct=Math.max(0,Math.min(100,(elapsed/total)*100));
+  return { start,end,total,elapsed, daysLeft:Math.max(0,Math.round(total-elapsed)), elapsedPct,
+    monthsLeft:Math.max(0.1,(total-elapsed)/monthLen), monthsElapsed:Math.max(0.1,elapsed/monthLen),
+    label, yg:elapsedPct.toFixed(1)+"% of the year gone", year:start.getFullYear() };
+}
+
+function ProgressRule({pct,elapsedPct,tone}){
+  const f=Math.max(0,Math.min(100,pct||0));
+  return <div className={"sv-rule "+(tone||"onWhite")}>
+    <div className="trk"/><div className="fil" style={{width:f+"%"}}/>
+    {elapsedPct!=null&&<div className="tick" style={{left:Math.max(0,Math.min(100,elapsedPct))+"%"}}/>}
+  </div>;
+}
+
+// One hero-band cell. lead → 62px. pct present → progress rule + pace tick; absent → spacer (keeps the four subs on one baseline).
+function SvCell({label,value,sub,lead,pct,elapsedPct}){
+  return <div className={"sv-cell"+(lead?" lead":"")}>
+    <div className="t-label lbl">{label}</div>
+    <div className="val">{value}</div>
+    {pct!=null?<ProgressRule pct={pct} elapsedPct={elapsedPct} tone="onBrown"/>:<div className="sv-spacer3"/>}
+    <div className="sub">{sub}</div>
+  </div>;
+}
+function SvBand({cells}){
+  return <div className="sv-band">
+    {cells.map((c,i)=>[ i>0?<div key={"v"+i} className="vr"/>:null, <SvCell key={i} {...c}/> ])}
+  </div>;
+}
+
+function AgentPanel({name,role,period,color,init,heroVal,heroSub,pct,elapsedPct,stats}){
+  return <div className="sv-agent">
+    <div className="ah">
+      <div className="av" style={{background:color}}>{init}</div>
+      <span className="nm">{name}</span>
+      <span className="rp"><div className="t-label">{role}</div><div className="t-label" style={{marginTop:3}}>{period}</div></span>
+    </div>
+    <div className="t-label">Net GCI</div>
+    <div className="hero-val">{heroVal}</div>
+    <ProgressRule pct={pct} elapsedPct={elapsedPct} tone="onButter"/>
+    <div className="hero-sub">{heroSub}</div>
+    <div className="sv-stats">
+      {stats.map((s,i)=><div className="st" key={i}><span className="t-label">{s.l}</span><span className="v">{s.v}</span></div>)}
+    </div>
+  </div>;
+}
+
+function SvPanel({title,badge,actions,scroll,children}){
+  return <div className="sv-panel">
+    <div className="ph"><span className="ttl">{title}</span>{badge!=null&&<span className="pill">{badge}</span>}<span className="sp"/>{actions}</div>
+    <div className={scroll?"pbody":""}>{children}</div>
+  </div>;
+}
+
+function PaceFlag({delta}){
+  if(delta==null) return <span className="sv-dash">—</span>;
+  const behind=delta<0;
+  return <span><span className={"sv-sq "+(behind?"o":"b")}/>{Math.abs(delta).toFixed(1)} pts {behind?"behind":"ahead of"} pace</span>;
+}
+
+function Segmented({value,onChange,options}){
+  return <div className="sv-seg">{options.map(o=>(
+    <button key={o.k} className={value===o.k?"on":""} disabled={o.disabled}
+      title={o.disabled?"Lights up once the nightly refresh emits this period":""}
+      onClick={()=>{ if(!o.disabled) onChange(o.k); }}>{o.l}</button>))}</div>;
+}
+
+// Build the seven right-aligned cells for one metric row.
+function svCells({actual,target,paced,fmt,elapsedPct,lead}){
+  const hasT=target!=null&&target>0;
+  const pct=hasT?(actual/target)*100:null;
+  return {
+    lead, actual:fmt(actual),
+    target: hasT?fmt(target):"—",
+    remaining: paced&&hasT?fmt(Math.max(target-actual,0)):"—",
+    prog: paced&&hasT?<ProgressRule pct={pct} elapsedPct={elapsedPct} tone="onWhite"/>:null,
+    pctTxt: hasT?Math.round(pct)+"%":"—",
+    pace: paced?<PaceFlag delta={hasT?pct-elapsedPct:null}/>:<span className="sv-dash">—</span>,
+  };
+}
+function MetricTable({groups}){
+  return <table className="sv-mt">
+    <thead><tr><th>Metric</th><th>Actual</th><th>Target</th><th>Remaining</th><th className="prog">Progress</th><th>%</th><th>Pace</th></tr></thead>
+    <tbody>{groups.map((g,gi)=><Fragment key={gi}>
+      {g.header&&<tr className="grp"><td colSpan={7}>{g.header}</td></tr>}
+      {g.rows.map((r,ri)=><tr key={ri}>
+        <td className="m">{r.label}</td>
+        <td className={r.cells.lead?"lead-actual":""}>{r.cells.actual}</td>
+        <td>{r.cells.target}</td>
+        <td>{r.cells.remaining}</td>
+        <td className="prog">{r.cells.prog||<span className="sv-dash">—</span>}</td>
+        <td>{r.cells.pctTxt}</td>
+        <td className="pace-cell">{r.cells.pace}</td>
+      </tr>)}
+    </Fragment>)}</tbody>
+  </table>;
+}
+
+// Build the standard metric rows for a scope (team or an agent) from live actuals + targets.
+function svMetricRows(a, t){
+  const avgGci = a.sales? a.netGci/a.sales : 0;
+  const avgPrice = a.sales? a.soldValue/a.sales : 0;
+  const ep=a.elapsedPct;
+  return [
+    { label:"Net GCI",      cells:svCells({actual:a.netGci,      target:t&&t.netGci,      paced:true, fmt:svFull, elapsedPct:ep, lead:true}) },
+    { label:"Sales",        cells:svCells({actual:a.sales,       target:t&&t.sales,       paced:true, fmt:svNum,  elapsedPct:ep}) },
+    { label:"Sold value",   cells:svCells({actual:a.soldValue,   target:t&&t.soldValue,   paced:true, fmt:svFull, elapsedPct:ep}) },
+    { label:"Listings won", cells:svCells({actual:a.listingsWon, target:t&&t.listingsWon, paced:true, fmt:svNum,  elapsedPct:ep}) },
+    { label:"Avg GCI",      cells:svCells({actual:avgGci,        target:t&&t.avgGci,      paced:false, fmt:svFull}) },
+    { label:"Avg price",    cells:svCells({actual:avgPrice,      target:null,             paced:false, fmt:svFull}) },
+    { label:"Off-market %", cells:svCells({actual:a.offMarketPct,target:null,             paced:false, fmt:n=>Math.round(n)+"%"}) },
+  ];
+}
+
+const SV_MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function MonthBars({monthly,monthlyTarget}){
+  const vals=(monthly||[]).map(m=>m&&m.net!=null?m.net:null).filter(v=>v!=null);
+  const max=Math.max(monthlyTarget||0,...vals,1);
+  return <div className="sv-month">{SV_MONTHS.map((mn,i)=>{
+    const m=(monthly||[])[i]; const has=m&&m.net!=null;
+    const ah=has?Math.max(2,Math.round((m.net/max)*58)):0;
+    const th=Math.max(2,Math.round(((monthlyTarget||0)/max)*58));
+    return <div key={i} className={"m"+(has?"":" empty")}>
+      <div className="t-label">{mn}</div>
+      <div className="fig">{has?svK(m.net):<span className="sv-dash">—</span>}</div>
+      <div className="bars">{has&&<div className="ba a" style={{height:ah}}/>}<div className="ba t" style={{height:th}}/></div>
+      <div className="cnt">{has?(m.n+" "+(m.n===1?"sale":"sales")):"—"}</div>
+    </div>;
+  })}</div>;
+}
+
 /* ── Targets tiles (desktop Today) — team + per-agent Sold 2026 CY stats ── */
 function TargetsTiles({activeCount,onListings}){
   const [t,setT]=useState(undefined);   // undefined = loading, null = unavailable
@@ -4962,6 +5247,9 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const mailContact=(email)=>email&&(contacts||[]).find(c=>(c.email||"").toLowerCase()===email);
   const replyLink=(m)=>`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(m.from.email)}&subject=${encodeURIComponent(/^re:/i.test(m.subject)?m.subject:"Re: "+m.subject)}`;
   const [feedFilter,setFeedFilter]=useState("all");
+  const [tdata,setTdata]=useState(undefined);   // getTargets snapshot (team + agents); undefined=loading, null=unavailable
+  const [tperiod,setTperiod]=useState("CY");     // Targets page period (only CY wired to live data)
+  useEffect(()=>{ let on=true; (async()=>{ try{ const j=await call("getTargets"); if(on) setTdata(j&&j.ok?(j.data||null):null); }catch(e){ if(on) setTdata(null); } })(); return ()=>{on=false;}; },[]);
 
   const loadIndex=useCallback(async(force)=>{ if(indexing) return; if(!force&&index&&Date.now()-indexAt<60*1000) return; setIndexing(true); try{ const ix=await Attio.getCrmIndex(); if(ix) { setIndex(ix); setIndexAt(Date.now()); } }catch(e){} setIndexing(false); },[index,indexAt,indexing]);
   useEffect(()=>{ loadIndex(false); },[]);
@@ -5176,9 +5464,57 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const feedCounts=feed.reduce((m,r)=>{ m[r.k]=(m[r.k]||0)+1; return m; },{});
   const todayOpens=(openDays||[]).map(d=>({d,list:(opensByDay[d]||[])})).filter(x=>x.list.length);
 
-  const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:activeCount},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"match",l:"Buyer match",ic:"◎"}];
-  const title={today:"Today",opens:"Open homes",listings:"Listings",contacts:"Contacts",owners:"Owners",match:"Buyer match"}[tab];
-  const subtitle={today:new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"}),opens:`${opens.length} this week`,listings:`${activeCount} active`,contacts:contacts?`${contacts.length} people · ${hotCount} hot`:"loading…",owners:index?`${index.owners.length} people who own property with Savvi`:"loading…",match:"Describe a property, find the buyers"}[tab];
+  /* ── Savvi Today + Targets model (derived from the live getTargets snapshot) ── */
+  const _per=svPeriod(tperiod);
+  const _tgtTeam=SV_TARGETS.team;
+  const svModel=useMemo(()=>{
+    if(!tdata||!tdata.team) return null;
+    const totSales=Math.max(1,tdata.team.sales||0);
+    const team={ netGci:tdata.team.netComm, sales:tdata.team.sales, soldValue:tdata.team.totalValue,
+      listingsWon:(tdata.agents||[]).reduce((s,a)=>s+(a.listingsWon||0),0),
+      offMarketPct:Math.round((tdata.agents||[]).reduce((s,a)=>s+(a.offMktPct||0)*(a.sales||0),0)/totSales),
+      elapsedPct:_per.elapsedPct };
+    const agents=(tdata.agents||[]).map(a=>({ code:a.code, name:a.name, netGci:a.netComm, sales:a.sales,
+      soldValue:a.totalValue, listingsWon:a.listingsWon, avgGci:a.avgNet, avgPrice:a.avgPrice,
+      offMarketPct:a.offMktPct, elapsedPct:_per.elapsedPct }));
+    return { team, agents };
+  },[tdata,_per.elapsedPct]);
+
+  const teamPct = svModel? svModel.team.netGci/_tgtTeam.netGci*100 : null;
+  const todayBandCells = svModel ? [
+    { label:"Net GCI", lead:true, value:svK(svModel.team.netGci), sub:"of "+svK(_tgtTeam.netGci)+" target", pct:svModel.team.netGci/_tgtTeam.netGci*100, elapsedPct:_per.elapsedPct },
+    { label:"Team sales", value:svNum(svModel.team.sales), sub:"of "+_tgtTeam.sales+" target", pct:svModel.team.sales/_tgtTeam.sales*100, elapsedPct:_per.elapsedPct },
+    { label:"Sold value", value:svK(svModel.team.soldValue), sub:"of "+svK(_tgtTeam.soldValue)+" target", pct:svModel.team.soldValue/_tgtTeam.soldValue*100, elapsedPct:_per.elapsedPct },
+    { label:"Active listings", value:activeCount, sub:"on the market now" },
+  ] : [
+    { label:"Net GCI", lead:true, value:"—", sub:"loading…" }, { label:"Team sales", value:"—", sub:"" },
+    { label:"Sold value", value:"—", sub:"" }, { label:"Active listings", value:activeCount, sub:"on the market now" },
+  ];
+  const targetsBandCells = svModel ? [
+    { label:"Net GCI", lead:true, value:svK(svModel.team.netGci), sub:"of "+svK(_tgtTeam.netGci)+" target", pct:svModel.team.netGci/_tgtTeam.netGci*100, elapsedPct:_per.elapsedPct },
+    { label:"Team sales", value:svNum(svModel.team.sales), sub:"of "+_tgtTeam.sales+" target", pct:svModel.team.sales/_tgtTeam.sales*100, elapsedPct:_per.elapsedPct },
+    { label:"Sold value", value:svK(svModel.team.soldValue), sub:"of "+svK(_tgtTeam.soldValue)+" target", pct:svModel.team.soldValue/_tgtTeam.soldValue*100, elapsedPct:_per.elapsedPct },
+    { label:"Listings won", value:svNum(svModel.team.listingsWon), sub:"of "+_tgtTeam.listingsWon+" target", pct:svModel.team.listingsWon/_tgtTeam.listingsWon*100, elapsedPct:_per.elapsedPct },
+  ] : [];
+  const agentPanels = (svModel? svModel.agents: []).map(a=>{
+    const t=SV_TARGETS[String(a.name||"").toLowerCase()]||{}; const full=AGENT_FULL[a.name]||a.name;
+    return <AgentPanel key={a.code||a.name} name={full} role={a.name==="Luke"?"Director":"Sales executive"} period={_per.year+" CY"}
+      color={crmColor(a.name)} init={crmInitials(full)} heroVal={svK(a.netGci)}
+      heroSub={t.netGci?("of "+svK(t.netGci)+" target"):"net to the business"} pct={t.netGci?a.netGci/t.netGci*100:0} elapsedPct={_per.elapsedPct}
+      stats={[ {l:"Listings",v:svNum(a.listingsWon)}, {l:"Sales",v:svNum(a.sales)}, {l:"Sold value",v:svK(a.soldValue)}, {l:"Avg GCI",v:svK(a.avgGci)}, {l:"Avg price",v:svK(a.avgPrice)}, {l:"Off-market",v:(a.offMarketPct||0)+"%"} ]}/>;
+  });
+  // Targets tables + pace strip
+  const teamRows = svModel? svMetricRows(svModel.team,_tgtTeam):[];
+  const byAgentGroups = svModel? svModel.agents.map(a=>({ header:(AGENT_FULL[a.name]||a.name), rows:svMetricRows(a, SV_TARGETS[String(a.name).toLowerCase()]||null) })):[];
+  const _paceActualPct = svModel? svModel.team.netGci/_tgtTeam.netGci*100 : 0;
+  const _paceDelta = _paceActualPct - _per.elapsedPct;
+  const _remaining = Math.max(_tgtTeam.netGci - (svModel?svModel.team.netGci:0),0);
+  const _needPerMo = _remaining/_per.monthsLeft;
+  const _avgSoFar = (svModel?svModel.team.netGci:0)/_per.monthsElapsed;
+
+  const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"targets",l:"Targets",ic:"◪",ct:teamPct!=null?Math.round(teamPct)+"%":null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:activeCount},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"match",l:"Buyer match",ic:"◎"}];
+  const title={today:"Today",targets:"Targets",opens:"Open homes",listings:"Listings",contacts:"Contacts",owners:"Owners",match:"Buyer match"}[tab];
+  const subtitle={today:new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"}),targets:"Pace against the 2026 plan",opens:`${opens.length} this week`,listings:`${activeCount} active`,contacts:contacts?`${contacts.length} people · ${hotCount} hot`:"loading…",owners:index?`${index.owners.length} people who own property with Savvi`:"loading…",match:"Describe a property, find the buyers"}[tab];
   const _q=dq.trim().toLowerCase(); const _m=o=>!_q||((o.address||"")+" "+(o.suburb||"")).toLowerCase().includes(_q);
 
   return <div className="crm">
@@ -5211,74 +5547,63 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
       </header>
       <div className="crm-body">
         <div className="crm-scroll">
-          {tab==="today"&&<>
-            <TargetsTiles activeCount={activeCount} onListings={()=>setTab("listings")}/>
-            <div className="crm-2col">
-              <div style={{display:"flex",flexDirection:"column",gap:18,minWidth:0}}>
-              <div className="crm-card mail">
-                <div className="h">Inbox{mail&&<span className="ct">{mail.filter(m=>!m.read).length} unread</span>}
-                  <span className="sp"/>
-                  <div className="mail-tabs">{mailTabs.map(([k,l])=><button key={k} className={mbox===k?"on":""} onClick={()=>setMbox(k)}>{l}</button>)}</div>
-                </div>
-                {!mail&&!mailErr&&<div style={{textAlign:"center",padding:26}}><div className="sp"/></div>}
-                {mailErr&&<div className="crm-empty" style={{padding:18}}>{mailErr==="forbidden"?"That mailbox isn't yours to read.":"Couldn't reach the mailbox. Try again in a minute."}</div>}
-                {mail&&mail.length===0&&<div className="crm-empty" style={{padding:18}}>Inbox is empty.</div>}
-                {mail&&(mailAll?mail:mail.slice(0,8)).map(m=>{ const c=mailContact(m.from.email); const open=mailOpen===m.id; return <div key={m.id} className={`mail-r${m.read?"":" unread"}${open?" open":""}`}>
-                  <div className="mail-row" onClick={()=>openMail(m)}>
-                    <span className="mail-dot"/>
-                    <div className="mail-from">{m.from.name||m.from.email}{c&&<span className="chip info" style={{fontSize:10,fontWeight:800,padding:"1px 7px",borderRadius:100,marginLeft:6}}>{c.interest?iLbl(c.interest):"In CRM"}</span>}</div>
-                    <div className="mail-subj"><span className="s">{m.subject}</span><span className="p"> · {m.preview}</span></div>
-                    <div className="mail-when">{crmAgo(m.at)}{m.attachments?" 📎":""}</div>
-                  </div>
-                  {open&&<div className="mail-body">
-                    <div className="mail-meta">From {m.from.name?`${m.from.name} <${m.from.email}>`:m.from.email} · {fmtDateTime(m.at)}{m.to.length?` · to ${m.to.join(", ")}`:""}</div>
-                    <div className="mail-txt">{mailBody===null?"Loading…":mailBody}</div>
-                    <div className="mail-acts">
-                      <a className="crm-btn p" href={replyLink(m)} target="_blank" rel="noreferrer">Reply in Outlook</a>
-                      {m.link&&<a className="crm-btn" href={m.link} target="_blank" rel="noreferrer">Open in Outlook</a>}
-                      {c&&<button className="crm-btn" onClick={()=>onOpenContact(c.contactId,c.insps[0]?.propertyRef||null)}>Open {c.name.split(" ")[0]}'s record</button>}
-                      {!c&&m.from.email&&<span style={{fontSize:12,color:BROWN_L,alignSelf:"center"}}>Not in the CRM yet</span>}
-                    </div>
-                  </div>}
-                </div>; })}
-                {mail&&mail.length>8&&<div style={{padding:"8px 16px 12px"}}><button className="crm-linkbtn dark" onClick={()=>setMailAll(v=>!v)}>{mailAll?"Show fewer":`Show all ${mail.length}`}</button></div>}
-              </div>
-              <div className="crm-card">
-                <div className="h">Action feed <span className="ct">{feedRows.length}</span><span className="sp"/><span style={{letterSpacing:0,textTransform:"none",fontWeight:600,fontSize:11,color:indexing?BROWN_L:"#1E8C50",display:"inline-flex",alignItems:"center",gap:5}}>{!indexing&&<span style={{width:7,height:7,borderRadius:"50%",background:"#1E8C50",display:"inline-block"}}/>}{!index?(indexing?"Reading every buyer…":""):(indexing?"Updating…":"Live")}</span></div>
-                <div className="crm-filters" style={{borderBottom:`1px solid ${SAND}`}}>
-                  <button className={`fchip${feedFilter==="all"?" on":""}`} onClick={()=>setFeedFilter("all")}>All<span className="n">{feed.length}</span></button>
-                  {Object.keys(FEED_KINDS).map(k=><button key={k} className={`fchip${feedFilter===k?" on":""}`} onClick={()=>setFeedFilter(k)}>{FEED_KINDS[k].t}<span className="n">{feedCounts[k]||0}</span></button>)}
-                </div>
-                {!index&&<div style={{textAlign:"center",padding:40}}><div className="sp"/></div>}
-                {index&&feedRows.length===0&&<div className="crm-empty"><div className="em">✓</div><div>Nothing waiting. Every hot buyer has a recent note and every opened contract has been followed up.</div></div>}
-                {index&&Object.keys(FEED_KINDS).filter(k=>feedRows.some(r=>r.k===k)).map(k=><div key={k} className="feed-g">
-                  <div className="feed-gh">{FEED_KINDS[k].ic} {FEED_KINDS[k].t}{" "}<span className="why">· {FEED_KINDS[k].why}</span></div>
-                  {feedRows.filter(r=>r.k===k).map((r,i)=><div key={r.c.contactId+r.i.id+i} className="feed-r" onClick={()=>onOpenContact(r.c.contactId,r.i.propertyRef)}>
-                    <div className="av" style={{background:crmColor(r.c.name),width:34,height:34,fontSize:12}}>{crmInitials(r.c.name)}</div>
-                    <div style={{minWidth:0}}><div className="nm">{r.c.name}<IBadge v={r.i.interest}/></div><div className="dt">{r.i.address?streetLine(r.i.address,r.i.suburb)+" · ":""}{r.reason}</div></div>
+          {tab==="today"&&<div className="sv-today">
+            <SvBand cells={todayBandCells}/>
+            <div className="sv-agents">{agentPanels}</div>
+            <div className="sv-2col">
+              <SvPanel title="Action feed" badge={feedRows.length} scroll
+                actions={<span className="t-label" style={{color:index&&!indexing?"#1E8C50":"var(--ink-muted)"}}>{!index?(indexing?"Reading buyers…":""):(indexing?"Updating…":"● Live")}</span>}>
+                {!index&&<div className="sv-empty">Reading every buyer…</div>}
+                {index&&feedRows.length===0&&<div className="sv-empty">Nothing waiting. Every hot buyer has a recent note and every opened contract has been followed up.</div>}
+                <div className="sv-feed">{index&&Object.keys(FEED_KINDS).filter(k=>feedRows.some(r=>r.k===k)).map(k=><div key={k} className="fg">
+                  <div className="fgh">{FEED_KINDS[k].ic} {FEED_KINDS[k].t} <span className="why">· {FEED_KINDS[k].why}</span></div>
+                  {feedRows.filter(r=>r.k===k).map((r,i)=><div key={r.c.contactId+r.i.id+i} className="fr" onClick={()=>onOpenContact(r.c.contactId,r.i.propertyRef)}>
+                    <div className="av" style={{background:crmColor(r.c.name)}}>{crmInitials(r.c.name)}</div>
+                    <div style={{minWidth:0}}><div className="nm">{r.c.name}</div><div className="dt">{r.i.address?streetLine(r.i.address,r.i.suburb)+" · ":""}{r.reason}</div></div>
                     <div className="when">{crmAgo(r.when)}</div>
                   </div>)}
-                </div>)}
-              </div>
-              </div>
-              <div style={{display:"flex",flexDirection:"column",gap:18}}>
-                <div className="crm-card">
-                  <div className="h">{opensStale?"Last week's opens":"This week's opens"}<span className="ct">{opens.length}</span></div>
-                  <div style={{padding:"4px 8px 10px"}}>
-                    {todayOpens.length===0&&<div className="crm-empty">No opens scheduled.</div>}
-                    {todayOpens.map(({d,list})=><div key={d}><div className="crm-daylbl">{crm.fmtDay?crm.fmtDay(d):d}</div>{list.map(o=><div key={o.id} className="crm-row" onClick={()=>{ setTab("opens"); select(o); }}><span className="crm-dot" style={{background:o.auctionDate?"#FE5310":BLUE}}/><div style={{minWidth:0}}><div className="t">{streetLine(o.address,o.suburb)}</div><div className="s">{[o.time,o.suburb].filter(Boolean).join(" · ")}</div></div></div>)}</div>)}
-                  </div>
-                </div>
-                <div className="crm-card">
-                  <div className="h">Hot right now<span className="ct">{hotCount}</span></div>
-                  <div style={{padding:"4px 8px 10px"}}>
-                    {(contacts||[]).filter(c=>c.liveInterest==="hot").sort((a,b)=>buyerHeat(b).score-buyerHeat(a).score).slice(0,8).map(c=><div key={c.contactId} className="crm-row" onClick={()=>onOpenContact(c.contactId,c.insps[0]?.propertyRef||null)}><div className="av" style={{background:crmColor(c.name),width:28,height:28,fontSize:11}}>{crmInitials(c.name)}</div><div style={{minWidth:0}}><div className="t">{c.name}</div><div className="s">{c.insps.filter(i=>i.interest==="hot"&&!isDeadListing(i.statusText)).map(i=>streetLine(i.address,i.suburb)).filter(Boolean).slice(0,2).join(" · ")||"—"}</div></div><div className="r"><HeatBadge b={c}/></div></div>)}
-                    {contacts&&hotCount===0&&<div className="crm-empty">No hot buyers yet.</div>}
-                  </div>
-                </div>
+                </div>)}</div>
+              </SvPanel>
+              <div style={{display:"flex",flexDirection:"column",gap:22,minWidth:0}}>
+                <SvPanel title={opensStale?"Last week's opens":"This week's opens"} badge={opens.length}>
+                  {todayOpens.length===0&&<div className="sv-empty">No opens scheduled.</div>}
+                  {todayOpens.map(({d,list})=><div key={d}><div className="sv-open-day t-label">{crm.fmtDay?crm.fmtDay(d):d}</div>{list.map(o=><div key={o.id} className="sv-open" onClick={()=>{ setTab("opens"); select(o); }}><span className="bar"/><div className="ad">{streetLine(o.address,o.suburb)}</div><div className="tm">{[o.time,o.suburb].filter(Boolean).join(" · ")}</div></div>)}</div>)}
+                </SvPanel>
+                <SvPanel title="Hot right now" badge={hotCount}>
+                  {(contacts||[]).filter(c=>c.liveInterest==="hot").sort((a,b)=>buyerHeat(b).score-buyerHeat(a).score).slice(0,8).map(c=><div key={c.contactId} className="sv-open" onClick={()=>onOpenContact(c.contactId,c.insps[0]?.propertyRef||null)}><span className="bar" style={{background:"var(--savvi-brown)"}}/><div className="ad">{c.name}<span className="t-label" style={{marginLeft:9,textTransform:"none",letterSpacing:0}}>{c.insps.filter(i=>i.interest==="hot"&&!isDeadListing(i.statusText)).map(i=>streetLine(i.address,i.suburb)).filter(Boolean).slice(0,1)[0]||""}</span></div><div className="tm"><HeatBadge b={c}/></div></div>)}
+                  {contacts&&hotCount===0&&<div className="sv-empty">No hot buyers yet.</div>}
+                </SvPanel>
               </div>
             </div>
-          </>}
+          </div>}
+
+          {tab==="targets"&&<div className="sv-targets">
+            <div className="sv-head">
+              <h2>{_per.label}</h2>
+              <span className="yg">{_per.yg}</span>
+              <Segmented value={tperiod} onChange={setTperiod} options={[{k:"CY",l:new Date().getFullYear()+" CY"},{k:"FY",l:"FY 26/27",disabled:true},{k:"L90",l:"Last 90 days",disabled:true}]}/>
+            </div>
+            {!svModel&&<div className="sv-panel" style={{padding:40,textAlign:"center",color:"var(--ink-muted)",fontSize:14}}>{tdata===undefined?"Loading targets…":"Targets data isn't available right now. It refreshes each night from the Stocklist."}</div>}
+            {svModel&&<>
+              <SvBand cells={targetsBandCells}/>
+              <div className="sv-pace">
+                <div className="seg"><div className="t-label">Where you should be</div><div className="big">{_per.elapsedPct.toFixed(1)}%</div></div>
+                <div className="vr"/>
+                <div className="seg"><div className="t-label">Where you are</div><div className="big">{_paceActualPct.toFixed(1)}%</div></div>
+                <div className="vr"/>
+                <div className="say">{_paceDelta<0
+                  ? <>Net GCI is <b>{Math.abs(_paceDelta).toFixed(1)} points</b> behind pace with <b>{_per.daysLeft} days</b> left. Closing it needs <b>{svK(_needPerMo)}</b> a month, against a {svK(_tgtTeam.netGci/12)} monthly target and the {svK(_avgSoFar)} averaged so far.</>
+                  : <>Net GCI is <b>{_paceDelta.toFixed(1)} points</b> ahead of pace with <b>{_per.daysLeft} days</b> left, on track to clear the {svK(_tgtTeam.netGci)} goal.</>}</div>
+              </div>
+              <SvPanel title={"Team · "+_per.year}><MetricTable groups={[{rows:teamRows}]}/></SvPanel>
+              <SvPanel title="By agent"><MetricTable groups={byAgentGroups}/></SvPanel>
+              <SvPanel title="Net GCI by month">
+                <div style={{padding:"2px 0 4px"}}><MonthBars monthly={tdata&&tdata.monthly} monthlyTarget={_tgtTeam.netGci/12}/></div>
+                {!(tdata&&tdata.monthly)&&<div className="sv-note" style={{padding:"4px 20px 16px"}}>Monthly actuals light up once the nightly refresh breaks net GCI down by sale month. Bars show the {svK(_tgtTeam.netGci/12)} monthly target.</div>}
+              </SvPanel>
+              <div className="sv-note">Targets are placeholders pending Luke's sign-off. Actuals refresh nightly from the Stocklist · Sold {_per.year} CY.</div>
+            </>}
+          </div>}
 
           {(tab==="opens"||tab==="listings")&&(sel?renderWorkspace():renderPicker())}
 
@@ -8914,6 +9239,7 @@ export default function App(){
   return <div className={`app${isDesktop?" crm-mode":""}`}>
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
+    {isDesktop&&<style>{SV_CSS}</style>}
 
     {isDesktop&&<DesktopCRM agentName={agentName} opens={visibleOpens} openDays={openDays} opensByDay={opensByDay} opensStale={opensStale} allListings={allListings} listingsOnly={listingsOnly} propIndex={propIndex} onOpenContact={openContact} onLogout={()=>{logout();setAgentName("");}} searchLoadingId={searchLoadingId} crm={crm}/>}
 
