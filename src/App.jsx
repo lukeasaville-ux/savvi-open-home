@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v171-today-targets-tiles";
+const BUILD = "v172-targets-listings-won";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4874,6 +4874,7 @@ function TargetsTiles({activeCount,onListings}){
       {agents.map(a=>(<div key={a.code} className="crm-tgt-card">
         <div className="ah"><div className="av" style={{background:crmColor(a.name)}}>{crmInitials(a.name)}</div><span className="nm">{a.name}</span><span className="yr">2026 CY</span></div>
         <div className="crm-tgt-grid">
+          <div><div className="tn">{a.listingsWon!=null?a.listingsWon:"—"}</div><div className="tl">Listings</div></div>
           <div><div className="tn">{a.sales}</div><div className="tl">Sales</div></div>
           <div><div className="tn">{kM(a.netComm)}</div><div className="tl">Net GCI</div></div>
           <div><div className="tn">{kM(a.avgNet)}</div><div className="tl">Avg GCI</div></div>
