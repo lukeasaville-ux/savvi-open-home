@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v168-deposit-date-picker";
+const BUILD = "v169-editable-conveyancer";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3240,20 +3240,23 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   const [purEmail,setPurEmail]=useState(""),[venName,setVenName]=useState(""),[venEmail,setVenEmail]=useState(""),[venLoading,setVenLoading]=useState(false),[signDetected,setSignDetected]=useState(null);
   // Conveyancer emails (the executed contract is auto-sent to these on completion, cc the client).
   // Purchaser's comes from the offer; vendor's is read from the contract's Particulars of Sale.
-  const [convPur,setConvPur]=useState(""),[convVen,setConvVen]=useState("");
+  // Purchaser's conveyancer: name (contract Particulars only) + email (Particulars AND the
+  // executed-copy distribution). Editable on the prepare screen so the agent can add details the
+  // moment they have them, even if the offer didn't carry a conveyancer. convEm replaces the old convPur.
+  const [convEm,setConvEm]=useState(""),[convNm,setConvNm]=useState(""),[convVen,setConvVen]=useState("");
   // Every send shows a placement + filled-pages preview to confirm before anything is sent (permanent).
   const [esignCount,setEsignCount]=useState(0),[previewImgs,setPreviewImgs]=useState(null),[previewing,setPreviewing]=useState(false);
   // Tap a preview page to open it full-screen and zoom (the app disables native pinch-zoom).
   const [zoomImg,setZoomImg]=useState(null),[zoomScale,setZoomScale]=useState(1);
   useEffect(()=>{ if(open&&parsed){
-    setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||""); setPadr(parsed.buyerAddress||"");
+    setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||""); setPadr(parsed.buyerAddress||""); setConvNm(parsed.convName||""); setConvEm(parsed.convEmail||"");
     setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); { const db=parsed.depositBy||"on signing"; setDepWhen(db); setDepByIso(isoFromLoose(db)); } setDepUpfront(parsed.depositPaid||"");
     // Settlement period ("60 days") becomes a real date from today; the agent can still edit it.
     setSettle(computeSettleDate(parsed.settlement, new Date())); setFin(!!parsed.finance); setLender(parsed.lender||"An approved lending institution"); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setBpDays(parsed.bpDays||"14"); setVacant(true); setCopied(false);
     setSpecial(parsed.conditions||""); setRewording(false); setRewordErr(""); setSpecialPrev(null);
     setFilling(false); setFillErr(""); setFilledFile(null);
     setSignOpen(false); setSignStep("prep"); setSignErr(""); setSendState("idle"); setPurEmail(""); setVenName(""); setVenEmail(""); setVenLoading(false); setSignDetected(null);
-    setConvPur(""); setConvVen(""); setPreviewImgs(null); setPreviewing(false); setZoomImg(null); setZoomScale(1);
+    setConvVen(""); setPreviewImgs(null); setPreviewing(false); setZoomImg(null); setZoomScale(1);
   } /* eslint-disable-next-line */ },[open,parsed]);
   const fileName=()=>`Contract - ${String(openHome?.address||"property").replace(/[\\/:*?"<>|]/g,"")} - ${(p1||"purchaser").split(" ")[0]}.pdf`;
   // Ask the backend (Claude) to rewrite the special conditions as a lawyer would. Keeps the
@@ -3279,7 +3282,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
       let vName=venName;
       if(!vName){ try{ const vr=await call("getVendor",{propertyId:openHome?.propertyId}); if(vr&&vr.ok){ if(vr.vendor){ vName=vr.vendor.name||""; setVenName(vName); if(vr.vendor.email) setVenEmail(vr.vendor.email); } setEsignCount(Number(vr.esignCount)||0); } }catch(e){} }
       const v={ purchaserName:[p1,p2].filter(Boolean).join(" & "), purchaserAddr:padr, vendorName:vName||"",
-        convName:parsed.convName||"", convEmail:parsed.convEmail||"",
+        convName:convNm||"", convEmail:convEm||"",
         price:money(priceN), deposit:money(depN), depositBy:(depWhen||"on signing").trim(), depositPaid:depPaidStr,
         balance:money(balance), settlement:settle, p1, p2,
         loan:fin, lender:lender||"An approved lending institution", loanAmount:money(balance),
@@ -3304,7 +3307,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
     if(!filledFile) return;
     setSignErr(""); setSignOpen(true); setSignStep("prep"); setSendState("idle"); setSignDetected(null); setPreviewImgs(null);
     setPurEmail(buyer?.email||""); setVenName(""); setVenEmail(""); setVenLoading(true);
-    setConvPur(parsed?.convEmail||""); setConvVen("");
+    setConvEm(prev=>prev||parsed?.convEmail||""); setConvVen("");
     try{ const vr=await call("getVendor",{propertyId:openHome?.propertyId}); if(vr&&vr.ok){ if(vr.vendor){ setVenName(vr.vendor.name||""); setVenEmail(vr.vendor.email||""); } setEsignCount(Number(vr.esignCount)||0); } }catch(e){ setEsignCount(0); }
     setVenLoading(false);
     try{ const mod=await import("./contractDetect.js"); const purCount=(p2&&p2.trim())?2:1; const res=await mod.detectContractFields(filledFile.bytes.slice(0), undefined, { purchasers:purCount, vendors:1 });
@@ -3313,7 +3316,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
       const extra=filledFile.extraSignFields||[]; if(extra.length){ res.fields=res.fields.concat(extra); res.roles=[...new Set(res.fields.map(f=>f.role))]; }
       setSignDetected(res);
       // prefill conveyancer emails: purchaser from the offer, vendor from the contract particulars
-      const c=res.conveyancers||{}; setConvPur(prev=>prev||parsed?.convEmail||c.purchaser?.email||""); setConvVen(c.vendor?.email||"");
+      const c=res.conveyancers||{}; setConvEm(prev=>prev||parsed?.convEmail||c.purchaser?.email||""); setConvVen(prev=>prev||c.vendor?.email||"");
       if(!res.fields.length) setSignErr("No standard signing blocks were found in this contract, so it can't be sent for e-signing. You can still download the PDF and send it manually.");
     }catch(e){ setSignErr("Couldn't scan the contract for signing spots. "+(e?.message||"")); }
   };
@@ -3348,7 +3351,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
       const agentFull=AGENT_FULL[agentName]||agentName||"";
       // Who gets the executed contract once BOTH parties have signed (the completion webhook
       // emails the signed PDF to each conveyancer and cc's their client).
-      const distribution={ address:addr, propertyId:openHome?.propertyId||"", inspectionId:buyer?._attioInspectionId||buyer?.id||"", agentName:agentFull, purchaserName:([p1,p2].filter(Boolean).join(" & "))||"", purchaserEmail:purEmail.trim(), purchaserConvEmail:convPur.trim(), vendorName:venName.trim(), vendorEmail:venEmail.trim(), vendorConvEmail:convVen.trim() };
+      const distribution={ address:addr, propertyId:openHome?.propertyId||"", inspectionId:buyer?._attioInspectionId||buyer?.id||"", agentName:agentFull, purchaserName:([p1,p2].filter(Boolean).join(" & "))||"", purchaserEmail:purEmail.trim(), purchaserConvEmail:convEm.trim(), vendorName:venName.trim(), vendorEmail:venEmail.trim(), vendorConvEmail:convVen.trim() };
       const payload={ name:`Contract of Sale - ${addr}`, typeName:"Contract of Sale", propertyAddr:addr, docName:filledFile.name, fileUrl:stash.url, fields:flds, submitters:subs, order:"preserved", agentName:agentFull, distribution };
       const r=await call("sendToSign",payload);
       if(r&&r.ok){ setSendState("done"); setEsignCount(c=>c+1); }
@@ -3398,7 +3401,10 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
           <div><label style={fl}>Purchaser 1 (full legal name)</label><input style={fi} value={p1} onChange={e=>setP1(e.target.value)}/></div>
           <div><label style={fl}>Purchaser 2 (if any)</label><input style={fi} value={p2} onChange={e=>setP2(e.target.value)} placeholder="—"/></div>
           <div><label style={fl}>Purchaser address</label><input style={fi} value={padr} onChange={e=>setPadr(e.target.value)} placeholder="Street, suburb, state, postcode"/></div>
-          <div><label style={fl}>Conveyancer (from buyer's offer)</label><input style={{...fi,background:LINEN}} value={parsed.conveyancer||"Not provided"} readOnly/></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            <div><label style={fl}>Purchaser's conveyancer</label><input style={fi} value={convNm} onChange={e=>setConvNm(e.target.value)} placeholder="Name or company"/></div>
+            <div><label style={fl}>Conveyancer email</label><input style={fi} value={convEm} onChange={e=>setConvEm(e.target.value)} inputMode="email" placeholder="email@firm.com.au"/></div>
+          </div>
         </div>
         <div style={sectn}>Payment</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
@@ -3474,7 +3480,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
               <button className="btn-cream" style={{width:"100%",marginTop:8,padding:"10px",fontSize:12.5}} onClick={downloadFilled}>Open the full contract (all pages) ↓</button>
               <div style={{background:GRN_BG,border:"1px solid #A9DFBF",borderRadius:10,padding:"10px 12px",fontSize:12,color:ESPRESSO,lineHeight:1.55,marginTop:10}}>
                 <div style={{fontWeight:800,marginBottom:3}}>When both parties sign, the executed contract goes to:</div>
-                <div>Purchaser's conveyancer: {convPur||<span style={{color:"#A23B1E"}}>not set</span>}{convPur?<span style={{color:BROWN_L}}> · cc {purEmail}</span>:null}</div>
+                <div>Purchaser's conveyancer: {convEm||<span style={{color:"#A23B1E"}}>not set</span>}{convEm?<span style={{color:BROWN_L}}> · cc {purEmail}</span>:null}</div>
                 <div>Vendor's conveyancer: {convVen||<span style={{color:"#A23B1E"}}>not set</span>}{convVen?<span style={{color:BROWN_L}}> · cc {venEmail}</span>:null}</div>
               </div>
               {signErr&&<div style={{margin:"10px 0 0",background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{signErr}</div>}
@@ -3494,7 +3500,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
               </div>
               <div style={{height:1,background:SAND_D,margin:"3px 0 1px"}}/>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                <div><label style={fl}>Purchaser's conveyancer</label><input style={fi} value={convPur} onChange={e=>setConvPur(e.target.value)} inputMode="email" placeholder="from the offer"/></div>
+                <div><label style={fl}>Purchaser's conveyancer email</label><input style={fi} value={convEm} onChange={e=>setConvEm(e.target.value)} inputMode="email" placeholder="email@firm.com.au"/></div>
                 <div><label style={fl}>Vendor's conveyancer</label><input style={fi} value={convVen} onChange={e=>setConvVen(e.target.value)} inputMode="email" placeholder={venLoading?"Reading contract…":"from the contract"}/></div>
               </div>
               <div style={{fontSize:11,color:BROWN_L,lineHeight:1.45}}>Once both parties sign, the executed contract is emailed to each conveyancer, cc'ing their client.</div>
