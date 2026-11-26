@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v174-real-targets";
+const BUILD = "v175-gci-chart-scope";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4811,6 +4811,9 @@ const SV_CSS = `
 .sv-month .m .bars .ba.a{background:var(--savvi-brown);}
 .sv-month .m .bars .ba.t{background:var(--hairline);}
 .sv-month .m .cnt{font-size:11px;color:var(--ink-muted);margin-top:6px;}
+.sv-scope{font-family:var(--font-sans);font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:#fff;border:1px solid var(--hairline);border-radius:0;padding:6px 28px 6px 11px;appearance:none;-webkit-appearance:none;cursor:pointer;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%23311E10'/></svg>");background-repeat:no-repeat;background-position:right 10px center;}
+.sv-scope:hover{border-color:var(--ink-muted);}
+.sv-scope:focus{outline:none;border-color:var(--savvi-brown);}
 
 .sv-note{font-size:12px;color:var(--ink-muted);line-height:1.5;}
 @media (max-width:1200px){ .sv-agents{grid-template-columns:1fr;} .sv-2col{grid-template-columns:1fr !important;} }
@@ -5006,6 +5009,8 @@ const SV_TARGETS = {
   luke: { netGci:950000,  sales:90,  soldValue:63000000, listingsWon:95,  avgPrice:700000 },
   sam:  { netGci:175000,  sales:15,  soldValue:8250000,  listingsWon:17,  avgPrice:550000 },
 };
+// Logged-in agent name -> their Sold-2026 agent code, for the by-month chart default + scope.
+const SV_AGENT_CODE = { Luke:"LS", Sam:"SR" };
 
 // Period maths. Only the 2026 calendar year is wired to live data today.
 function svPeriod(key){
@@ -5252,6 +5257,9 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const [feedFilter,setFeedFilter]=useState("all");
   const [tdata,setTdata]=useState(undefined);   // getTargets snapshot (team + agents); undefined=loading, null=unavailable
   const [tperiod,setTperiod]=useState("CY");     // Targets page period (only CY wired to live data)
+  // Net-GCI-by-month chart scope: "team" or an agent code (LS/SR). Per Luke, the director
+  // (Luke) defaults to Team; other sales agents default to their own column.
+  const [gciScope,setGciScope]=useState(()=> (agentName && agentName!=="Luke" && SV_AGENT_CODE[agentName]) ? SV_AGENT_CODE[agentName] : "team");
   useEffect(()=>{ let on=true; (async()=>{ try{ const j=await call("getTargets"); if(on) setTdata(j&&j.ok?(j.data||null):null); }catch(e){ if(on) setTdata(null); } })(); return ()=>{on=false;}; },[]);
 
   const loadIndex=useCallback(async(force)=>{ if(indexing) return; if(!force&&index&&Date.now()-indexAt<60*1000) return; setIndexing(true); try{ const ix=await Attio.getCrmIndex(); if(ix) { setIndex(ix); setIndexAt(Date.now()); } }catch(e){} setIndexing(false); },[index,indexAt,indexing]);
@@ -5484,6 +5492,12 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   },[tdata,_per.elapsedPct]);
 
   const teamPct = svModel? svModel.team.netGci/_tgtTeam.netGci*100 : null;
+  // By-month chart: resolve the selected scope to its monthly array + monthly target line.
+  const _gciAgent = (gciScope!=="team" && svModel) ? svModel.agents.find(a=>a.code===gciScope) : null;
+  const _gciMonthly = gciScope==="team" ? (tdata&&tdata.monthly) : (tdata&&tdata.monthlyByAgent&&tdata.monthlyByAgent[gciScope]);
+  const _gciTgtObj = gciScope==="team" ? _tgtTeam : (_gciAgent ? SV_TARGETS[String(_gciAgent.name).toLowerCase()] : null);
+  const _gciTargetLine = (_gciTgtObj&&_gciTgtObj.netGci) ? _gciTgtObj.netGci/12 : 0;
+  const _gciScopeName = gciScope==="team" ? "the team" : (_gciAgent ? _gciAgent.name : "this agent");
   const todayBandCells = svModel ? [
     { label:"Net GCI", lead:true, value:svK(svModel.team.netGci), sub:"of "+svK(_tgtTeam.netGci)+" target", pct:svModel.team.netGci/_tgtTeam.netGci*100, elapsedPct:_per.elapsedPct },
     { label:"Team sales", value:svNum(svModel.team.sales), sub:"of "+_tgtTeam.sales+" target", pct:svModel.team.sales/_tgtTeam.sales*100, elapsedPct:_per.elapsedPct },
@@ -5600,11 +5614,16 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
               </div>
               <SvPanel title={"Team · "+_per.year}><MetricTable groups={[{rows:teamRows}]}/></SvPanel>
               <SvPanel title="By agent"><MetricTable groups={byAgentGroups}/></SvPanel>
-              <SvPanel title="Net GCI by month">
-                <div style={{padding:"2px 0 4px"}}><MonthBars monthly={tdata&&tdata.monthly} monthlyTarget={_tgtTeam.netGci/12}/></div>
-                {!(tdata&&tdata.monthly)&&<div className="sv-note" style={{padding:"4px 20px 16px"}}>Monthly actuals light up once the nightly refresh breaks net GCI down by sale month. Bars show the {svK(_tgtTeam.netGci/12)} monthly target.</div>}
+              <SvPanel title="Net GCI by month" actions={
+                <select className="sv-scope" value={gciScope} onChange={e=>setGciScope(e.target.value)} aria-label="Chart scope">
+                  <option value="team">Team</option>
+                  {svModel&&svModel.agents.map(a=><option key={a.code} value={a.code}>{a.name}</option>)}
+                </select>
+              }>
+                <div style={{padding:"2px 0 4px"}}><MonthBars monthly={_gciMonthly} monthlyTarget={_gciTargetLine}/></div>
+                {!_gciMonthly&&<div className="sv-note" style={{padding:"4px 20px 16px"}}>No settled sales yet for {_gciScopeName} this year. The faint bar shows {svK(_gciTargetLine)} as the monthly target.</div>}
               </SvPanel>
-              <div className="sv-note">Targets are placeholders pending Luke's sign-off. Actuals refresh nightly from the Stocklist · Sold {_per.year} CY.</div>
+              <div className="sv-note">Actuals refresh nightly from the Stocklist · Sold {_per.year} CY.</div>
             </>}
           </div>}
 
