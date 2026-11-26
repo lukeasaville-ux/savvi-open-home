@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v176-avgprice-avggci";
+const BUILD = "v177-drop-pace-col";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5103,9 +5103,9 @@ function svCells({actual,target,paced,fmt,elapsedPct,lead}){
 }
 function MetricTable({groups}){
   return <table className="sv-mt">
-    <thead><tr><th>Metric</th><th>Actual</th><th>Target</th><th>Remaining</th><th className="prog">Progress</th><th>%</th><th>Pace</th></tr></thead>
+    <thead><tr><th>Metric</th><th>Actual</th><th>Target</th><th>Remaining</th><th className="prog">Progress</th><th>%</th></tr></thead>
     <tbody>{groups.map((g,gi)=><Fragment key={gi}>
-      {g.header&&<tr className="grp"><td colSpan={7}>{g.header}</td></tr>}
+      {g.header&&<tr className="grp"><td colSpan={6}>{g.header}</td></tr>}
       {g.rows.map((r,ri)=><tr key={ri}>
         <td className="m">{r.label}</td>
         <td className={r.cells.lead?"lead-actual":""}>{r.cells.actual}</td>
@@ -5113,7 +5113,6 @@ function MetricTable({groups}){
         <td>{r.cells.remaining}</td>
         <td className="prog">{r.cells.prog||<span className="sv-dash">—</span>}</td>
         <td>{r.cells.pctTxt}</td>
-        <td className="pace-cell">{r.cells.pace}</td>
       </tr>)}
     </Fragment>)}</tbody>
   </table>;
