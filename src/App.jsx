@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v177-drop-pace-col";
+const BUILD = "v178-pace-strip-fix";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4779,7 +4779,7 @@ const SV_CSS = `
 
 /* Pace strip */
 .sv-pace{background:var(--savvi-butter);padding:22px 26px;display:flex;align-items:center;gap:34px;}
-.sv-pace .seg{display:flex;flex-direction:column;gap:6px;}
+.sv-pace .seg{display:flex;flex-direction:column;gap:6px;background:none;border-radius:0;margin:0;padding:0;box-shadow:none;}
 .sv-pace .seg .big{font-family:var(--font-display);font-weight:400;font-synthesis:none;letter-spacing:-.01em;font-size:34px;line-height:1;}
 .sv-pace .vr{width:1px;align-self:stretch;background:var(--hairline-on-butter);}
 .sv-pace .say{font-size:15px;line-height:1.5;max-width:560px;}
