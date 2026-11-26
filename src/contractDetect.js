@@ -222,9 +222,14 @@ export async function detectContractFields(data, pdfjsOverride, opts) {
       for (const it of pg.items) {
         const s = it.str.replace(/\s+/g, " ").trim().toLowerCase().replace(/:/g, "");
         const y = ctr(it);
-        if (it.x0 < 180 && s === "signature") {             // signature cell, to the right
-          const role = roleAt(y); if (role) cells.push({ role, type: "signature", y, box: [165, y - 15, RM, y + 11] });
-        } else if (s === "date" && it.x0 > 380) {           // date cell, right-hand column
+        // Match a bare "signature" OR a combined "<role>'s signature" caption — some
+        // contract editions (e.g. the REIV Vendor Statement) emit the whole caption as a
+        // single text item, so an exact === "signature" check silently misses it and the
+        // purchaser's signing box never appears even though the date box does.
+        if (it.x0 < 200 && /(^|\s)signature$/.test(s)) {    // signature cell, signing space to the right
+          const role = /vendor/.test(s) ? "Vendor" : /purchaser/.test(s) ? "Purchaser" : roleAt(y);
+          if (role) cells.push({ role, type: "signature", y, box: [165, y - 15, RM, y + 11] });
+        } else if (/(^|\s)date$/.test(s) && it.x0 > 380) {  // date cell, right-hand column
           const role = roleAt(y); if (role) cells.push({ role, type: "date", y, box: [it.x1 + 2, y - 8, W - 45, y + 9] });
         }
       }

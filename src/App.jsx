@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v166-annexure-vendor-name";
+const BUILD = "v167-desktop-contract-panes";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -1258,6 +1258,9 @@ body{background:${LINEN};font-family:'Neue Haas Unica Pro',sans-serif;color:${BR
 .hndl{width:36px;height:4px;background:${SAND_D};border-radius:2px;margin:12px auto 0;}
 .sh-ttl{font-family:'Newsreader',serif;font-size:22px;font-weight:700;color:${BROWN};padding:15px 20px 2px;}
 .sh-sub{font-size:13px;color:${BROWN_L};padding:0 20px 14px;}
+/* Prepare-contract-from-offer panes. Phone = unchanged stacked scroll; desktop overrides in CRM_CSS. */
+.offer-form{max-height:62vh;overflow-y:auto;}
+.offer-pv{max-height:48vh;overflow-y:auto;}
 .pick-row{transition:border-color .12s,background .12s,transform .12s;}
 .pick-row:hover{border-color:${BLUE}!important;background:${LINEN}!important;}
 .pick-row:active{transform:scale(.99);}
@@ -3376,12 +3379,13 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   };
   if(!parsed) return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}><div className="sh" onClick={e=>e.stopPropagation()}><div className="hndl" onClick={onClose}/><div className="sh-ttl">Prepare contract</div><div style={{padding:"20px 16px",color:BROWN_L}}>No offer found on this buyer yet.</div></div></div>;
   return <div className={`ov ${open?"s":"h"}`} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-    <div className="sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}} {...drag.handlers}>
+    <div className="sh offer-sh" onClick={e=>e.stopPropagation()} style={{position:"relative",...drag.style}} {...drag.handlers}>
       <div className="hndl" onClick={onClose} style={{cursor:"pointer"}}/>
       <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:12,right:14,width:34,height:34,borderRadius:"50%",border:"none",background:SAND,color:BROWN,fontSize:16,cursor:"pointer",zIndex:5}}>✕</button>
       <div className="sh-ttl" style={{paddingRight:44}}>Prepare contract</div>
       <div className="sh-sub">{openHome?.address} · from {(p1||"the buyer").split(" ")[0]}'s offer · check and edit before it's filled</div>
-      <div style={{padding:"4px 16px 16px",overflowY:"auto",maxHeight:"62vh"}}>
+      <div className="offer-body">
+      <div className="offer-form" style={{padding:"4px 16px 16px"}}>
         <div style={sectn}>Purchasers</div>
         <div style={{display:"grid",gap:8}}>
           <div><label style={fl}>Purchaser 1 (full legal name)</label><input style={fi} value={p1} onChange={e=>setP1(e.target.value)}/></div>
@@ -3428,6 +3432,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
           {rewordErr&&<div style={{marginTop:6,background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:9,padding:"8px 10px",fontSize:12,fontWeight:600}}>{rewordErr}</div>}
         </div>
       </div>
+      <div className="offer-work">
       {fillErr&&<div style={{margin:"0 16px 10px",background:"#FDEEEA",border:"1px solid #F2C4B5",color:"#A23B1E",borderRadius:10,padding:"10px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.45}}>{fillErr}</div>}
       {filledFile ? ( signOpen ? (
         <div style={{padding:"0 16px 14px"}}>
@@ -3445,7 +3450,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
             <div>
               <div style={{fontSize:11,fontWeight:800,letterSpacing:1,textTransform:"uppercase",color:ESPRESSO,margin:"2px 0 6px"}}>Check the filled contract before it sends</div>
               <div style={{background:LINEN,border:`1px solid ${SAND_D}`,borderRadius:10,padding:"9px 11px",fontSize:12,color:BROWN_M,lineHeight:1.5,marginBottom:10}}>These are the pages we filled in — price, settlement, purchaser, special conditions — plus the signing pages. <b>Tap any page to zoom.</b> <b style={{color:"#2563eb"}}>Blue</b> = signature, <b style={{color:"#dc2626"}}>red</b> = date. If anything's off, tap Back and Change details &amp; fill again.</div>
-              <div style={{maxHeight:"48vh",overflowY:"auto",border:`1px solid ${SAND_D}`,borderRadius:10,padding:8,background:"#fff"}}>
+              <div className="offer-pv" style={{border:`1px solid ${SAND_D}`,borderRadius:10,padding:8,background:"#fff"}}>
                 {(previewImgs||[]).map(pg=>(<div key={pg.page} style={{marginBottom:12}}>
                   <div style={{fontSize:10.5,fontWeight:800,color:BROWN_L,marginBottom:3,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}><span>Page {pg.page}</span>{pg.label&&<span style={{background:SAND,color:ESPRESSO,borderRadius:100,padding:"1px 8px",fontSize:10,fontWeight:800}}>{pg.label}</span>}{pg.sign&&<span style={{background:"#E7EFFD",color:"#2563eb",borderRadius:100,padding:"1px 8px",fontSize:10,fontWeight:800}}>signing</span>}</div>
                   <img src={pg.url} onClick={()=>{setZoomScale(1);setZoomImg(pg);}} style={{width:"100%",display:"block",borderRadius:6,border:`1px solid ${SAND_D}`,cursor:"zoom-in"}} alt={`Page ${pg.page}${pg.label?" — "+pg.label:""}`}/>
@@ -3504,6 +3509,8 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
         <button className="btn-cream" style={{flex:"0 0 auto",width:"auto",padding:"13px 16px",fontSize:13,whiteSpace:"nowrap"}} onClick={()=>{navigator.clipboard?.writeText(particulars()).catch(()=>{});setCopied(true);setTimeout(()=>setCopied(false),2000);}}>{copied?"✓ Copied":"Copy particulars"}</button>
         <button className="btn-grn" style={{flex:"1 1 0",minWidth:0}} disabled={filling} onClick={doFill}>{filling?"Filling…":"Fill contract →"}</button>
       </div>)}
+      </div>
+      </div>
     </div>
     {zoomImg&&<ZoomViewer pages={(previewImgs&&previewImgs.length)?previewImgs:[zoomImg]} index={Math.max(0,((previewImgs||[]).findIndex(p=>p.page===zoomImg.page)))} onClose={()=>{setZoomImg(null);setZoomScale(1);}}/>}
   </div>;
@@ -4625,6 +4632,13 @@ const CRM_CSS = `
 .crm-mode .sh{border-radius:18px;max-width:560px;max-height:88vh;transform:none;box-shadow:0 24px 64px rgba(49,30,16,.28);}
 .crm-mode .ov.s .sh{transform:none;}
 .crm-mode .hndl{display:none;}
+/* Prepare contract from offer — wide two-pane workspace on desktop: editable offer
+   details on the left, the full scrollable contract preview on the right. */
+.crm-mode .sh.offer-sh{max-width:min(1180px,95vw);width:100%;max-height:92vh;display:flex;flex-direction:column;overflow:hidden;padding-bottom:0;}
+.crm-mode .sh.offer-sh .offer-body{flex:1 1 auto;min-height:0;display:flex;align-items:stretch;}
+.crm-mode .sh.offer-sh .offer-form{flex:0 0 430px;min-height:0;max-height:100%;overflow-y:auto;border-right:1px solid ${SAND_D};padding-bottom:26px;}
+.crm-mode .sh.offer-sh .offer-work{flex:1 1 0;min-width:0;min-height:0;max-height:100%;overflow-y:auto;background:${LINEN};padding:8px 2px 26px;}
+.crm-mode .sh.offer-sh .offer-pv{max-height:none;overflow:visible;}
 `;
 
 function crmInitials(n){ return (String(n||"").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2))||"?"; }
