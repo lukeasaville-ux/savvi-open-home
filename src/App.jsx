@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v167-desktop-contract-panes";
+const BUILD = "v168-deposit-date-picker";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -3004,6 +3004,10 @@ function dateFromDays(days, base){ const n=parseInt(String(days).replace(/[^0-9]
 const fmtContractDate=d=>d?d.toLocaleDateString("en-AU",{weekday:"short",day:"numeric",month:"long",year:"numeric"}):"";
 // "60 days" -> a real settlement date string; a legacy date string is returned unchanged.
 function computeSettleDate(periodOrDate, base){ const m=String(periodOrDate||"").match(/(\d+)\s*days?/i); if(!m) return String(periodOrDate||""); return fmtContractDate(dateFromDays(m[1], base)); }
+// Loose date text -> ISO yyyy-mm-dd for a date <input>, or "" for phrases like "on signing".
+function isoFromLoose(s){ const t=String(s||"").trim(); if(!t||/sign|settle|day of sale|possession|within/i.test(t)) return ""; const d=new Date(t); if(isNaN(d.getTime())) return ""; const z=new Date(d.getTime()-d.getTimezoneOffset()*60000); return z.toISOString().slice(0,10); }
+// ISO yyyy-mm-dd -> the contract's long date label ("Fri 10 December 2026").
+function niceFromIso(iso){ if(!iso) return ""; const d=new Date(iso+"T00:00:00"); return isNaN(d.getTime())?"":fmtContractDate(d); }
 // Standard building & pest special condition (used when the contract has no B&P box, e.g. Lisson).
 function bpSpecialConditionText(days){
   const d=String(days).replace(/\s*days?/i,"")||"14";
@@ -3224,6 +3228,9 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   const [p1,setP1]=useState(""),[p2,setP2]=useState(""),[padr,setPadr]=useState(""),[price,setPrice]=useState(""),[depAmt,setDepAmt]=useState(""),[depWhen,setDepWhen]=useState("on signing the contract"),[settle,setSettle]=useState(""),[fin,setFin]=useState(false),[lender,setLender]=useState(""),[loanMax,setLoanMax]=useState(""),[finDays,setFinDays]=useState("14"),[approval,setApproval]=useState(""),[bp,setBp]=useState(false),[vacant,setVacant]=useState(true),[copied,setCopied]=useState(false);
   const [bpDays,setBpDays]=useState("14");
   const [depUpfront,setDepUpfront]=useState("");
+  // Deposit-payable-by as a real calendar date (ISO yyyy-mm-dd) OR the "on signing" preset.
+  // depWhen stays the canonical display string that fills the contract; depByIso just drives the picker.
+  const [depByIso,setDepByIso]=useState("");
   const [special,setSpecial]=useState("");
   // AI "reword like a lawyer" for the special conditions. specialPrev holds the pre-reword text so Luke can undo.
   const [rewording,setRewording]=useState(false),[rewordErr,setRewordErr]=useState(""),[specialPrev,setSpecialPrev]=useState(null);
@@ -3240,7 +3247,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
   const [zoomImg,setZoomImg]=useState(null),[zoomScale,setZoomScale]=useState(1);
   useEffect(()=>{ if(open&&parsed){
     setP1(parsed.purchasers[0]||""); setP2(parsed.purchasers[1]||""); setPadr(parsed.buyerAddress||"");
-    setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); setDepWhen(parsed.depositBy||"on signing"); setDepUpfront(parsed.depositPaid||"");
+    setPrice(parsed.price!=null?String(parsed.price):""); setDepAmt(parsed.depAmt!=null?String(parsed.depAmt):""); { const db=parsed.depositBy||"on signing"; setDepWhen(db); setDepByIso(isoFromLoose(db)); } setDepUpfront(parsed.depositPaid||"");
     // Settlement period ("60 days") becomes a real date from today; the agent can still edit it.
     setSettle(computeSettleDate(parsed.settlement, new Date())); setFin(!!parsed.finance); setLender(parsed.lender||"An approved lending institution"); setLoanMax(""); setFinDays(parsed.finDays||"14"); setApproval(""); setBp(!!parsed.bp); setBpDays(parsed.bpDays||"14"); setVacant(true); setCopied(false);
     setSpecial(parsed.conditions||""); setRewording(false); setRewordErr(""); setSpecialPrev(null);
@@ -3398,8 +3405,15 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
           <div><label style={fl}>Price</label><input style={fi} value={price} onChange={e=>setPrice(e.target.value)} inputMode="numeric"/></div>
           <div><label style={fl}>Deposit {depPct?`(${depPct}%)`:""}</label><input style={fi} value={depAmt} onChange={e=>setDepAmt(e.target.value)} inputMode="numeric"/></div>
           <div><label style={fl}>Balance at settlement</label><input style={{...fi,background:LINEN}} value={d$(balance)} readOnly/></div>
-          <div><label style={fl}>Deposit payable by</label><input style={fi} value={depWhen} onChange={e=>setDepWhen(e.target.value)} placeholder="on signing"/></div>
           <div><label style={fl}>Paid up front now</label><input style={fi} value={depUpfront} onChange={e=>setDepUpfront(e.target.value)} placeholder="Nil"/></div>
+        </div>
+        <div style={{marginTop:8}}>
+          <label style={fl}>Deposit payable by</label>
+          <div style={{display:"flex",gap:7,alignItems:"stretch"}}>
+            <button type="button" onClick={()=>{setDepByIso("");setDepWhen("on signing");}} style={{flex:"0 0 auto",padding:"0 14px",borderRadius:8,border:`1.5px solid ${!depByIso?GRN:SAND_D}`,background:!depByIso?GRN_BG:WHITE,color:!depByIso?GRN:BROWN_M,fontSize:13,fontWeight:800,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>On signing</button>
+            <input type="date" value={depByIso} onChange={e=>{const iso=e.target.value; setDepByIso(iso); setDepWhen(iso?niceFromIso(iso):"on signing");}} style={{...fi,flex:"1 1 0",minWidth:0,colorScheme:"light",color:depByIso?ESPRESSO:BROWN_L}}/>
+          </div>
+          <div style={{fontSize:11,color:BROWN_L,marginTop:4}}>On the contract: <b style={{color:ESPRESSO}}>{depWhen||"—"}</b></div>
         </div>
         <div style={sectn}>Settlement</div>
         <div><label style={fl}>Settlement due on</label><input style={fi} value={settle} onChange={e=>setSettle(e.target.value)} placeholder="e.g. Fri 11 December 2026"/></div>
