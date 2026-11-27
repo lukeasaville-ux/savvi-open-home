@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v192-targets-gci-merge";
+const BUILD = "v193-followup-tasks";
 // Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
 // whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
 // relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
@@ -4789,6 +4789,10 @@ const SV_CSS = `
 .sv-todo-kind{font-size:10.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-muted);}
 .sv-todo-sub{font-size:12px;color:var(--ink-muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .sv-todo-row.done .sv-todo-nm,.sv-todo-row.done .sv-todo-sub{text-decoration:line-through;color:var(--ink-muted);}
+.sv-todo-due{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-muted);border:1px solid var(--hairline);border-radius:100px;padding:1px 7px;}
+.sv-todo-due.over{color:#B42318;border-color:#F3B4AC;background:#FEF3F2;}
+.sv-todo-row.over{box-shadow:inset 3px 0 0 #D92D20;}
+.tl-followup{padding:2px 0 10px;}
 .sv-tick{flex:0 0 auto;width:20px;height:20px;border:1.5px solid var(--hairline);background:#fff;border-radius:0;cursor:pointer;color:var(--savvi-butter);font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;}
 .sv-tick:hover{border-color:var(--ink-muted);}
 .sv-tick.on{background:var(--savvi-brown);border-color:var(--savvi-brown);}
@@ -5094,7 +5098,7 @@ function crmBuildTodos(index, isExchanged){
   });
   return out.sort((a,b)=>new Date(b.ts||0)-new Date(a.ts||0));
 }
-const TODO_KINDS={ second:"Second inspection", contract:"Reading the contract", callback:"Asked for a call", email:"Email reply", text:"Text reply", whatsapp:"WhatsApp", instagram:"Instagram", call:"Missed call", voicemail:"Voicemail", proposal:"Proposal follow-up", appraisal:"Appraisal follow-up", vendor:"Vendor report", buyercall:"Buyer calls" };
+const TODO_KINDS={ second:"Second inspection", contract:"Reading the contract", callback:"Asked for a call", email:"Email reply", text:"Text reply", whatsapp:"WhatsApp", instagram:"Instagram", call:"Missed call", voicemail:"Voicemail", followup:"Follow-up", proposal:"Proposal follow-up", appraisal:"Appraisal follow-up", vendor:"Vendor report", buyercall:"Buyer calls" };
 function _todoKey(agent){ return "savvi_todo_"+(agent||"x")+"_"+new Date().toISOString().slice(0,10); }
 function _todoLoad(agent){ try{ return JSON.parse(localStorage.getItem(_todoKey(agent))||"[]"); }catch(e){ return []; } }
 function _todoSave(agent,list){ try{ localStorage.setItem(_todoKey(agent),JSON.stringify(list)); }catch(e){} }
@@ -5114,20 +5118,32 @@ function SvTodo({agent,index,indexing,suggestions,onOpenContact}){
   const del=id=>{ setItems(xs=>xs.filter(x=>x.id!==id)); call("removeTodo",{id}).catch(()=>{}); };
   const toggleS=id=>{ const n=new Set(done); n.has(id)?n.delete(id):n.add(id); setDone(n); _doneSave(agent,n); };
   const tel=m=>"tel:"+(toE164AU(m)||m), sms=m=>"sms:"+(toE164AU(m)||m);
-  const openI=items.filter(x=>!x.done), doneI=items.filter(x=>x.done);
+  const _today=new Date().toISOString().slice(0,10);
+  // A dated follow-up stays hidden until its due date, then lands here and turns overdue if the
+  // day passes without a tick. Undated items (emails, texts, voicemails, manual lines) always show.
+  const _due=x=>!x.forDate||x.forDate<=_today;
+  const _rank=x=>{ if(x.forDate&&!x.done){ if(x.forDate<_today) return 0; if(x.forDate===_today) return 1; } return 2; };
+  const openI=items.filter(x=>!x.done&&_due(x)).slice().sort((a,b)=>{
+    const ra=_rank(a),rb=_rank(b); if(ra!==rb) return ra-rb;           // overdue, then due today, then the rest
+    if(ra<2) return (a.forDate||"")<(b.forDate||"")?-1:1;              // within dated buckets: earliest due first
+    return (b.createdAt||0)-(a.createdAt||0);                         // undated: newest first
+  });
+  const doneI=items.filter(x=>x.done&&_due(x));
   const openS=suggestions.filter(s=>!done.has(s.id)), doneS=suggestions.filter(s=>done.has(s.id));
   const empty=loaded&&!openI.length&&!openS.length&&!doneI.length&&!doneS.length;
-  const itemRow=(x)=>(
-    <div key={x.id} className={"sv-todo-row"+(x.done?" done":"")}>
+  const itemRow=(x)=>{
+   const over=x.forDate&&!x.done&&x.forDate<_today, dueT=x.forDate&&!x.done&&x.forDate===_today;
+   return (
+    <div key={x.id} className={"sv-todo-row"+(x.done?" done":"")+(over?" over":"")}>
       <button className={"sv-tick"+(x.done?" on":"")} aria-label={x.done?"Undo":"Done"} onClick={()=>toggle(x.id)}>{x.done?"✓":""}</button>
       <div className="sv-todo-main" style={x.link?{cursor:"pointer"}:undefined} onClick={()=>{ if(x.contactId&&onOpenContact){onOpenContact(x.contactId,x.propertyRef);} else if(x.link){ try{window.open(x.link,"_blank","noopener");}catch(e){} } }}>
-        <div className="sv-todo-nm">{x.name||x.text}{x.name&&x.kind?<span className="sv-todo-kind">{TODO_KINDS[x.kind]||x.kind}</span>:null}</div>
+        <div className="sv-todo-nm">{x.name||x.text}{x.name&&x.kind?<span className="sv-todo-kind">{TODO_KINDS[x.kind]||x.kind}</span>:null}{over?<span className="sv-todo-due over">Overdue</span>:dueT?<span className="sv-todo-due">Due today</span>:null}</div>
         {x.sub?<div className="sv-todo-sub">{x.sub}</div>:null}
       </div>
       {x.mobile&&!x.done?<div className="sv-todo-act"><a className="sv-cta" href={tel(x.mobile)}>Call</a><a className="sv-cta" href={sms(x.mobile)}>Text</a></div>:x.link&&!x.done?<div className="sv-todo-act"><a className="sv-cta" href={x.link} target="_blank" rel="noopener">Open</a></div>:null}
       <button className="sv-todo-x" aria-label="Remove" onClick={()=>del(x.id)}>×</button>
     </div>
-  );
+  );};
   const sugRow=(s,isDone)=>(
     <div key={s.id} className={"sv-todo-row"+(isDone?" done":"")}>
       <button className={"sv-tick"+(isDone?" on":"")} aria-label="Done" onClick={()=>toggleS(s.id)}>{isDone?"✓":""}</button>
@@ -5163,7 +5179,8 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
   const [callOpen,setCallOpen]=useState(false); const [callNote,setCallNote]=useState("");
   const [copied,setCopied]=useState(false); const [copiedEmail,setCopiedEmail]=useState(false); const [manage,setManage]=useState(false); const [xfer,setXfer]=useState(false);
   const [checkin,setCheckin]=useState(""); const [crossNotes,setCrossNotes]=useState(null);
-  useEffect(()=>{ setNoteText(""); setNoteOpen(false); setEditing(false); setEditNoteId(null); setCallOpen(false); setManage(false); setXfer(false); setCheckin(""); setCrossNotes(null); },[buyer?.id,open]);
+  const [fuOpen,setFuOpen]=useState(false); const [fuDate,setFuDate]=useState(""); const [fuText,setFuText]=useState(""); const [fuSaving,setFuSaving]=useState(false); const [fuDone,setFuDone]=useState(false);
+  useEffect(()=>{ setNoteText(""); setNoteOpen(false); setEditing(false); setEditNoteId(null); setCallOpen(false); setManage(false); setXfer(false); setCheckin(""); setCrossNotes(null); setFuOpen(false); setFuText(""); setFuDate(""); setFuDone(false); },[buyer?.id,open]);
   useEffect(()=>{ if(!open) return; const k=e=>{ if(e.key==="Escape") onClose(); }; window.addEventListener("keydown",k); return ()=>window.removeEventListener("keydown",k); },[open,onClose]);
   // Bio: generate once per buyer if missing (same helper as the phone card).
   const genProfile=async(b,pid,noteTexts)=>{ if(!b||!pid) return; const texts=(noteTexts&&noteTexts.length)?noteTexts:(b.notes||[]).map(n=>n.text); onSetProfile(pid,b.id,{loading:true}); try{ const parsed=await aiBuyerProfile({...b,notes:texts.map(t=>({text:t}))}); onSetProfile(pid,b.id,{loading:false,bio:parsed.bio,stage:parsed.stage||"Early"}); }catch(e){ onSetProfile(pid,b.id,{loading:false,bio:texts.slice(-3).join(" "),stage:b.interest==="hot"?"Offer":b.interest==="watching"?"Considering":"Early"}); } };
@@ -5172,6 +5189,17 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
   const first=(buyer.name||"").split(" ")[0]||"";
   const hasOffer=(buyer.notes||[]).some(n=>/^\s*\[Offer\]/i.test(n.text||""));
   const saveNote=()=>{ const t=noteText.trim(); if(!t) return; onAddNote(propId,buyer.id,t); setNoteText(""); setNoteOpen(false); };
+  const _todayStr=new Date().toISOString().slice(0,10);
+  const _tomorrowStr=()=>{ const d=new Date(); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); };
+  // Set a dated follow-up on this contact. It lands on the logged-in agent's Today to-do list on
+  // the due date (hidden until then), and turns "Overdue" if the day passes untouched. Wired into
+  // the same per-agent to-do store the inbox scan + manual lines use (addTodo, forDate field).
+  const saveFollowup=async()=>{ const date=fuDate||_tomorrowStr(); const t=fuText.trim(); setFuSaving(true);
+    try{ await call("addTodo",{ kind:"followup", name:buyer.name||"", mobile:buyer.mobile||"",
+      sub:t||("Follow up with "+(first||"this buyer")+(openHome?" · "+(streetLine(openHome.address,openHome.suburb)||""):"")),
+      contactId:buyer.contactId||null, propertyRef:(openHome&&(openHome._listing||openHome.propertyId))||null, forDate:date });
+      setFuDone(true); setTimeout(()=>{ setFuOpen(false); setFuDone(false); setFuText(""); setFuDate(""); },1400);
+    }catch(e){} finally{ setFuSaving(false); } };
   const startEdit=()=>{ setEName(buyer.name||""); setEMobile(buyer.mobile||""); setEEmail(buyer.email||""); setEditing(true); };
   const saveDetails=async()=>{ setSavingEdit(true); try{ await onUpdateDetails(propId,buyer.id,{name:eName.trim(),mobile:eMobile.trim(),email:eEmail.trim()}); setEditing(false); }finally{ setSavingEdit(false); } };
   const days=buyer._createdAt?Math.max(0,Math.round((Date.now()-new Date(buyer._createdAt))/864e5)):null;
@@ -5254,6 +5282,20 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
             <div className="tl-compose">
               <textarea className={noteOpen||noteText?"open":""} placeholder={`Add a note about ${first||"this buyer"}…`} value={noteText} onChange={e=>setNoteText(e.target.value)} onFocus={()=>setNoteOpen(true)} onKeyDown={e=>{ if((e.metaKey||e.ctrlKey)&&e.key==="Enter") saveNote(); }}/>
               {(noteOpen||noteText)&&<div className="row"><button className="crm-btn p" disabled={!noteText.trim()} onClick={saveNote}>Save note</button><button className="crm-btn" onClick={()=>{ setNoteOpen(false); setNoteText(""); }}>Cancel</button><span className="hint">⌘↵ to save</span></div>}
+            </div>
+            <div className="tl-followup">
+              {!fuOpen
+                ? <button className="crm-btn" onClick={()=>{ setFuOpen(true); setFuDate(_tomorrowStr()); }}>＋ Set follow-up</button>
+                : fuDone
+                  ? <span className="hint" style={{color:GRN,fontWeight:800}}>Follow-up set ✓</span>
+                  : <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                        <input className="fi" type="date" value={fuDate} min={_todayStr} onChange={e=>setFuDate(e.target.value)} style={{maxWidth:170}}/>
+                        <span className="hint">lands on your to-do that day</span>
+                      </div>
+                      <input className="fi" value={fuText} onChange={e=>setFuText(e.target.value)} placeholder="What to follow up on (optional)"/>
+                      <div style={{display:"flex",gap:8}}><button className="crm-btn p" disabled={fuSaving} onClick={saveFollowup}>{fuSaving?"Saving…":"Set follow-up"}</button><button className="crm-btn" onClick={()=>{ setFuOpen(false); setFuText(""); }}>Cancel</button></div>
+                    </div>}
             </div>
             <div className="tl">
               {items.length===0&&<div className="crm-empty" style={{padding:"22px"}}>No notes yet.</div>}
