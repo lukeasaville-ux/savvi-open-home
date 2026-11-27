@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v201-no-logout-on-transient-unauthorized";
+const BUILD = "v202-todo-timestamps";
 // Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
 // whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
 // relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
@@ -4803,6 +4803,8 @@ const SV_CSS = `
 .sv-todo-main{min-width:0;cursor:pointer;}
 .sv-todo-nm{font-size:14px;font-weight:600;color:var(--ink);display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;}
 .sv-todo-kind{font-size:10.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-muted);}
+.sv-todo-when{font-size:10.5px;font-weight:500;color:var(--ink-muted);opacity:.85;white-space:nowrap;}
+.sv-todo-when::before{content:"·";margin:0 5px;opacity:.6;}
 .sv-todo-sub{font-size:12px;color:var(--ink-muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .sv-todo-row.done .sv-todo-nm,.sv-todo-row.done .sv-todo-sub{text-decoration:line-through;color:var(--ink-muted);}
 .sv-todo-due{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-muted);border:1px solid var(--hairline);border-radius:100px;padding:1px 7px;}
@@ -5137,6 +5139,19 @@ function crmBuildTodos(index, isExchanged){
   return out.sort((a,b)=>new Date(b.ts||0)-new Date(a.ts||0));
 }
 const TODO_KINDS={ second:"Second inspection", contract:"Reading the contract", callback:"Asked for a call", email:"Email reply", text:"Text reply", whatsapp:"WhatsApp", instagram:"Instagram", call:"Missed call", voicemail:"Voicemail", followup:"Follow-up", proposal:"Proposal follow-up", appraisal:"Appraisal follow-up", vendor:"Vendor report", buyercall:"Buyer calls" };
+// When a to-do item happened: the real message time the scan captured (`at`) when known, else when it
+// was filed (`createdAt`). Rendered small + muted so every item carries a date/time without shouting:
+// today "2:14pm", yesterday "Yest 2:14pm", otherwise "25 Nov, 2:14pm" (all Melbourne time).
+const _todoWhen=(ts)=>{ if(!ts) return ""; try{
+  const d=new Date(ts); if(isNaN(d.getTime())) return "";
+  const tm=d.toLocaleTimeString("en-AU",{hour:"numeric",minute:"2-digit",hour12:true,timeZone:"Australia/Melbourne"}).replace(/\s?[AP]M/i,m=>m.trim().toLowerCase());
+  const day=d.toLocaleDateString("en-CA",{timeZone:"Australia/Melbourne"});
+  const today=new Date().toLocaleDateString("en-CA",{timeZone:"Australia/Melbourne"});
+  const yday=new Date(Date.now()-864e5).toLocaleDateString("en-CA",{timeZone:"Australia/Melbourne"});
+  if(day===today) return tm;
+  if(day===yday) return "Yest "+tm;
+  return fmtDateTime(ts);
+}catch(e){ return ""; } };
 function _todoKey(agent){ return "savvi_todo_"+(agent||"x")+"_"+new Date().toISOString().slice(0,10); }
 function _todoLoad(agent){ try{ return JSON.parse(localStorage.getItem(_todoKey(agent))||"[]"); }catch(e){ return []; } }
 function _todoSave(agent,list){ try{ localStorage.setItem(_todoKey(agent),JSON.stringify(list)); }catch(e){} }
@@ -5195,7 +5210,7 @@ function SvTodo({agent,index,indexing,suggestions,onOpenContact}){
     <div className={"sv-todo-row"+(x.done?" done":"")+(over?" over":"")}>
       <button className={"sv-tick"+(x.done?" on":"")} aria-label={x.done?"Undo":"Done"} onClick={()=>toggle(x.id)}>{x.done?"✓":""}</button>
       <div className="sv-todo-main" style={x.link?{cursor:"pointer"}:undefined} onClick={()=>{ if(x.contactId&&onOpenContact){onOpenContact(x.contactId,x.propertyRef);} else if(x.link){ try{window.open(x.link,"_blank","noopener");}catch(e){} } }}>
-        <div className="sv-todo-nm">{x.name||x.text}{x.name&&x.kind?<span className="sv-todo-kind">{TODO_KINDS[x.kind]||x.kind}</span>:null}{over?<span className="sv-todo-due over">Overdue</span>:dueT?<span className="sv-todo-due">Due today</span>:null}</div>
+        <div className="sv-todo-nm">{x.name||x.text}{x.name&&x.kind?<span className="sv-todo-kind">{TODO_KINDS[x.kind]||x.kind}</span>:null}{(()=>{const w=_todoWhen(x.at||x.createdAt);return w?<span className="sv-todo-when">{w}</span>:null;})()}{over?<span className="sv-todo-due over">Overdue</span>:dueT?<span className="sv-todo-due">Due today</span>:null}</div>
         {x.sub?<div className="sv-todo-sub">{x.sub}</div>:null}
       </div>
       {!x.done&&(x.mobile||x.link)?<div className="sv-todo-act">
@@ -5222,7 +5237,7 @@ function SvTodo({agent,index,indexing,suggestions,onOpenContact}){
     <div key={s.id} className={"sv-todo-row"+(isDone?" done":"")}>
       <button className={"sv-tick"+(isDone?" on":"")} aria-label="Done" onClick={()=>toggleS(s.id)}>{isDone?"✓":""}</button>
       <div className="sv-todo-main" onClick={()=>onOpenContact&&onOpenContact(s.contactId,s.propertyRef)}>
-        <div className="sv-todo-nm">{s.name}<span className="sv-todo-kind">{TODO_KINDS[s.kind]||""}</span></div>
+        <div className="sv-todo-nm">{s.name}<span className="sv-todo-kind">{TODO_KINDS[s.kind]||""}</span>{(()=>{const w=_todoWhen(s.ts);return w?<span className="sv-todo-when">{w}</span>:null;})()}</div>
         <div className="sv-todo-sub">{s.sub}</div>
       </div>
       {s.mobile&&!isDone?<div className="sv-todo-act"><a className="sv-cta" href={tel(s.mobile)}>Call</a><a className="sv-cta" href={sms(s.mobile)}>Text</a></div>:null}
