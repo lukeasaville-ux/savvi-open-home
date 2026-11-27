@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v182-todo-open-link";
+const BUILD = "v183-crm-reskin-recency";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4844,7 +4844,152 @@ const SV_CSS = `
 
 .sv-note{font-size:12px;color:var(--ink-muted);line-height:1.5;}
 @media (max-width:1200px){ .sv-agents{grid-template-columns:1fr;} .sv-2col{grid-template-columns:1fr !important;} }
-.sv-2col{display:grid;grid-template-columns:minmax(0,1fr) 440px;gap:22px;align-items:start;}
+.sv-2col{display:grid;grid-template-columns:minmax(0,1fr) 520px;gap:22px;align-items:start;}
+`;
+
+/* ═══════════════════════════════════════════════════════════════════
+   Re-skin the REST of the desktop CRM (Opens, Listings, Contacts,
+   Buyer match, the record drawer, tables and dialogs) onto the approved
+   Option B design: butter / brown / sky / orange, square corners,
+   PP Editorial numerals, hairline borders, no shadows. Scoped to .crm
+   so the phone app is untouched; injected after CRM_CSS + SV_CSS so the
+   equal-specificity overrides win. Orange stays a marker only.
+═══════════════════════════════════════════════════════════════════ */
+const SV_CRM_SKIN = `
+/* page + top bar + search */
+.crm{background:var(--surface-muted);color:var(--ink);}
+.crm-top{background:var(--surface);border-bottom-color:var(--hairline);}
+.crm-top h1{font-family:var(--font-display);font-weight:400;font-synthesis:none;letter-spacing:-.01em;color:var(--ink);}
+.crm-top .sub{color:var(--ink-muted);}
+.crm-search input{background:var(--surface-muted);border:1.5px solid var(--hairline);border-radius:0;color:var(--ink);}
+.crm-search input:focus{border-color:var(--savvi-sky);background:var(--surface);}
+.crm-search .ico{color:var(--ink-muted);}
+.crm-search .kbd{color:var(--ink-muted);background:var(--surface);border:1px solid var(--hairline);border-radius:0;}
+.crm-search .drop{background:var(--surface);border:1px solid var(--hairline);border-radius:0;box-shadow:0 14px 34px rgba(49,30,16,.14);}
+.crm-search .drop .g,.crm-search .drop .r .m{color:var(--ink-muted);}
+.crm-search .drop .r:hover,.crm-search .drop .r.hl{background:var(--surface-muted);}
+
+/* sidebar */
+.crm-side{background:var(--savvi-brown);}
+.crm-brand span{color:rgba(255,244,213,.6);}
+.crm-nav button{color:rgba(255,244,213,.82);border-radius:0;}
+.crm-nav button:hover{background:rgba(255,244,213,.1);}
+.crm-nav button.on{background:var(--savvi-butter);color:var(--savvi-brown);}
+.crm-nav .ct{background:rgba(255,244,213,.16);color:var(--savvi-butter);border-radius:0;}
+.crm-nav button.on .ct{background:var(--savvi-brown);color:var(--savvi-butter);}
+.crm-side-foot{border-top-color:rgba(255,244,213,.14);}
+.crm-agent .nm{color:var(--savvi-butter);}
+.crm-agent .sub{color:rgba(255,244,213,.6);}
+.crm-linkbtn{color:rgba(255,244,213,.6);border-radius:0;}
+.crm-linkbtn:hover{color:var(--savvi-butter);background:rgba(255,244,213,.1);}
+
+/* buttons */
+.crm-btn{background:var(--surface);border:1px solid var(--hairline);border-radius:0;color:var(--ink);}
+.crm-btn:hover{background:var(--surface-muted);border-color:var(--ink-muted);}
+.crm-btn.p,.crm-btn.d{background:var(--savvi-brown);border-color:var(--savvi-brown);color:var(--savvi-butter);}
+.crm-btn.p:hover,.crm-btn.d:hover{background:#45301F;}
+.crm-btn.o{background:var(--savvi-orange);border-color:var(--savvi-orange);color:#fff;}
+
+/* cards, panels, stats */
+.crm-card,.crm-stat,.crm-tgt-card,.crm-list,.crm-lcard,.crm-dethead,.ws-head,.rec-sec{
+  background:var(--surface);border-color:var(--hairline);border-radius:0;box-shadow:none;}
+.crm-card .h{border-bottom-color:var(--hairline);color:var(--ink-muted);}
+.crm-card .h .ct{background:var(--surface-muted);border:1px solid var(--hairline);color:var(--ink-muted);border-radius:0;}
+.crm-stat:hover,.crm-lcard:hover{border-color:var(--savvi-sky);transform:none;}
+.crm-stat .n,.crm-tgt-grid .tn,.crm-tally .n,.ws-tally .n,.crm-lcard .a,.crm-dethead h2,.ws-title h2,.rec-head h2{
+  font-family:var(--font-display);font-weight:400;font-synthesis:none;letter-spacing:-.01em;color:var(--ink);}
+.crm-stat .l,.crm-tgt-grid .tl,.crm-tally .l,.ws-tally .l{color:var(--ink-muted);}
+.crm-stat.hot .n{color:#C0392B;}.crm-stat.due .n{color:var(--savvi-orange);}
+.crm-empty{color:var(--ink-muted);}
+
+/* split lists + rows */
+.crm-list .lh{border-bottom-color:var(--hairline);}
+.crm-list .lh input{background:var(--surface-muted);border:1.5px solid var(--hairline);border-radius:0;color:var(--ink);}
+.crm-list .lh input:focus{border-color:var(--savvi-sky);background:var(--surface);}
+.crm-daylbl{color:var(--ink-muted);}
+.crm-row{border-radius:0;}
+.crm-row:hover{background:var(--surface-muted);}
+.crm-row.on{background:var(--savvi-butter);border-color:var(--hairline);}
+.crm-row .t{color:var(--ink);}
+.crm-row .s,.crm-row .r .m{color:var(--ink-muted);}
+.crm-row .r .n{color:var(--ink);}
+
+/* listing cards grid */
+.crm-lcard .kicker,.crm-lcard .s{color:var(--ink-muted);}
+
+/* detail / workspace */
+.crm-dethead .kicker,.ws-title .kicker,.crm-dethead .meta,.ws-title .meta{color:var(--ink-muted);}
+.crm-dethead .auct,.ws-title .kicker .auct{color:var(--savvi-orange);}
+.crm-tools,.ws-actions,.crm-info{border-top-color:var(--hairline);}
+.ws-switch{background:var(--surface-muted);border:1px solid var(--hairline);border-radius:0;color:var(--ink);}
+.crm-linkbtn.dark{color:var(--savvi-brown);}
+.crm-linkbtn.dark:hover{background:var(--surface-muted);color:var(--savvi-brown);}
+
+/* tables */
+.crm-tbl th{background:var(--surface);color:var(--ink-muted);border-bottom-color:var(--hairline);}
+.crm-tbl td{border-bottom-color:var(--hairline);}
+.crm-tbl tr.r:hover td{background:var(--surface-muted);}
+.crm-tbl tr.hl td{background:var(--savvi-butter);}
+.crm-tbl .nm{color:var(--ink);}
+.crm-tbl .mut{color:var(--ink-muted);}
+.crm-tbl tr.grouphdr td{background:var(--surface-muted);border-top-color:var(--hairline);color:var(--ink);}
+.crm-tbl tr.grouphdr .gh-agent,.crm-tbl tr.grouphdr .gh-n{color:var(--ink-muted);}
+.crm-ck{border:1.5px solid var(--hairline);border-radius:0;background:var(--surface);}
+.crm-ck.on{background:var(--savvi-brown);border-color:var(--savvi-brown);}
+
+/* filters + segmented controls */
+.crm-filters,.crm-subfilters{border-bottom-color:var(--hairline);}
+.crm-filters .fchip,.crm-came .fchip{background:var(--surface);border:1px solid var(--hairline);border-radius:0;color:var(--ink-muted);}
+.crm-filters .fchip.on{background:var(--savvi-brown);color:var(--savvi-butter);border-color:var(--savvi-brown);}
+.crm-came .fchip.on{background:var(--savvi-sky);color:var(--savvi-brown);border-color:var(--savvi-sky);}
+.crm-filters input{background:var(--surface-muted);border:1.5px solid var(--hairline);border-radius:0;color:var(--ink);}
+.crm-filters input:focus{border-color:var(--savvi-sky);background:var(--surface);}
+.crm-came .lbl{color:var(--ink-muted);}
+.crm-seg{background:var(--surface-muted);border:1px solid var(--hairline);border-radius:0;}
+.crm-seg button{color:var(--ink-muted);border-radius:0;}
+.crm-seg button.on{background:var(--surface);color:var(--ink);box-shadow:none;}
+.crm-came .crm-clearx{color:var(--savvi-brown);}
+.crm-bulkbar{background:var(--savvi-butter);border-top-color:var(--hairline);color:var(--ink);}
+
+/* chips + heat (semantic, squared) */
+.chip,.heat,.ibadge{border-radius:0;}
+.chip.info{background:#EEF2FB;color:#3A5894;}
+
+/* old feed rows (if rendered) */
+.feed-r{border-top-color:var(--hairline);}
+.feed-r:hover{background:var(--surface-muted);}
+.feed-r .nm{color:var(--ink);}
+.feed-r .dt,.feed-r .when{color:var(--ink-muted);}
+.feed-gh{color:var(--ink);}.feed-gh .why{color:var(--ink-muted);}
+
+/* record drawer */
+.rec{background:var(--surface-muted);}
+.rec-head{background:var(--surface);border-bottom-color:var(--hairline);}
+.rec-head .x{background:var(--surface-muted);color:var(--ink);border-radius:0;}
+.rec-sec .sh2{color:var(--ink-muted);}
+.rec-sec .sh2 .lnk,.rec-attr .a{color:var(--savvi-brown);}
+.rec-attr{border-top-color:var(--hairline);color:var(--ink);}
+.rec-attr .k{color:var(--ink-muted);}
+.rec-attr .v{color:var(--ink);}
+.rec-attr .a.g{color:#1E8C50;}.rec-attr .a.o{color:var(--savvi-orange);}
+.rec-prop{border:1px solid var(--hairline);border-radius:0;background:var(--surface);}
+.rec-prop:hover{background:var(--surface-muted);}
+.rec-prop .a{color:var(--ink);}.rec-prop .s{color:var(--ink-muted);}
+.rec .ai-box{background:var(--savvi-butter);}
+.rec .fi,.tl-compose textarea,.rec-callbox,.rec-callbox textarea{background:var(--surface-muted);border:1px solid var(--hairline);border-radius:0;color:var(--ink);}
+.rec .fi:focus,.tl-compose textarea:focus,.tl-compose textarea.open,.rec-callbox textarea:focus{border-color:var(--savvi-sky);background:var(--surface);}
+.tl-i{border-top-color:var(--hairline);}
+.tl-i .dot{background:var(--surface-muted);border:1px solid var(--hairline);}
+.tl-i .txt{color:var(--ink);}.tl-i .txt.ev{color:var(--ink-muted);}
+.tl-i .ts,.tl-compose .hint{color:var(--ink-muted);}
+.tl-i .ts .ed{color:var(--savvi-brown);}
+.tl-compose{border-top-color:var(--hairline);}
+
+/* desktop dialogs + old mail rows */
+.crm-mode .sh{border-radius:0;box-shadow:0 24px 64px rgba(49,30,16,.26);}
+.mail-row:hover{background:var(--surface-muted);}
+.mail-from,.mail-subj .s{color:var(--ink);}
+.mail-subj,.mail-when{color:var(--ink-muted);}
 `;
 
 function crmInitials(n){ return (String(n||"").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2))||"?"; }
@@ -4867,15 +5012,15 @@ function crmBuildFeed(index, auctionByProp){
       // 1) Contract opened (genuine link clicks only) — EVERY recent open is logged here live,
       //    whether or not a call has been logged since. A note "Called since" just annotates it.
       const opens=contractClicks(i.contractOpens,i.resendId);
-      if(opens.length){ const last=opens[opens.length-1]; if(now-new Date(last)<30*day){ const calledSince=notes.some(n=>after(n.ts,last)&&/^(Called|Spoke|Call)/i.test(n.text||"")); out.push({k:"contract",c,i,when:last,calledSince,reason:`Opened the contract${opens.length>1?` ${opens.length}×`:""}${calledSince?" · called since":""}`}); } }
+      if(opens.length){ const last=opens[opens.length-1]; if(now-new Date(last)<2*day){ const calledSince=notes.some(n=>after(n.ts,last)&&/^(Called|Spoke|Call)/i.test(n.text||"")); out.push({k:"contract",c,i,when:last,calledSince,reason:`Opened the contract${opens.length>1?` ${opens.length}×`:""}${calledSince?" · called since":""}`}); } }
       // 2) Offer submitted — a buyer action, logged live.
       const offerNote=notes.filter(n=>/^\s*\[Offer\]/i.test(n.text||"")).pop();
-      if(offerNote&&offerNote.ts&&now-new Date(offerNote.ts)<30*day) out.push({k:"offer",c,i,when:offerNote.ts,reason:"Submitted an offer"});
+      if(offerNote&&offerNote.ts&&now-new Date(offerNote.ts)<2*day) out.push({k:"offer",c,i,when:offerNote.ts,reason:"Submitted an offer"});
       // 3) Registered to bid — any recent registration; name the auction when we know it.
       const bidNote=notes.filter(n=>/^\s*\[Bid registration\]/i.test(n.text||"")).pop();
-      if(bidNote&&bidNote.ts&&now-new Date(bidNote.ts)<30*day){ const auct=auctionByProp[i.propertyRef]; out.push({k:"bid",c,i,when:bidNote.ts,reason:auct?`Registered to bid · auction ${fmtAuction(auct)}`:"Registered to bid"}); }
+      if(bidNote&&bidNote.ts&&now-new Date(bidNote.ts)<2*day){ const auct=auctionByProp[i.propertyRef]; out.push({k:"bid",c,i,when:bidNote.ts,reason:auct?`Registered to bid · auction ${fmtAuction(auct)}`:"Registered to bid"}); }
       // 4) Offer / bid form opened but never submitted (a nudge to finish it off).
-      ["offer","bid"].forEach(kind=>{ const fo=(i.contractOpens||[]).filter(o=>o.kind===kind+"-opened").map(o=>o.at).sort(); if(!fo.length) return; const last=fo[fo.length-1]; const done=notes.some(n=>after(n.ts,last)&&(kind==="offer"?/^\s*\[Offer\]/i:/^\s*\[Bid registration\]/i).test(n.text||"")); if(!done&&now-new Date(last)<30*day) out.push({k:"form",c,i,when:last,reason:`Opened the ${kind==="offer"?"offer form":"bid registration"} but hasn't submitted it`}); });
+      ["offer","bid"].forEach(kind=>{ const fo=(i.contractOpens||[]).filter(o=>o.kind===kind+"-opened").map(o=>o.at).sort(); if(!fo.length) return; const last=fo[fo.length-1]; const done=notes.some(n=>after(n.ts,last)&&(kind==="offer"?/^\s*\[Offer\]/i:/^\s*\[Bid registration\]/i).test(n.text||"")); if(!done&&now-new Date(last)<2*day) out.push({k:"form",c,i,when:last,reason:`Opened the ${kind==="offer"?"offer form":"bid registration"} but hasn't submitted it`}); });
     });
   });
   // One row per contact+kind, newest first.
@@ -4896,10 +5041,15 @@ function crmBuildTodos(index){
     c.insps.forEach(i=>{ if(isDeadListing(i.statusText))return; (byProp[i.propertyRef]=byProp[i.propertyRef]||[]).push(i); });
     Object.entries(byProp).forEach(([ref,list])=>{
       const i0=list[0], addr=streetLine(i0.address,i0.suburb);
-      const visits=list.filter(i=>!i.isEnquiry).length;
-      if(visits>=2) push("second",c,ref,addr,"Second inspection · "+addr,null);
-      list.forEach(i=>{ const op=contractClicks(i.contractOpens,i.resendId).filter(t=>now-new Date(t)<day); if(op.length>=2) push("contract",c,ref,addr,"Opened the contract "+op.length+"× in 24h · "+addr,op[op.length-1]); });
-      list.forEach(i=>(i.notes||[]).forEach(n=>{ if(/needs? to call|call (?:luke|back)|luke to call|luke needs/i.test(n.text||"")) push("callback",c,ref,addr,snip(n.text),n.ts); }));
+      const visitInsps=list.filter(i=>!i.isEnquiry);
+      const visits=visitInsps.length;
+      // Second inspection: only if the most recent visit was within the last week (recent to-do only).
+      const lastVisit=visitInsps.map(i=>i.createdAt).filter(Boolean).sort().pop();
+      if(visits>=2 && lastVisit && now-new Date(lastVisit)<7*day) push("second",c,ref,addr,"Second inspection · "+addr,lastVisit);
+      // Contract opens: only within the last 48h, then it drops off.
+      list.forEach(i=>{ const op=contractClicks(i.contractOpens,i.resendId).filter(t=>now-new Date(t)<2*day); if(op.length>=2) push("contract",c,ref,addr,"Opened the contract "+op.length+"× in 48h · "+addr,op[op.length-1]); });
+      // "Luke to call" notes: only if the note is from the last week.
+      list.forEach(i=>(i.notes||[]).forEach(n=>{ if(/needs? to call|call (?:luke|back)|luke to call|luke needs/i.test(n.text||"") && n.ts && now-new Date(n.ts)<7*day) push("callback",c,ref,addr,snip(n.text),n.ts); }));
     });
   });
   return out.sort((a,b)=>new Date(b.ts||0)-new Date(a.ts||0));
@@ -5652,7 +5802,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const _needPerMo = _remaining/_per.monthsLeft;
   const _avgSoFar = (svModel?svModel.team.netGci:0)/_per.monthsElapsed;
 
-  const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"targets",l:"Targets",ic:"◪",ct:teamPct!=null?Math.round(teamPct)+"%":null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:activeCount},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"match",l:"Buyer match",ic:"◎"}];
+  const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:activeCount},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"targets",l:"Targets",ic:"◪",ct:teamPct!=null?Math.round(teamPct)+"%":null},{k:"match",l:"Buyer match",ic:"◎"}];
   const title={today:"Today",targets:"Targets",opens:"Open homes",listings:"Listings",contacts:"Contacts",owners:"Owners",match:"Buyer match"}[tab];
   const subtitle={today:new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"}),targets:"Pace against the 2026 plan",opens:`${opens.length} this week`,listings:`${activeCount} active`,contacts:contacts?`${contacts.length} people · ${hotCount} hot`:"loading…",owners:index?`${index.owners.length} people who own property with Savvi`:"loading…",match:"Describe a property, find the buyers"}[tab];
   const _q=dq.trim().toLowerCase(); const _m=o=>!_q||((o.address||"")+" "+(o.suburb||"")).toLowerCase().includes(_q);
@@ -5696,7 +5846,6 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
               </select>
             </div>
             <SvBand cells={todayBandCells}/>
-            <div className="sv-agents">{agentPanels}</div>
             <div className="sv-2col">
               <SvTodo agent={agentName} index={index} indexing={indexing} suggestions={todoSuggestions} onOpenContact={onOpenContact}/>
               <div style={{display:"flex",flexDirection:"column",gap:22,minWidth:0}}>
@@ -9399,6 +9548,7 @@ export default function App(){
     <style>{CSS}</style>
     {isDesktop&&<style>{CRM_CSS}</style>}
     {isDesktop&&<style>{SV_CSS}</style>}
+    {isDesktop&&<style>{SV_CRM_SKIN}</style>}
 
     {isDesktop&&<DesktopCRM agentName={agentName} opens={visibleOpens} openDays={openDays} opensByDay={opensByDay} opensStale={opensStale} allListings={allListings} listingsOnly={listingsOnly} propIndex={propIndex} onOpenContact={openContact} onLogout={()=>{logout();setAgentName("");}} searchLoadingId={searchLoadingId} crm={crm}/>}
 
