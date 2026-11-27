@@ -10,35 +10,45 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v190-voicemail-kind";
-// Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
-let SESSION_TOKEN = null;
-try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
+const BUILD = "v191-durable-login";
+// Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
+// whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
+// relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
+// session token used to live in sessionStorage alone, which is why Sam was dropped to the PIN
+// screen every time he reopened the app (his device stayed trusted, but the token vanished).
+function _storeGet(k) {
+  try { const v = localStorage.getItem(k); if (v != null) return v; } catch (e) {}
+  try { const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + k + '=([^;]+)')); if (m) return decodeURIComponent(m[1]); } catch (e) {}
+  try { const v = sessionStorage.getItem(k); if (v != null) return v; } catch (e) {}
+  return null;
+}
+function _storeSet(k, v, maxAgeSec) {
+  try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {}
+  try { document.cookie = k + "=" + (v == null ? "" : encodeURIComponent(v)) + "; path=/; max-age=" + (v == null ? 0 : (maxAgeSec || 34560000)) + "; SameSite=Lax; Secure"; } catch (e) {}
+  try { if (v == null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v); } catch (e) {}
+}
+// Recover the agent name straight from a signed token (v1.<b64url-json>.<sig>) when the stored
+// "who" is missing, so a valid token never shows a blank/PIN screen just because one store was wiped.
+function _whoFromTok(t) {
+  try { const j = JSON.parse(atob(String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); return j.who || ""; } catch (e) { return ""; }
+}
+
 // Stable per-device id so a verified device can skip the texted code for 30 days (set server-side).
-// Persisted in BOTH a first-party cookie and localStorage, each guarded on its own, so the id
-// survives even when one store is blocked. iOS Home Screen (standalone) web apps routinely throw
-// on localStorage; the cookie covers that case. Re-written every launch so its lifetime refreshes.
-function _devGetCookie() {
-  try { const m = document.cookie.match(/(?:^|;\s*)savvi_device_id=([^;]+)/); return m ? decodeURIComponent(m[1]) : null; } catch (e) { return null; }
-}
-function _devSetCookie(id) {
-  try { document.cookie = "savvi_device_id=" + encodeURIComponent(id) + "; path=/; max-age=34560000; SameSite=Lax; Secure"; } catch (e) {}
-}
-function _devGetLocal() { try { return localStorage.getItem("savvi_device_id"); } catch (e) { return null; } }
-function _devSetLocal(id) { try { localStorage.setItem("savvi_device_id", id); } catch (e) {} }
-// Read from whichever store has it; never discard a good id just because one store throws.
-let DEVICE_ID = _devGetLocal() || _devGetCookie();
+let DEVICE_ID = _storeGet("savvi_device_id");
 if (!DEVICE_ID) {
   DEVICE_ID = ((window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : (Math.random().toString(36).slice(2) + Date.now().toString(36))).replace(/-/g, "");
 }
-_devSetLocal(DEVICE_ID);
-_devSetCookie(DEVICE_ID);
+_storeSet("savvi_device_id", DEVICE_ID);
+
+// Session token + who, persisted DURABLY so a reload, pull-to-refresh, tab close or PWA relaunch
+// does not drop the agent to the PIN screen. The token self-expires server-side (signed), so a
+// stale copy is harmless: the server rejects it and the agent re-enters just their PIN (no code).
+let SESSION_TOKEN = _storeGet("savvi_tok") || null;
 function persistSession(token, who) {
   SESSION_TOKEN = token || null;
-  try {
-    if (token) { sessionStorage.setItem("savvi_tok", token); if (who) sessionStorage.setItem("savvi_who", who); }
-    else { sessionStorage.removeItem("savvi_tok"); sessionStorage.removeItem("savvi_who"); }
-  } catch (e) {}
+  _storeSet("savvi_tok", token || null);
+  if (who) _storeSet("savvi_who", who);
+  else if (!token) _storeSet("savvi_who", null);
 }
 
 // Set by the app so an expired/invalid session (e.g. after the backend restarts)
@@ -8753,7 +8763,7 @@ function ProposalSheet({ open, onClose, agentName }){
 }
 
 export default function App(){
-  const[agentName,setAgentName]=useState(()=>{ try { return SESSION_TOKEN ? (sessionStorage.getItem("savvi_who")||"") : ""; } catch(e){ return ""; } });
+  const[agentName,setAgentName]=useState(()=> SESSION_TOKEN ? (_storeGet("savvi_who")||_whoFromTok(SESSION_TOKEN)||"") : "");
   const[screen,setScreen]=useState("home");
   // Desktop CRM: on a genuinely wide screen (computer), show a HubSpot-style CRM shell
   // instead of the phone layout. A phone in portrait is ≤460px — well under this — so the
