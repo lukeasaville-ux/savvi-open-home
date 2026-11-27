@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v193-followup-tasks";
+const BUILD = "v194-followup-ui";
 // Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
 // whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
 // relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
@@ -4792,7 +4792,7 @@ const SV_CSS = `
 .sv-todo-due{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-muted);border:1px solid var(--hairline);border-radius:100px;padding:1px 7px;}
 .sv-todo-due.over{color:#B42318;border-color:#F3B4AC;background:#FEF3F2;}
 .sv-todo-row.over{box-shadow:inset 3px 0 0 #D92D20;}
-.tl-followup{padding:2px 0 10px;}
+.tl-followup{padding:0 14px 12px;}
 .sv-tick{flex:0 0 auto;width:20px;height:20px;border:1.5px solid var(--hairline);background:#fff;border-radius:0;cursor:pointer;color:var(--savvi-butter);font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;}
 .sv-tick:hover{border-color:var(--ink-muted);}
 .sv-tick.on{background:var(--savvi-brown);border-color:var(--savvi-brown);}
@@ -5283,20 +5283,19 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
               <textarea className={noteOpen||noteText?"open":""} placeholder={`Add a note about ${first||"this buyer"}…`} value={noteText} onChange={e=>setNoteText(e.target.value)} onFocus={()=>setNoteOpen(true)} onKeyDown={e=>{ if((e.metaKey||e.ctrlKey)&&e.key==="Enter") saveNote(); }}/>
               {(noteOpen||noteText)&&<div className="row"><button className="crm-btn p" disabled={!noteText.trim()} onClick={saveNote}>Save note</button><button className="crm-btn" onClick={()=>{ setNoteOpen(false); setNoteText(""); }}>Cancel</button><span className="hint">⌘↵ to save</span></div>}
             </div>
-            <div className="tl-followup">
-              {!fuOpen
-                ? <button className="crm-btn" onClick={()=>{ setFuOpen(true); setFuDate(_tomorrowStr()); }}>＋ Set follow-up</button>
-                : fuDone
-                  ? <span className="hint" style={{color:GRN,fontWeight:800}}>Follow-up set ✓</span>
-                  : <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                        <input className="fi" type="date" value={fuDate} min={_todayStr} onChange={e=>setFuDate(e.target.value)} style={{maxWidth:170}}/>
-                        <span className="hint">lands on your to-do that day</span>
-                      </div>
-                      <input className="fi" value={fuText} onChange={e=>setFuText(e.target.value)} placeholder="What to follow up on (optional)"/>
-                      <div style={{display:"flex",gap:8}}><button className="crm-btn p" disabled={fuSaving} onClick={saveFollowup}>{fuSaving?"Saving…":"Set follow-up"}</button><button className="crm-btn" onClick={()=>{ setFuOpen(false); setFuText(""); }}>Cancel</button></div>
-                    </div>}
-            </div>
+            {!fuOpen
+              ? <div className="tl-followup"><button className="crm-btn" onClick={()=>{ setFuOpen(true); setFuDate(_tomorrowStr()); }}>＋ Set follow-up</button></div>
+              : fuDone
+                ? <div className="rec-callbox"><span className="hint" style={{color:GRN,fontWeight:800}}>Follow-up set ✓</span></div>
+                : <div className="rec-callbox">
+                    <div style={{fontSize:12.5,fontWeight:800,color:BROWN,marginBottom:9}}>Set a follow-up for {first}</div>
+                    <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:9}}>
+                      <input className="fi" type="date" value={fuDate} min={_todayStr} onChange={e=>setFuDate(e.target.value)} style={{maxWidth:160,width:"auto"}}/>
+                      <span className="hint" style={{fontSize:11.5,color:BROWN_L}}>lands on your to-do that day</span>
+                    </div>
+                    <input className="fi" value={fuText} onChange={e=>setFuText(e.target.value)} placeholder="What to follow up on (optional)" style={{marginBottom:9}}/>
+                    <div style={{display:"flex",gap:8}}><button className="crm-btn p" disabled={fuSaving} onClick={saveFollowup}>{fuSaving?"Saving…":"Set follow-up"}</button><button className="crm-btn" onClick={()=>{ setFuOpen(false); setFuText(""); }}>Cancel</button></div>
+                  </div>}
             <div className="tl">
               {items.length===0&&<div className="crm-empty" style={{padding:"22px"}}>No notes yet.</div>}
               {items.map(it=><div key={it.id} className="tl-i">
