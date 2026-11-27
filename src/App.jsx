@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v188-contacts-fast";
+const BUILD = "v189-contracts-exchanged";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5023,13 +5023,18 @@ const HeatBadge=({b})=>{ const h=buyerHeat(b); if(!h.score) return null; const c
 const IBadge=({v,dash})=>v?<span className={`ibadge sm ${iCl(v)}`}>{iLbl(v)}</span>:(dash?<span className="mut">—</span>:null);
 
 /* ── Today feed: what needs a human today, computed from the whole CRM index ── */
-function crmBuildFeed(index, auctionByProp){
+function crmBuildFeed(index, auctionByProp, isExchanged){
   if(!index) return [];
-  const now=Date.now(), day=864e5, out=[];
+  const now=Date.now(), day=864e5, out=[]; const exSeen=new Set();
   const after=(ts,cmp)=>ts&&cmp&&new Date(ts)>new Date(cmp);
   index.contacts.forEach(c=>{
     c.insps.forEach(i=>{
       if(isDeadListing(i.statusText)) return; // a sold/settled/withdrawn listing needs no follow-up
+      // Contracts exchanged (a Contract of Sale executed in the app): the deal is done, so the
+      // earlier offer/contract-reading chatter is stale. Show one "exchanged" row per property
+      // and skip everything else for it.
+      const ex=isExchanged&&isExchanged(i.address,i.suburb);
+      if(ex){ const key=i.propertyRef||streetLine(i.address,i.suburb); if(!exSeen.has(key)){ exSeen.add(key); const when=ex.completedAt||null; if(!when||now-new Date(when)<30*day) out.push({k:"exchanged",c,i,when:when||now,reason:"Contracts exchanged"}); } return; }
       const notes=i.notes||[];
       // 1) Contract opened (genuine link clicks only) — EVERY recent open is logged here live,
       //    whether or not a call has been logged since. A note "Called since" just annotates it.
@@ -5048,12 +5053,12 @@ function crmBuildFeed(index, auctionByProp){
   // One row per contact+kind, newest first.
   const seen=new Set(); return out.filter(r=>{ const k=r.k+"|"+r.c.contactId+"|"+r.i.propertyRef; if(seen.has(k)) return false; seen.add(k); return true; }).sort((a,b)=>new Date(b.when||0)-new Date(a.when||0));
 }
-const FEED_KINDS={ contract:{t:"Contract opened",why:"they're reading it: call while it's warm",ic:"📄"}, offer:{t:"Offer submitted",why:"act on it today",ic:"✅"}, bid:{t:"Registered to bid",why:"confirm they're set for auction day",ic:"🔨"}, form:{t:"Form opened, not submitted",why:"a nudge usually gets it over the line",ic:"📝"} };
+const FEED_KINDS={ exchanged:{t:"Contracts exchanged",why:"signed in the app: the deal is done",ic:"🖊"}, contract:{t:"Contract opened",why:"they're reading it: call while it's warm",ic:"📄"}, offer:{t:"Offer submitted",why:"act on it today",ic:"✅"}, bid:{t:"Registered to bid",why:"confirm they're set for auction day",ic:"🔨"}, form:{t:"Form opened, not submitted",why:"a nudge usually gets it over the line",ic:"📝"} };
 
 /* ── Today to-do: follow-up suggestions computed from the CRM index (Phase-2 auto items). ──
    Each carries name + mobile + a one-line reason + a stable id so a "done" tick sticks for the day.
    (Manual lines + these suggestions share one list; external email/text/IG scans will append here later.) */
-function crmBuildTodos(index){
+function crmBuildTodos(index, isExchanged){
   if(!index) return [];
   const now=Date.now(), day=864e5, out=[], seen=new Set();
   const snip=t=>String(t||"").replace(/\s+/g," ").trim().slice(0,80);
@@ -5063,6 +5068,7 @@ function crmBuildTodos(index){
     c.insps.forEach(i=>{ if(isDeadListing(i.statusText))return; (byProp[i.propertyRef]=byProp[i.propertyRef]||[]).push(i); });
     Object.entries(byProp).forEach(([ref,list])=>{
       const i0=list[0], addr=streetLine(i0.address,i0.suburb);
+      if(isExchanged&&isExchanged(i0.address,i0.suburb)) return; // deal exchanged: no follow-ups needed
       const visitInsps=list.filter(i=>!i.isEnquiry);
       const visits=visitInsps.length;
       // Second inspection: only if the most recent visit was within the last week (recent to-do only).
@@ -5555,6 +5561,10 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   // Today-band scope (Team / per agent). Same default as the chart: Luke sees the team, others see themselves.
   const [todayScope,setTodayScope]=useState(()=> (agentName && agentName!=="Luke" && SV_AGENT_CODE[agentName]) ? SV_AGENT_CODE[agentName] : "team");
   useEffect(()=>{ let on=true; (async()=>{ try{ const j=await call("getTargets"); if(on) setTdata(j&&j.ok?(j.data||null):null); }catch(e){ if(on) setTdata(null); } })(); return ()=>{on=false;}; },[]);
+  // Properties whose Contract of Sale is executed in the app (DocuSeal) = exchanged; the feed
+  // shows "Contracts exchanged" and drops the stale offer/contract chatter for them.
+  const [exch,setExch]=useState([]);
+  useEffect(()=>{ let on=true; (async()=>{ try{ const j=await call("getExchangedContracts"); if(on&&j&&j.ok&&Array.isArray(j.data)) setExch(j.data); }catch(e){} })(); return ()=>{on=false;}; },[]);
 
   const loadIndex=useCallback(async(force)=>{ if(indexing) return; if(!force&&index&&Date.now()-indexAt<60*1000) return; setIndexing(true); try{ const ix=await Attio.getCrmIndex(); if(ix) { setIndex(ix); setIndexAt(Date.now()); } }catch(e){} setIndexing(false); },[index,indexAt,indexing]);
   useEffect(()=>{ loadIndex(false); },[]);
@@ -5571,8 +5581,17 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const select=(oh)=>{ setSel(oh); setTq(""); setTf("all"); setShowInfo(false); crm.enterOpenHome(oh); };
   const auctionByProp=useMemo(()=>{ const m={}; [...(allListings||[]),...(opens||[])].forEach(o=>{ const pid=o.propertyId||o.id; if(o.auctionDate&&pid&&!m[pid]) m[pid]=o.auctionDate; }); return m; },[allListings,opens]);
   const activeCount=(allListings||[]).filter(p=>!["sold","withdrawn","off-market","under offer"].includes(String(p.statusText||"").toLowerCase())).length;
-  const feed=useMemo(()=>crmBuildFeed(index,auctionByProp),[index,auctionByProp]);
-  const todoSuggestions=useMemo(()=>crmBuildTodos(index),[index]);
+  // Match an inspection's property to an exchanged Contract of Sale (normalised street address,
+  // tolerant of a suburb being present on one side only).
+  const isExchanged=useCallback((address,suburb)=>{
+    if(!exch||!exch.length) return null;
+    const base=String(streetLine(address,suburb)||address||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+    if(base.length<6) return null;
+    for(const e of exch){ const n=e&&e.norm; if(n&&n.length>=6&&(n===base||n.startsWith(base)||base.startsWith(n))) return e; }
+    return null;
+  },[exch]);
+  const feed=useMemo(()=>crmBuildFeed(index,auctionByProp,isExchanged),[index,auctionByProp,isExchanged]);
+  const todoSuggestions=useMemo(()=>crmBuildTodos(index,isExchanged),[index,isExchanged]);
   const contacts=index?index.contacts:null;
   const hotCount=(contacts||[]).filter(c=>c.liveInterest==="hot").length;
 
