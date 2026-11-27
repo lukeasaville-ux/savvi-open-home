@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v200-fix-crm-button-fullscreen-collision";
+const BUILD = "v201-no-logout-on-transient-unauthorized";
 // Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
 // whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
 // relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
@@ -31,6 +31,15 @@ function _storeSet(k, v, maxAgeSec) {
 // "who" is missing, so a valid token never shows a blank/PIN screen just because one store was wiped.
 function _whoFromTok(t) {
   try { const j = JSON.parse(atob(String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); return j.who || ""; } catch (e) { return ""; }
+}
+// True only when we hold a signed token (v1.<b64url-json>.<sig>) whose embedded exp is still in the
+// future. The session token self-expires server-side, so while OUR copy is unexpired an "unauthorized"
+// on a single call is a transient server hiccup, never a real expiry. This lets the watchdog tell the
+// two apart so a valid, live session is NEVER dropped to the PIN screen by a one-off blip — the exact
+// "logs in for a split second then straight back to login" bug. A missing/legacy/expired token returns
+// false, so a genuinely dead session still logs out as before (and the 12h exp is the natural ceiling).
+function _tokLiveLocally(t) {
+  try { const j = JSON.parse(atob(String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); return typeof j.exp === "number" && Date.now() < j.exp - 5000; } catch (e) { return false; }
 }
 
 // Stable per-device id so a verified device can skip the texted code for 30 days (set server-side).
@@ -96,8 +105,15 @@ async function call(action, params = {}) {
       if (r.status >= 500) { lastErr = "server"; }
       else {
         const j = await r.json();
-        if (j && j.ok === false && j.error === "unauthorized" && action !== "login" && onUnauthorized) onUnauthorized();
-        return j;
+        if (j && j.ok === false && j.error === "unauthorized" && action !== "login") {
+          // Only drop to the PIN screen when our token is actually gone or past its own exp.
+          // If it's still live locally, this "unauthorized" is a transient hiccup: keep the
+          // session, retry (reads), and on exhaustion return the soft error WITHOUT logging out.
+          if (!_tokLiveLocally(SESSION_TOKEN)) { if (onUnauthorized) onUnauthorized(); return j; }
+          lastErr = "unauthorized";
+        } else {
+          return j;
+        }
       }
     } catch (e) {
       clearTimeout(timer);
@@ -8932,7 +8948,10 @@ function ProposalSheet({ open, onClose, agentName }){
 }
 
 export default function App(){
-  const[agentName,setAgentName]=useState(()=> SESSION_TOKEN ? (_storeGet("savvi_who")||_whoFromTok(SESSION_TOKEN)||"") : "");
+  // Only treat a STILL-LIVE signed token as "logged in" on mount. An expired/stale stored token must
+  // go straight to the PIN screen, not flash the app for a split second and then fire a doomed data
+  // burst whose "unauthorized" bounces us back to PIN — that flash + bounce is the logout complaint.
+  const[agentName,setAgentName]=useState(()=> _tokLiveLocally(SESSION_TOKEN) ? (_storeGet("savvi_who")||_whoFromTok(SESSION_TOKEN)||"") : "");
   const[screen,setScreen]=useState("home");
   // Desktop CRM: on a genuinely wide screen (computer), show a HubSpot-style CRM shell
   // instead of the phone layout. A phone in portrait is ≤460px — well under this — so the
