@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v195-add-to-crm";
+const BUILD = "v196-followups-on-record";
 // Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
 // whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
 // relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
@@ -4793,6 +4793,15 @@ const SV_CSS = `
 .sv-todo-due.over{color:#B42318;border-color:#F3B4AC;background:#FEF3F2;}
 .sv-todo-row.over{box-shadow:inset 3px 0 0 #D92D20;}
 .tl-followup{padding:0 14px 12px;}
+.fu-list{padding:4px 14px 12px;display:flex;flex-direction:column;gap:7px;}
+.fu-h{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-muted);margin-bottom:2px;}
+.fu-row{display:flex;align-items:flex-start;gap:10px;padding:9px 11px;border:1px solid var(--hairline);background:var(--surface-muted);}
+.fu-chip{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:100px;background:var(--surface);border:1px solid var(--hairline);color:var(--ink-muted);margin-bottom:4px;}
+.fu-chip.over{background:#FEF3F2;border-color:#F3B4AC;color:#B42318;}
+.fu-chip.today{background:#FFF7E8;border-color:#F0D9A8;color:#8A5A12;}
+.fu-txt{font-size:13px;color:var(--ink);line-height:1.4;}
+.fu-act{display:flex;gap:10px;flex:0 0 auto;}
+.fu-edit{display:flex;flex-direction:column;gap:8px;width:100%;}
 .sv-tick{flex:0 0 auto;width:20px;height:20px;border:1.5px solid var(--hairline);background:#fff;border-radius:0;cursor:pointer;color:var(--savvi-butter);font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;}
 .sv-tick:hover{border-color:var(--ink-muted);}
 .sv-tick.on{background:var(--savvi-brown);border-color:var(--savvi-brown);}
@@ -5229,7 +5238,8 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
   const [copied,setCopied]=useState(false); const [copiedEmail,setCopiedEmail]=useState(false); const [manage,setManage]=useState(false); const [xfer,setXfer]=useState(false);
   const [checkin,setCheckin]=useState(""); const [crossNotes,setCrossNotes]=useState(null);
   const [fuOpen,setFuOpen]=useState(false); const [fuDate,setFuDate]=useState(""); const [fuText,setFuText]=useState(""); const [fuSaving,setFuSaving]=useState(false); const [fuDone,setFuDone]=useState(false);
-  useEffect(()=>{ setNoteText(""); setNoteOpen(false); setEditing(false); setEditNoteId(null); setCallOpen(false); setManage(false); setXfer(false); setCheckin(""); setCrossNotes(null); setFuOpen(false); setFuText(""); setFuDate(""); setFuDone(false); },[buyer?.id,open]);
+  const [fuList,setFuList]=useState([]); const [fuEditId,setFuEditId]=useState(null); const [fuEd,setFuEd]=useState({date:"",text:""});
+  useEffect(()=>{ setNoteText(""); setNoteOpen(false); setEditing(false); setEditNoteId(null); setCallOpen(false); setManage(false); setXfer(false); setCheckin(""); setCrossNotes(null); setFuOpen(false); setFuText(""); setFuDate(""); setFuDone(false); setFuEditId(null); },[buyer?.id,open]);
   useEffect(()=>{ if(!open) return; const k=e=>{ if(e.key==="Escape") onClose(); }; window.addEventListener("keydown",k); return ()=>window.removeEventListener("keydown",k); },[open,onClose]);
   // Bio: generate once per buyer if missing (same helper as the phone card).
   const genProfile=async(b,pid,noteTexts)=>{ if(!b||!pid) return; const texts=(noteTexts&&noteTexts.length)?noteTexts:(b.notes||[]).map(n=>n.text); onSetProfile(pid,b.id,{loading:true}); try{ const parsed=await aiBuyerProfile({...b,notes:texts.map(t=>({text:t}))}); onSetProfile(pid,b.id,{loading:false,bio:parsed.bio,stage:parsed.stage||"Early"}); }catch(e){ onSetProfile(pid,b.id,{loading:false,bio:texts.slice(-3).join(" "),stage:b.interest==="hot"?"Offer":b.interest==="watching"?"Considering":"Early"}); } };
@@ -5243,12 +5253,24 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
   // Set a dated follow-up on this contact. It lands on the logged-in agent's Today to-do list on
   // the due date (hidden until then), and turns "Overdue" if the day passes untouched. Wired into
   // the same per-agent to-do store the inbox scan + manual lines use (addTodo, forDate field).
+  // Pending follow-ups set on THIS contact (so Luke can see + edit them on the record). Follow-ups
+  // are per-agent, so this shows the logged-in agent's. Future-dated ones show here even though they
+  // stay hidden on the Today list until due.
+  const loadFollowups=()=>{ if(!buyer||!buyer.contactId){ setFuList([]); return; } call("getTodos").then(r=>{ if(r&&r.ok&&Array.isArray(r.data)) setFuList(r.data.filter(t=>t&&t.kind==="followup"&&t.contactId===buyer.contactId&&!t.done).sort((a,b)=>(a.forDate||"")<(b.forDate||"")?-1:1)); }).catch(()=>{}); };
+  useEffect(()=>{ if(open&&buyer&&buyer.contactId) loadFollowups(); else setFuList([]); },[open,buyer?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const _fuSub=(t)=>t||("Follow up with "+(first||"this buyer")+(openHome?" · "+(streetLine(openHome.address,openHome.suburb)||""):""));
   const saveFollowup=async()=>{ const date=fuDate||_tomorrowStr(); const t=fuText.trim(); setFuSaving(true);
     try{ await call("addTodo",{ kind:"followup", name:buyer.name||"", mobile:buyer.mobile||"",
-      sub:t||("Follow up with "+(first||"this buyer")+(openHome?" · "+(streetLine(openHome.address,openHome.suburb)||""):"")),
-      contactId:buyer.contactId||null, propertyRef:(openHome&&(openHome._listing||openHome.propertyId))||null, forDate:date });
-      setFuDone(true); setTimeout(()=>{ setFuOpen(false); setFuDone(false); setFuText(""); setFuDate(""); },1400);
+      sub:_fuSub(t), contactId:buyer.contactId||null, propertyRef:(openHome&&(openHome._listing||openHome.propertyId))||null, forDate:date });
+      loadFollowups(); setFuDone(true); setTimeout(()=>{ setFuOpen(false); setFuDone(false); setFuText(""); setFuDate(""); },1400);
     }catch(e){} finally{ setFuSaving(false); } };
+  // Edit a follow-up = remove + re-add (no updateTodo action; a follow-up has no dedupeKey so this is clean).
+  const startFuEdit=(f)=>{ setFuEditId(f.id); setFuEd({date:f.forDate||"",text:f.sub||""}); };
+  const saveFuEdit=async(f)=>{ const date=fuEd.date||f.forDate||_todayStr;
+    try{ await call("removeTodo",{id:f.id}); await call("addTodo",{ kind:"followup", name:buyer.name||"", mobile:buyer.mobile||"", sub:_fuSub(fuEd.text.trim()), contactId:buyer.contactId||null, propertyRef:f.propertyRef||null, forDate:date }); }catch(e){}
+    setFuEditId(null); loadFollowups(); };
+  const removeFu=async(id)=>{ try{ await call("removeTodo",{id}); }catch(e){} loadFollowups(); };
+  const _fmtFuDate=(d)=>{ try{ return new Date(d+"T00:00").toLocaleDateString("en-AU",{weekday:"short",day:"numeric",month:"short"}); }catch(e){ return d; } };
   const startEdit=()=>{ setEName(buyer.name||""); setEMobile(buyer.mobile||""); setEEmail(buyer.email||""); setEditing(true); };
   const saveDetails=async()=>{ setSavingEdit(true); try{ await onUpdateDetails(propId,buyer.id,{name:eName.trim(),mobile:eMobile.trim(),email:eEmail.trim()}); setEditing(false); }finally{ setSavingEdit(false); } };
   const days=buyer._createdAt?Math.max(0,Math.round((Date.now()-new Date(buyer._createdAt))/864e5)):null;
@@ -5345,6 +5367,25 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
                     <input className="fi" value={fuText} onChange={e=>setFuText(e.target.value)} placeholder="What to follow up on (optional)" style={{marginBottom:9}}/>
                     <div style={{display:"flex",gap:8}}><button className="crm-btn p" disabled={fuSaving} onClick={saveFollowup}>{fuSaving?"Saving…":"Set follow-up"}</button><button className="crm-btn" onClick={()=>{ setFuOpen(false); setFuText(""); }}>Cancel</button></div>
                   </div>}
+            {fuList.length>0&&<div className="fu-list">
+              <div className="fu-h">Follow-ups</div>
+              {fuList.map(f=>{ const over=f.forDate&&f.forDate<_todayStr, today=f.forDate===_todayStr;
+                return <div key={f.id} className="fu-row">
+                  {fuEditId===f.id
+                    ? <div className="fu-edit">
+                        <input className="fi" type="date" value={fuEd.date} min={_todayStr} onChange={e=>setFuEd({...fuEd,date:e.target.value})} style={{maxWidth:150,width:"auto"}}/>
+                        <input className="fi" value={fuEd.text} onChange={e=>setFuEd({...fuEd,text:e.target.value})} placeholder="Follow-up note"/>
+                        <div style={{display:"flex",gap:8}}><button className="crm-btn p" onClick={()=>saveFuEdit(f)}>Save</button><button className="crm-btn" onClick={()=>setFuEditId(null)}>Cancel</button></div>
+                      </div>
+                    : <>
+                        <div style={{minWidth:0,flex:1}}>
+                          <span className={"fu-chip"+(over?" over":today?" today":"")}>{over?"Overdue":today?"Due today":_fmtFuDate(f.forDate)}</span>
+                          <div className="fu-txt">{f.sub}</div>
+                        </div>
+                        <div className="fu-act"><span className="lnk" onClick={()=>startFuEdit(f)}>Edit</span><span className="lnk" onClick={()=>removeFu(f.id)}>Remove</span></div>
+                      </>}
+                </div>; })}
+            </div>}
             <div className="tl">
               {items.length===0&&<div className="crm-empty" style={{padding:"22px"}}>No notes yet.</div>}
               {items.map(it=><div key={it.id} className="tl-i">
