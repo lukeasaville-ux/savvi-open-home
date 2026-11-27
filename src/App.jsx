@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v198-fix-buyer-record-crash";
+const BUILD = "v199-calendar-true-centre";
 // Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
 // whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
 // relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
@@ -6597,17 +6597,19 @@ const CAL_ORANGE = "#FE5310", CAL_BLUE = "#8AACE3", CAL_CREAM = "#FFF4D5";
 const CAL_METHOD_LABEL = { "auction":"Auction", "private-sale":"Private Sale", "offmkt-auction":"Two Stage Auction", "offmkt-private":"Two Stage Private Sale" };
 // Real Canva frames (logo + title + method label + MON–SUN + bands + grid, in the actual PP Editorial
 // fonts) are the PDF base; only day labels + activities are drawn on top in Neue Haas. Geometry is in
-// the frame's own top-origin points: cols = each column's day-label x (left aligned), rows = each week's
-// day-label top y, dx = day-label x → cell centre.
+// the frame's own top-origin points. gl/gr = the grid's left + right vertical rule x (measured straight
+// off the Canva artwork by rendering the frame and detecting the column rules), so every cell centre is
+// gl+(c+0.5)*(gr-gl)/7 — a true uniform grid, NOT per-column hand-measured label positions (those drifted
+// the text ~3px left of centre). rows = each week's day-label top y.
 // rowH = cell height (for vertical-centring the activity). cover = cream strips (top-origin [x0,y0,x1,y1])
 // painted over the faint decorative edge rules the Canva masters bake into the background image, so the
 // page reads as one uniform cream sheet. 612 masters bleed off the sides (only top/bottom rules); the
 // two-stage 842 masters carry a full inset rectangle (all four sides).
 const CAL_FRAMES = {
-  "auction":        { frame:"/calendar/frame_auction.pdf",          circ:"std", W:612, H:792, cols:[49.5,123,195.8,269.2,342,415.5,488.2], rows:[264,361,453,548,643], dx:31, lsize:12.8, asize:9, rowH:93, cover:[[0,0,612,20],[0,745,612,792]] },
-  "private-sale":   { frame:"/calendar/frame_private.pdf",          circ:"std", W:612, H:792, cols:[49,123,196,269,342,416,488],         rows:[264,361,453,548,643], dx:31, lsize:12.8, asize:9, rowH:93, cover:[[0,0,612,20],[0,745,612,792]] },
-  "offmkt-auction": { frame:"/calendar/frame_twostage_auction.pdf", circ:"ts",  W:596, H:842, cols:[86,146,206,267,327,388,448],         rows:[248,329,463,542,625,706], dx:25, lsize:11.5, asize:8, rowH:80, cover:[[0,0,596,25],[0,790,596,842],[0,0,79,842],[510,0,596,842]] },
-  "offmkt-private": { frame:"/calendar/frame_twostage_private.pdf", circ:"ts",  W:596, H:842, cols:[86,146,206,267,327,388,448],         rows:[248,329,463,542,625,706], dx:25, lsize:11.5, asize:8, rowH:80, cover:[[0,0,596,25],[0,790,596,842],[0,0,79,842],[510,0,596,842]] },
+  "auction":        { frame:"/calendar/frame_auction.pdf",          circ:"std", W:612, H:792, gl:46.5, gr:559.5, rows:[264,361,453,548,643], lsize:12.8, asize:9, rowH:93, cover:[[0,0,612,20],[0,745,612,792]] },
+  "private-sale":   { frame:"/calendar/frame_private.pdf",          circ:"std", W:612, H:792, gl:46.5, gr:559.5, rows:[264,361,453,548,643], lsize:12.8, asize:9, rowH:93, cover:[[0,0,612,20],[0,745,612,792]] },
+  "offmkt-auction": { frame:"/calendar/frame_twostage_auction.pdf", circ:"ts",  W:596, H:842, gl:83,   gr:505.5, rows:[248,329,463,542,625,706], lsize:11.5, asize:8, rowH:80, cover:[[0,0,596,25],[0,790,596,842],[0,0,79,842],[510,0,596,842]] },
+  "offmkt-private": { frame:"/calendar/frame_twostage_private.pdf", circ:"ts",  W:596, H:842, gl:83,   gr:505.5, rows:[248,329,463,542,625,706], lsize:11.5, asize:8, rowH:80, cover:[[0,0,596,25],[0,790,596,842],[0,0,79,842],[510,0,596,842]] },
 };
 // Circle art lifted straight from Canva. The two-stage masters style the circle text on an arc, so they
 // carry their own art ("ts"); the straight 5-week masters use "std". Size + vertical offset (row top →
@@ -6708,7 +6710,7 @@ async function buildCalendarPdfV2({ variant, events, anchorDate, labelMode }){
   const cimg={};
   for(const ev of events){ const cc=CIRC[ev.shape]; if(cc && !cimg[ev.shape] && calNorm(ev.text)===calNorm(cc.text)){ try{ cimg[ev.shape]=await doc.embedPng(await fetch(cc.url).then(r=>r.arrayBuffer())); }catch(_){} } }
   const anchorDay=labelMode==="date"?calAnchorDay(variant,events):null;
-  const cw=cfg.cols[1]-cfg.cols[0], cx=c=>cfg.cols[c]+cfg.dx, weeks=calWeeks(variant);
+  const cw=(cfg.gr-cfg.gl)/7, cx=c=>cfg.gl+(c+0.5)*cw, weeks=calWeeks(variant);
   const evByDay={}; events.forEach(e=>{ (evByDay[e.day]=evByDay[e.day]||[]).push(e); });
   for(let w=0; w<weeks; w++) for(let c=0;c<7;c++){
     const n=calDay(w,c), topY=cfg.rows[w]; if(topY==null) continue;
