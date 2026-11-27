@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v189-contracts-exchanged";
+const BUILD = "v190-voicemail-kind";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5082,7 +5082,7 @@ function crmBuildTodos(index, isExchanged){
   });
   return out.sort((a,b)=>new Date(b.ts||0)-new Date(a.ts||0));
 }
-const TODO_KINDS={ second:"Second inspection", contract:"Reading the contract", callback:"Asked for a call", email:"Email reply", text:"Text reply", whatsapp:"WhatsApp", instagram:"Instagram", call:"Missed call", proposal:"Proposal follow-up", appraisal:"Appraisal follow-up", vendor:"Vendor report", buyercall:"Buyer calls" };
+const TODO_KINDS={ second:"Second inspection", contract:"Reading the contract", callback:"Asked for a call", email:"Email reply", text:"Text reply", whatsapp:"WhatsApp", instagram:"Instagram", call:"Missed call", voicemail:"Voicemail", proposal:"Proposal follow-up", appraisal:"Appraisal follow-up", vendor:"Vendor report", buyercall:"Buyer calls" };
 function _todoKey(agent){ return "savvi_todo_"+(agent||"x")+"_"+new Date().toISOString().slice(0,10); }
 function _todoLoad(agent){ try{ return JSON.parse(localStorage.getItem(_todoKey(agent))||"[]"); }catch(e){ return []; } }
 function _todoSave(agent,list){ try{ localStorage.setItem(_todoKey(agent),JSON.stringify(list)); }catch(e){} }
