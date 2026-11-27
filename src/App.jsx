@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v191-durable-login";
+const BUILD = "v192-targets-gci-merge";
 // Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
 // whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
 // relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
@@ -4830,7 +4830,7 @@ const SV_CSS = `
 .sv-mt td.prog .sv-rule{margin-top:0;}
 /* grouped by agent: the name heads each block, column labels sit beneath it */
 .sv-mt.grouped tr.grp td{background:none;height:auto;padding:24px 20px 2px;border-bottom:none;}
-.sv-mt.grouped tr.grp:first-child td{padding-top:4px;}
+.sv-mt.grouped tr.grp:first-child td{padding-top:16px;}
 .sv-mt tr.colh td{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-muted);font-weight:500;height:auto;padding:4px 20px 9px;border-bottom:1px solid var(--hairline);}
 .sv-sq{display:inline-block;width:9px;height:9px;margin-right:7px;position:relative;top:0;}
 .sv-sq.o{background:var(--savvi-orange);} .sv-sq.b{background:var(--savvi-brown);}
@@ -4846,6 +4846,8 @@ const SV_CSS = `
 .sv-month .m .bars .ba{width:14px;}
 .sv-month .m .bars .ba.a{background:var(--savvi-brown);}
 .sv-month .m .bars .ba.a.fc{background:repeating-linear-gradient(45deg,var(--savvi-brown),var(--savvi-brown) 3px,transparent 3px,transparent 6px);}
+.sv-month .m .bars .ba-stack{display:flex;flex-direction:column;justify-content:flex-end;width:14px;}
+.sv-month .m .bars .ba-stack .ba{width:14px;}
 .sv-month .m .bars .ba.t{background:var(--hairline);}
 .sv-month .m .cnt{font-size:11px;color:var(--ink-muted);margin-top:6px;}
 .sv-scope{font-family:var(--font-sans);font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:#fff;border:1px solid var(--hairline);border-radius:0;padding:6px 28px 6px 11px;appearance:none;-webkit-appearance:none;cursor:pointer;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%23311E10'/></svg>");background-repeat:no-repeat;background-position:right 10px center;}
@@ -5436,7 +5438,28 @@ function svMetricRows(a, t){
 }
 
 const SV_MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-function MonthBars({monthly,monthlyTarget,forecast}){
+function MonthBars({monthly,monthlyTarget,forecast,stacked}){
+  // Stacked basis: each month carries {settled, forecast}; draw settled solid at the base
+  // with the still-to-settle forecast striped on top, so one bar shows banked vs expected.
+  if(stacked){
+    const totals=(monthly||[]).map(m=>m?((m.settled||0)+(m.forecast||0)):0);
+    const max=Math.max(monthlyTarget||0,...totals,1);
+    return <div className="sv-month">{SV_MONTHS.map((mn,i)=>{
+      const m=(monthly||[])[i];
+      const s=m?(m.settled||0):0, f=m?(m.forecast||0):0, tot=s+f;
+      const has=tot>0;
+      const sh=s>0?Math.max(2,Math.round((s/max)*58)):0;
+      const fh=f>0?Math.max(2,Math.round((f/max)*58)):0;
+      const th=Math.max(2,Math.round(((monthlyTarget||0)/max)*58));
+      const nTot=m?((m.nS||0)+(m.nF||0)):0;
+      return <div key={i} className={"m"+(has?"":" empty")}>
+        <div className="t-label">{mn}</div>
+        <div className="fig">{has?svK(tot):<span className="sv-dash">—</span>}</div>
+        <div className="bars">{has&&<div className="ba-stack">{f>0&&<div className="ba a fc" style={{height:fh}}/>}{s>0&&<div className="ba a" style={{height:sh}}/>}</div>}{(monthlyTarget||0)>0&&<div className="ba t" style={{height:th}}/>}</div>
+        <div className="cnt">{has?(nTot+" "+(nTot===1?"deal":"deals")):"—"}</div>
+      </div>;
+    })}</div>;
+  }
   const vals=(monthly||[]).map(m=>m&&m.net!=null?m.net:null).filter(v=>v!=null);
   const max=Math.max(monthlyTarget||0,...vals,1);
   const unit=forecast?"deal":"sale";
@@ -5820,11 +5843,24 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const _gciAgent = (gciScope!=="team" && svModel) ? svModel.agents.find(a=>a.code===gciScope) : null;
   // Pick the series set for the chosen basis (with graceful fallback to the legacy settled series).
   const _gciSeries = (()=>{ if(!tdata) return {team:null,byAgent:null};
-    if(gciBasis==="settled") return {team:tdata.settledMonthly||tdata.monthly, byAgent:tdata.monthlyByAgent};
-    if(gciBasis==="forecast") return {team:tdata.forecastMonthly||null, byAgent:tdata.forecastMonthlyByAgent||null};
+    if(gciBasis==="settled"){
+      // Merged view: settled (banked, solid) + forecast-to-settle (striped) stacked per month.
+      // Past months show settled only; the current month shows both; future months forecast only.
+      const sT=tdata.settledMonthly||tdata.monthly||[], fT=tdata.forecastMonthly||[];
+      const sA=tdata.monthlyByAgent||null, fA=tdata.forecastMonthlyByAgent||null;
+      const mergeArr=(s,f)=>SV_MONTHS.map((_,i)=>{
+        const si=s&&s[i], fi=f&&f[i];
+        const sv=si&&si.net!=null?si.net:0, fv=fi&&fi.net!=null?fi.net:0;
+        if(sv===0&&fv===0) return null;
+        return {settled:sv,forecast:fv,nS:(si&&si.n)||0,nF:(fi&&fi.n)||0};
+      });
+      let byAgent=null;
+      if(sA||fA){ byAgent={}; new Set([...Object.keys(sA||{}),...Object.keys(fA||{})]).forEach(c=>{ byAgent[c]=mergeArr(sA&&sA[c],fA&&fA[c]); }); }
+      return {team:mergeArr(sT,fT), byAgent};
+    }
     return {team:tdata.writtenMonthly||tdata.monthly, byAgent:tdata.writtenMonthlyByAgent||tdata.monthlyByAgent}; })();
   const _gciMonthly = gciScope==="team" ? _gciSeries.team : (_gciSeries.byAgent&&_gciSeries.byAgent[gciScope]);
-  const _gciIsForecast = gciBasis==="forecast";
+  const _gciStacked = gciBasis==="settled";
   const _gciTgtObj = gciScope==="team" ? _tgtTeam : (_gciAgent ? SV_TARGETS[String(_gciAgent.name).toLowerCase()] : null);
   const _gciTargetLine = (_gciTgtObj&&_gciTgtObj.netGci) ? _gciTgtObj.netGci/12 : 0;
   const _gciScopeName = gciScope==="team" ? "the team" : (_gciAgent ? _gciAgent.name : "this agent");
@@ -5961,8 +5997,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
                 <div style={{display:"flex",gap:8}}>
                   <select className="sv-scope" value={gciBasis} onChange={e=>setGciBasis(e.target.value)} aria-label="Chart basis">
                     <option value="written">Written in month</option>
-                    <option value="settled">Settled in month</option>
-                    <option value="forecast">Forecast to settle</option>
+                    <option value="settled">Settled &amp; forecast</option>
                   </select>
                   <select className="sv-scope" value={gciScope} onChange={e=>setGciScope(e.target.value)} aria-label="Chart scope">
                     <option value="team">Team</option>
@@ -5976,8 +6011,9 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
                     ? <span className="v"><b>{svK(_avgGciActual)}</b> actual <span className="mut">vs {svK(_avgGciGoal)} goal</span> · {_avgGciPct}%</span>
                     : <span className="v"><b>{svK(_avgGciActual)}</b> actual</span>}
                 </div>
-                <div style={{padding:"2px 0 4px"}}><MonthBars monthly={_gciMonthly} monthlyTarget={_gciIsForecast?0:_gciTargetLine} forecast={_gciIsForecast}/></div>
-                {!_gciMonthly&&<div className="sv-note" style={{padding:"4px 20px 16px"}}>{_gciIsForecast?`Nothing exchanged and awaiting settlement for ${_gciScopeName} right now.`:gciBasis==="settled"?`No settled sales yet for ${_gciScopeName} this year.`:`No sales written for ${_gciScopeName} yet this year. The faint bar shows ${svK(_gciTargetLine)} as the monthly target.`}</div>}
+                <div style={{padding:"2px 0 4px"}}><MonthBars monthly={_gciMonthly} monthlyTarget={_gciTargetLine} stacked={_gciStacked}/></div>
+                {_gciStacked&&_gciMonthly&&<div className="sv-note" style={{padding:"2px 20px 14px"}}><span className="sv-sq b"/>Settled &nbsp;·&nbsp; <span className="sv-sq b" style={{background:"repeating-linear-gradient(45deg,var(--savvi-brown),var(--savvi-brown) 2px,transparent 2px,transparent 4px)"}}/>Forecast to settle</div>}
+                {!_gciMonthly&&<div className="sv-note" style={{padding:"4px 20px 16px"}}>{_gciStacked?`Nothing settled or forecast to settle for ${_gciScopeName} yet this year.`:`No sales written for ${_gciScopeName} yet this year. The faint bar shows ${svK(_gciTargetLine)} as the monthly target.`}</div>}
               </SvPanel>
               <div className="sv-note">Actuals refresh nightly from the Stocklist · Sold {_per.year} CY.</div>
             </>}
