@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v183-crm-reskin-recency";
+const BUILD = "v184-drawer-fix-fullheight";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4843,8 +4843,16 @@ const SV_CSS = `
 .sv-gci-avg .mut{color:var(--ink-muted);}
 
 .sv-note{font-size:12px;color:var(--ink-muted);line-height:1.5;}
-@media (max-width:1200px){ .sv-agents{grid-template-columns:1fr;} .sv-2col{grid-template-columns:1fr !important;} }
-.sv-2col{display:grid;grid-template-columns:minmax(0,1fr) 520px;gap:22px;align-items:start;}
+@media (max-width:1200px){ .sv-agents{grid-template-columns:1fr;} .sv-2col{grid-template-columns:1fr !important;align-items:start !important;} }
+.sv-2col{display:grid;grid-template-columns:minmax(0,1fr) 520px;gap:22px;align-items:stretch;}
+/* Today: the to-do list and action feed run full height to the bottom, each scrolling inside. */
+@media (min-width:1201px){
+  .sv-today{height:100%;}
+  .sv-today .sv-2col{flex:1 1 auto;min-height:0;}
+  .sv-2col>.sv-panel.fillcol{min-height:0;height:100%;}
+  .sv-panel.fillcol{display:flex;flex-direction:column;}
+  .sv-panel.fillcol>.pbody{flex:1 1 auto;max-height:none;}
+}
 `;
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -4962,7 +4970,16 @@ const SV_CRM_SKIN = `
 .feed-r .dt,.feed-r .when{color:var(--ink-muted);}
 .feed-gh{color:var(--ink);}.feed-gh .why{color:var(--ink-muted);}
 
-/* record drawer */
+/* record drawer — rendered OUTSIDE .crm, so it needs its own token definitions or every
+   var() background resolves to invalid (transparent). Define them on the overlay root. */
+.rec-ov{
+  --savvi-brown:#311E10; --savvi-butter:#FFF4D5; --savvi-sky:#8AACE3; --savvi-orange:#FE5310;
+  --surface:#FFFFFF; --surface-muted:#F4F2F0;
+  --ink:#311E10; --ink-muted:#75685F; --on-brown:#FFF4D5;
+  --hairline:#E2DFDE; --hairline-on-butter:rgba(49,30,16,.17); --hairline-on-brown:rgba(255,244,213,.22);
+  --font-display:'PP Editorial New',Georgia,'Times New Roman',serif;
+  --font-sans:'Neue Haas Unica Pro','Helvetica Neue',Helvetica,Arial,sans-serif;
+}
 .rec{background:var(--surface-muted);}
 .rec-head{background:var(--surface);border-bottom-color:var(--hairline);}
 .rec-head .x{background:var(--surface-muted);color:var(--ink);border-radius:0;}
@@ -5098,7 +5115,7 @@ function SvTodo({agent,index,indexing,suggestions,onOpenContact}){
       {s.mobile&&!isDone?<div className="sv-todo-act"><a className="sv-cta" href={tel(s.mobile)}>Call</a><a className="sv-cta" href={sms(s.mobile)}>Text</a></div>:null}
     </div>
   );
-  return <SvPanel title="To-do" badge={openI.length+openS.length||null} scroll
+  return <SvPanel title="To-do" badge={openI.length+openS.length||null} scroll fill
       actions={<span className="t-label" style={{color:index&&!indexing?"#1E8C50":"var(--ink-muted)"}}>{!index?(indexing?"Reading CRM…":""):(indexing?"Updating…":new Date().toLocaleDateString("en-AU",{weekday:"long"}))}</span>}>
     <div className="sv-todo-add">
       <input value={txt} onChange={e=>setTxt(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") add(); }} placeholder="Add a follow-up…"/>
@@ -5323,8 +5340,8 @@ function AgentPanel({name,role,period,color,init,heroVal,heroSub,pct,elapsedPct,
   </div>;
 }
 
-function SvPanel({title,badge,actions,scroll,children}){
-  return <div className="sv-panel">
+function SvPanel({title,badge,actions,scroll,fill,children}){
+  return <div className={"sv-panel"+(fill?" fillcol":"")}>
     <div className="ph"><span className="ttl">{title}</span>{badge!=null&&<span className="pill">{badge}</span>}<span className="sp"/>{actions}</div>
     <div className={scroll?"pbody":""}>{children}</div>
   </div>;
@@ -5848,29 +5865,19 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
             <SvBand cells={todayBandCells}/>
             <div className="sv-2col">
               <SvTodo agent={agentName} index={index} indexing={indexing} suggestions={todoSuggestions} onOpenContact={onOpenContact}/>
-              <div style={{display:"flex",flexDirection:"column",gap:22,minWidth:0}}>
-                <SvPanel title="Action feed" badge={feedRows.length} scroll
-                  actions={<span className="t-label" style={{color:index&&!indexing?"#1E8C50":"var(--ink-muted)"}}>{!index?(indexing?"Reading buyers…":""):(indexing?"Updating…":"● Live")}</span>}>
-                  {!index&&<div className="sv-empty">Reading every buyer…</div>}
-                  {index&&feedRows.length===0&&<div className="sv-empty">Nothing waiting. Every hot buyer has a recent note and every opened contract has been followed up.</div>}
-                  <div className="sv-feed">{index&&Object.keys(FEED_KINDS).filter(k=>feedRows.some(r=>r.k===k)).map(k=><div key={k} className="fg">
-                    <div className="fgh">{FEED_KINDS[k].ic} {FEED_KINDS[k].t} <span className="why">· {FEED_KINDS[k].why}</span></div>
-                    {feedRows.filter(r=>r.k===k).map((r,i)=><div key={r.c.contactId+r.i.id+i} className="fr" onClick={()=>onOpenContact(r.c.contactId,r.i.propertyRef)}>
-                      <div className="av" style={{background:crmColor(r.c.name)}}>{crmInitials(r.c.name)}</div>
-                      <div style={{minWidth:0}}><div className="nm">{r.c.name}</div><div className="dt">{r.i.address?streetLine(r.i.address,r.i.suburb)+" · ":""}{r.reason}</div></div>
-                      <div className="when">{crmAgo(r.when)}</div>
-                    </div>)}
-                  </div>)}</div>
-                </SvPanel>
-                <SvPanel title={opensStale?"Last week's opens":"This week's opens"} badge={opens.length}>
-                  {todayOpens.length===0&&<div className="sv-empty">No opens scheduled.</div>}
-                  {todayOpens.map(({d,list})=><div key={d}><div className="sv-open-day t-label">{crm.fmtDay?crm.fmtDay(d):d}</div>{list.map(o=><div key={o.id} className="sv-open" onClick={()=>{ setTab("opens"); select(o); }}><span className="bar"/><div className="ad">{streetLine(o.address,o.suburb)}</div><div className="tm">{[o.time,o.suburb].filter(Boolean).join(" · ")}</div></div>)}</div>)}
-                </SvPanel>
-                <SvPanel title="Hot right now" badge={hotCount}>
-                  {(contacts||[]).filter(c=>c.liveInterest==="hot").sort((a,b)=>buyerHeat(b).score-buyerHeat(a).score).slice(0,8).map(c=><div key={c.contactId} className="sv-open" onClick={()=>onOpenContact(c.contactId,c.insps[0]?.propertyRef||null)}><span className="bar" style={{background:"var(--savvi-brown)"}}/><div className="ad">{c.name}<span className="t-label" style={{marginLeft:9,textTransform:"none",letterSpacing:0}}>{c.insps.filter(i=>i.interest==="hot"&&!isDeadListing(i.statusText)).map(i=>streetLine(i.address,i.suburb)).filter(Boolean).slice(0,1)[0]||""}</span></div><div className="tm"><HeatBadge b={c}/></div></div>)}
-                  {contacts&&hotCount===0&&<div className="sv-empty">No hot buyers yet.</div>}
-                </SvPanel>
-              </div>
+              <SvPanel title="Action feed" badge={feedRows.length} scroll fill
+                actions={<span className="t-label" style={{color:index&&!indexing?"#1E8C50":"var(--ink-muted)"}}>{!index?(indexing?"Reading buyers…":""):(indexing?"Updating…":"● Live")}</span>}>
+                {!index&&<div className="sv-empty">Reading every buyer…</div>}
+                {index&&feedRows.length===0&&<div className="sv-empty">Nothing in the last 48 hours. Contract opens, offers and bids show here as they happen.</div>}
+                <div className="sv-feed">{index&&Object.keys(FEED_KINDS).filter(k=>feedRows.some(r=>r.k===k)).map(k=><div key={k} className="fg">
+                  <div className="fgh">{FEED_KINDS[k].ic} {FEED_KINDS[k].t} <span className="why">· {FEED_KINDS[k].why}</span></div>
+                  {feedRows.filter(r=>r.k===k).map((r,i)=><div key={r.c.contactId+r.i.id+i} className="fr" onClick={()=>onOpenContact(r.c.contactId,r.i.propertyRef)}>
+                    <div className="av" style={{background:crmColor(r.c.name)}}>{crmInitials(r.c.name)}</div>
+                    <div style={{minWidth:0}}><div className="nm">{r.c.name}</div><div className="dt">{r.i.address?streetLine(r.i.address,r.i.suburb)+" · ":""}{r.reason}</div></div>
+                    <div className="when">{crmAgo(r.when)}</div>
+                  </div>)}
+                </div>)}</div>
+              </SvPanel>
             </div>
           </div>}
 
