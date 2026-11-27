@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v196-followups-on-record";
+const BUILD = "v197-calendar-variant-oval-filename";
 // Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
 // whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
 // relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
@@ -3377,7 +3377,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
       const agentFull=AGENT_FULL[agentName]||agentName||"";
       // Who gets the executed contract once BOTH parties have signed (the completion webhook
       // emails the signed PDF to each conveyancer and cc's their client).
-      const distribution={ address:addr, propertyId:openHome?.propertyId||"", inspectionId:buyer?._attioInspectionId||buyer?.id||"", agentName:agentFull, purchaserName:([p1,p2].filter(Boolean).join(" & "))||"", purchaserEmail:purEmail.trim(), purchaserConvEmail:convEm.trim(), vendorName:venName.trim(), vendorEmail:venEmail.trim(), vendorConvEmail:convVen.trim() };
+      const distribution={ address:addr, propertyId:openHome?.propertyId||"", inspectionId:buyer?._attioInspectionId||buyer?.id||"", agentName:agentFull, purchaserName:([p1,p2].filter(Boolean).join(" & "))||"", purchaserEmail:purEmail.trim(), purchaserConvEmail:convEm.trim(), purchaserConvName:convNm.trim(), vendorName:venName.trim(), vendorEmail:venEmail.trim(), vendorConvEmail:convVen.trim() };
       const payload={ name:`Contract of Sale - ${addr}`, typeName:"Contract of Sale", propertyAddr:addr, docName:filledFile.name, fileUrl:stash.url, fields:flds, submitters:subs, order:"preserved", agentName:agentFull, distribution };
       const r=await call("sendToSign",payload);
       if(r&&r.ok){ setSendState("done"); setEsignCount(c=>c+1); }
@@ -6625,13 +6625,13 @@ const CAL_CIRCLE_SETS = {
   },
 };
 const CAL_CSIZE = {
-  "auction":        { circleO:[71,71,51], ellipseO:[120,38,61], circleB:[85,84,52] },
-  "private-sale":   { circleO:[71,71,51], ellipseO:[120,38,61], circleB:[85,84,52] },
+  "auction":        { circleO:[71,71,51], ellipseO:[120,38,51], circleB:[85,84,52] },
+  "private-sale":   { circleO:[71,71,51], ellipseO:[120,38,51], circleB:[85,84,52] },
   "offmkt-auction": { circleO:[71,71,48], ellipseO:[99,32,45],  circleB:[76,75,49] },
   "offmkt-private": { circleO:[71,71,48], ellipseO:[99,32,45],  circleB:[76,75,49] },
 };
 function calNorm(s){ return String(s||"").toLowerCase().replace(/[^a-z0-9]/g,""); }
-function calVariant(method, offMarket){ return (offMarket?"offmkt-":"")+(method==="auction"?"auction":"private-sale"); }
+function calVariant(method, offMarket){ if(method==="auction") return offMarket?"offmkt-auction":"auction"; return offMarket?"offmkt-private":"private-sale"; }
 function calWeeks(variant){ return variant.indexOf("offmkt")===0 ? 6 : 5; }
 function calBands(variant){
   if(variant==="offmkt-auction") return [{label:"Off Market",w0:0,w1:1},{label:"Auction",w0:2,w1:5}];
@@ -6803,7 +6803,7 @@ function CalendarSheet({ open, onClose }){
   }
   const seg=(active)=>({ flex:1, padding:"9px 6px", border:"none", borderRadius:9, cursor:"pointer", fontFamily:"inherit", fontWeight:700, fontSize:12.5, background:active?BROWN:"transparent", color:active?"#fff":BROWN });
   const segWrap={ display:"flex", gap:4, background:SAND, borderRadius:11, padding:4 };
-  const dlName=`Calendar of Events - ${(addr||"Savvi").replace(/[\\/:*?"<>|]/g,"")}.pdf`;
+  const dlName=`Calendar of Events - ${(addr||"Savvi").replace(/[\\/]/g,".").replace(/[:*?"<>|]/g,"")}.pdf`;
   const chipBg=sh=>sh==="circleB"?CAL_BLUE:(sh==="circleO"||sh==="ellipseO")?CAL_ORANGE:"#EFE6CF";
   const anchorNote = variant.indexOf("auction")>=0 ? "This is the auction date (a Saturday). Every other event is spaced around it." : "This is the first open for inspection (a Saturday). Every other event is spaced around it.";
   // Render the grid: day-of-week header, then each band followed by its week rows.
