@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v194-followup-ui";
+const BUILD = "v195-add-to-crm";
 // Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
 // whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
 // relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
@@ -4799,6 +4799,19 @@ const SV_CSS = `
 .sv-todo-act{display:flex;gap:6px;}
 .sv-cta{display:inline-flex;align-items:center;border:1px solid var(--hairline);background:#fff;color:var(--ink);font-size:11.5px;font-weight:600;letter-spacing:.02em;padding:5px 11px;text-decoration:none;cursor:pointer;}
 .sv-cta:hover{border-color:var(--savvi-brown);}
+.sv-cta.crm{border-color:var(--savvi-brown);color:var(--savvi-brown);font-weight:700;}
+.sv-cta.crm:hover{background:var(--savvi-brown);color:var(--savvi-butter);}
+.sv-crm-add{padding:12px 20px 14px;border-top:1px solid var(--hairline);background:var(--surface-muted);display:flex;flex-direction:column;gap:10px;}
+.sv-crm-add .h{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-muted);}
+.sv-crm-add .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.sv-crm-add label{display:flex;flex-direction:column;gap:4px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-muted);}
+.sv-crm-add input,.sv-crm-add textarea{border:1px solid var(--hairline);background:#fff;padding:8px 10px;font-family:var(--font-sans);font-size:13.5px;font-weight:500;color:var(--ink);text-transform:none;letter-spacing:0;}
+.sv-crm-add input:focus,.sv-crm-add textarea:focus{outline:none;border-color:var(--savvi-brown);}
+.sv-crm-add textarea{min-height:58px;resize:vertical;line-height:1.45;}
+.sv-crm-add .row{display:flex;gap:8px;}
+.sv-crm-add .pri{border:none;background:var(--savvi-brown);color:var(--savvi-butter);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:9px 16px;cursor:pointer;}
+.sv-crm-add .pri:disabled{opacity:.4;cursor:default;}
+.sv-crm-add .sec{border:1px solid var(--hairline);background:#fff;color:var(--ink);font-size:12px;font-weight:600;padding:9px 14px;cursor:pointer;}
 .sv-todo-x{flex:0 0 auto;border:none;background:none;color:var(--ink-muted);font-size:18px;line-height:1;cursor:pointer;padding:0 2px;}
 .sv-todo-x:hover{color:var(--savvi-orange);}
 .sv-todo-divider{padding:12px 20px 6px;border-top:1px solid var(--hairline);}
@@ -5111,7 +5124,25 @@ function SvTodo({agent,index,indexing,suggestions,onOpenContact}){
   const [done,setDone]=useState(()=>_doneLoad(agent));  // dismissed CRM suggestions (per day, local)
   const [txt,setTxt]=useState("");
   const [loaded,setLoaded]=useState(false);
+  const [crmId,setCrmId]=useState(null);   // which lead is being added to the CRM
+  const [cf,setCf]=useState({name:"",mobile:"",email:"",note:"",date:""});
+  const [cSaving,setCSaving]=useState(false);
   const refresh=()=>{ call("getTodos").then(r=>{ if(r&&r.ok&&Array.isArray(r.data)) setItems(r.data); setLoaded(true); }).catch(()=>setLoaded(true)); };
+  const _isName=s=>s&&!/^\+?[\d\s()-]+$/.test(s);  // a stored "name" that is really a phone number isn't a name
+  const startCrm=x=>{ setCrmId(x.id); setCf({ name:_isName(x.name)?x.name:"", mobile:x.mobile||"", email:x.email||"", note:x.summary||x.sub||"", date:"" }); };
+  // Approve a texted/voicemail lead into Attio: create the person (deduped server-side), save the
+  // conversation note on their record, optionally set a follow-up, then clear the raw to-do.
+  const saveCrm=async(x)=>{ if(!cf.name.trim()||!cf.mobile.trim()) return; setCSaving(true);
+    try{ const r=await call("createPerson",{name:cf.name.trim(),mobile:cf.mobile.trim(),email:cf.email.trim()||undefined});
+      const cid=r&&r.id;
+      if(cid){
+        if(cf.note.trim()) await call("addPersonNote",{contactId:cid,text:cf.note.trim(),title:"Conversation summary"});
+        if(cf.date) await call("addTodo",{kind:"followup",name:cf.name.trim(),mobile:cf.mobile.trim(),sub:cf.note.trim()?("Follow up · "+cf.note.trim().slice(0,120)):("Follow up with "+cf.name.trim()),contactId:cid,forDate:cf.date});
+        await call("removeTodo",{id:x.id});
+        setCrmId(null);
+      }
+      setCSaving(false); refresh();
+    }catch(e){ setCSaving(false); } };
   useEffect(()=>{ setDone(_doneLoad(agent)); refresh(); },[agent]); // eslint-disable-line react-hooks/exhaustive-deps
   const add=()=>{ const t=txt.trim(); if(!t) return; setTxt(""); setItems(xs=>[...xs,{id:"tmp"+Date.now(),text:t,kind:"manual",done:false}]); call("addTodo",{text:t,kind:"manual"}).then(refresh).catch(refresh); };
   const toggle=id=>{ setItems(xs=>xs.map(x=>x.id===id?{...x,done:!x.done}:x)); call("toggleTodo",{id}).then(refresh).catch(()=>{}); };
@@ -5133,16 +5164,34 @@ function SvTodo({agent,index,indexing,suggestions,onOpenContact}){
   const empty=loaded&&!openI.length&&!openS.length&&!doneI.length&&!doneS.length;
   const itemRow=(x)=>{
    const over=x.forDate&&!x.done&&x.forDate<_today, dueT=x.forDate&&!x.done&&x.forDate===_today;
+   const canCrm=!x.contactId&&x.mobile&&!x.done;   // a texted/voicemail lead not yet in the CRM
    return (
-    <div key={x.id} className={"sv-todo-row"+(x.done?" done":"")+(over?" over":"")}>
+    <Fragment key={x.id}>
+    <div className={"sv-todo-row"+(x.done?" done":"")+(over?" over":"")}>
       <button className={"sv-tick"+(x.done?" on":"")} aria-label={x.done?"Undo":"Done"} onClick={()=>toggle(x.id)}>{x.done?"✓":""}</button>
       <div className="sv-todo-main" style={x.link?{cursor:"pointer"}:undefined} onClick={()=>{ if(x.contactId&&onOpenContact){onOpenContact(x.contactId,x.propertyRef);} else if(x.link){ try{window.open(x.link,"_blank","noopener");}catch(e){} } }}>
         <div className="sv-todo-nm">{x.name||x.text}{x.name&&x.kind?<span className="sv-todo-kind">{TODO_KINDS[x.kind]||x.kind}</span>:null}{over?<span className="sv-todo-due over">Overdue</span>:dueT?<span className="sv-todo-due">Due today</span>:null}</div>
         {x.sub?<div className="sv-todo-sub">{x.sub}</div>:null}
       </div>
-      {x.mobile&&!x.done?<div className="sv-todo-act"><a className="sv-cta" href={tel(x.mobile)}>Call</a><a className="sv-cta" href={sms(x.mobile)}>Text</a></div>:x.link&&!x.done?<div className="sv-todo-act"><a className="sv-cta" href={x.link} target="_blank" rel="noopener">Open</a></div>:null}
+      {!x.done&&(x.mobile||x.link)?<div className="sv-todo-act">
+        {x.mobile?<><a className="sv-cta" href={tel(x.mobile)}>Call</a><a className="sv-cta" href={sms(x.mobile)}>Text</a></>:null}
+        {canCrm?<button className="sv-cta crm" onClick={()=>startCrm(x)}>+ CRM</button>:null}
+        {!x.mobile&&x.link?<a className="sv-cta" href={x.link} target="_blank" rel="noopener">Open</a>:null}
+      </div>:null}
       <button className="sv-todo-x" aria-label="Remove" onClick={()=>del(x.id)}>×</button>
     </div>
+    {crmId===x.id&&<div className="sv-crm-add">
+      <div className="h">Add to CRM</div>
+      <div className="g2">
+        <label>Name<input value={cf.name} onChange={e=>setCf({...cf,name:e.target.value})} placeholder="Full name" autoFocus/></label>
+        <label>Mobile<input value={cf.mobile} onChange={e=>setCf({...cf,mobile:e.target.value})} placeholder="04…"/></label>
+        <label>Email<input value={cf.email} onChange={e=>setCf({...cf,email:e.target.value})} placeholder="(optional)"/></label>
+        <label>Follow-up<input type="date" value={cf.date} min={_today} onChange={e=>setCf({...cf,date:e.target.value})}/></label>
+      </div>
+      <label className="full">Note<textarea value={cf.note} onChange={e=>setCf({...cf,note:e.target.value})} placeholder="Summary of the conversation (saved on their record)"/></label>
+      <div className="row"><button className="pri" disabled={cSaving||!cf.name.trim()||!cf.mobile.trim()} onClick={()=>saveCrm(x)}>{cSaving?"Adding…":"Add to CRM"}</button><button className="sec" onClick={()=>setCrmId(null)}>Cancel</button></div>
+    </div>}
+    </Fragment>
   );};
   const sugRow=(s,isDone)=>(
     <div key={s.id} className={"sv-todo-row"+(isDone?" done":"")}>
