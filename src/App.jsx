@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v197-calendar-variant-oval-filename";
+const BUILD = "v198-fix-buyer-record-crash";
 // Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
 // whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
 // relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
@@ -5244,20 +5244,20 @@ function DesktopRecord({open,onClose,buyer,openHome,propId,propIndex,opens,onUpd
   // Bio: generate once per buyer if missing (same helper as the phone card).
   const genProfile=async(b,pid,noteTexts)=>{ if(!b||!pid) return; const texts=(noteTexts&&noteTexts.length)?noteTexts:(b.notes||[]).map(n=>n.text); onSetProfile(pid,b.id,{loading:true}); try{ const parsed=await aiBuyerProfile({...b,notes:texts.map(t=>({text:t}))}); onSetProfile(pid,b.id,{loading:false,bio:parsed.bio,stage:parsed.stage||"Early"}); }catch(e){ onSetProfile(pid,b.id,{loading:false,bio:texts.slice(-3).join(" "),stage:b.interest==="hot"?"Offer":b.interest==="watching"?"Considering":"Early"}); } };
   useEffect(()=>{ if(open&&buyer&&propId&&!buyer.aiProfile&&(buyer.notes||[]).length) genProfile(buyer,propId,crossNotes); },[open,buyer?.id]);
+  // Pending follow-ups for THIS contact. The loader AND its effect MUST sit before the early return
+  // below, or the hook count changes between the closed and open render and React throws #310
+  // (blank screen on opening a buyer). Per-agent store; future-dated ones show here though hidden on Today.
+  const loadFollowups=()=>{ if(!buyer||!buyer.contactId){ setFuList([]); return; } call("getTodos").then(r=>{ if(r&&r.ok&&Array.isArray(r.data)) setFuList(r.data.filter(t=>t&&t.kind==="followup"&&t.contactId===buyer.contactId&&!t.done).sort((a,b)=>(a.forDate||"")<(b.forDate||"")?-1:1)); }).catch(()=>{}); };
+  useEffect(()=>{ if(open&&buyer&&buyer.contactId) loadFollowups(); else setFuList([]); },[open,buyer?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   if(!open||!buyer) return null;
   const first=(buyer.name||"").split(" ")[0]||"";
   const hasOffer=(buyer.notes||[]).some(n=>/^\s*\[Offer\]/i.test(n.text||""));
   const saveNote=()=>{ const t=noteText.trim(); if(!t) return; onAddNote(propId,buyer.id,t); setNoteText(""); setNoteOpen(false); };
   const _todayStr=new Date().toISOString().slice(0,10);
   const _tomorrowStr=()=>{ const d=new Date(); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); };
-  // Set a dated follow-up on this contact. It lands on the logged-in agent's Today to-do list on
-  // the due date (hidden until then), and turns "Overdue" if the day passes untouched. Wired into
-  // the same per-agent to-do store the inbox scan + manual lines use (addTodo, forDate field).
-  // Pending follow-ups set on THIS contact (so Luke can see + edit them on the record). Follow-ups
-  // are per-agent, so this shows the logged-in agent's. Future-dated ones show here even though they
-  // stay hidden on the Today list until due.
-  const loadFollowups=()=>{ if(!buyer||!buyer.contactId){ setFuList([]); return; } call("getTodos").then(r=>{ if(r&&r.ok&&Array.isArray(r.data)) setFuList(r.data.filter(t=>t&&t.kind==="followup"&&t.contactId===buyer.contactId&&!t.done).sort((a,b)=>(a.forDate||"")<(b.forDate||"")?-1:1)); }).catch(()=>{}); };
-  useEffect(()=>{ if(open&&buyer&&buyer.contactId) loadFollowups(); else setFuList([]); },[open,buyer?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // (loadFollowups + its effect are defined above, before the early return, so the hook count is stable.)
+  // Follow-up lands on the logged-in agent's Today to-do list on the due date (hidden until then),
+  // turning "Overdue" if the day passes untouched; same per-agent to-do store (addTodo, forDate).
   const _fuSub=(t)=>t||("Follow up with "+(first||"this buyer")+(openHome?" · "+(streetLine(openHome.address,openHome.suburb)||""):""));
   const saveFollowup=async()=>{ const date=fuDate||_tomorrowStr(); const t=fuText.trim(); setFuSaving(true);
     try{ await call("addTodo",{ kind:"followup", name:buyer.name||"", mobile:buyer.mobile||"",
