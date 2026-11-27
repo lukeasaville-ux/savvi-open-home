@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v199-calendar-true-centre";
+const BUILD = "v200-fix-crm-button-fullscreen-collision";
 // Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
 // whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
 // relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
@@ -4808,8 +4808,8 @@ const SV_CSS = `
 .sv-todo-act{display:flex;gap:6px;}
 .sv-cta{display:inline-flex;align-items:center;border:1px solid var(--hairline);background:#fff;color:var(--ink);font-size:11.5px;font-weight:600;letter-spacing:.02em;padding:5px 11px;text-decoration:none;cursor:pointer;}
 .sv-cta:hover{border-color:var(--savvi-brown);}
-.sv-cta.crm{border-color:var(--savvi-brown);color:var(--savvi-brown);font-weight:700;}
-.sv-cta.crm:hover{background:var(--savvi-brown);color:var(--savvi-butter);}
+.sv-cta.crmadd{border-color:var(--savvi-brown);color:var(--savvi-brown);font-weight:700;}
+.sv-cta.crmadd:hover{background:var(--savvi-brown);color:var(--savvi-butter);}
 .sv-crm-add{padding:12px 20px 14px;border-top:1px solid var(--hairline);background:var(--surface-muted);display:flex;flex-direction:column;gap:10px;}
 .sv-crm-add .h{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-muted);}
 .sv-crm-add .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
@@ -5184,7 +5184,7 @@ function SvTodo({agent,index,indexing,suggestions,onOpenContact}){
       </div>
       {!x.done&&(x.mobile||x.link)?<div className="sv-todo-act">
         {x.mobile?<><a className="sv-cta" href={tel(x.mobile)}>Call</a><a className="sv-cta" href={sms(x.mobile)}>Text</a></>:null}
-        {canCrm?<button className="sv-cta crm" onClick={()=>startCrm(x)}>+ CRM</button>:null}
+        {canCrm?<button className="sv-cta crmadd" onClick={()=>startCrm(x)}>+ CRM</button>:null}
         {!x.mobile&&x.link?<a className="sv-cta" href={x.link} target="_blank" rel="noopener">Open</a>:null}
       </div>:null}
       <button className="sv-todo-x" aria-label="Remove" onClick={()=>del(x.id)}>×</button>
