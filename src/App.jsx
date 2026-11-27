@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v185-agent-heading-target110";
+const BUILD = "v186-pace-dollars";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -5831,6 +5831,9 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   const _remaining = Math.max(_tgtTeam.netGci - (svModel?svModel.team.netGci:0),0);
   const _needPerMo = _remaining/_per.monthsLeft;
   const _avgSoFar = (svModel?svModel.team.netGci:0)/_per.monthsElapsed;
+  // Pace in plain dollars: where net GCI should sit by today vs where it actually is.
+  const _paceToDate = _tgtTeam.netGci * _per.elapsedPct/100;
+  const _paceDollar = (svModel?svModel.team.netGci:0) - _paceToDate;
 
   const TABS=[{k:"today",l:"Today",ic:"☀︎",ct:feed.length||null},{k:"opens",l:"Opens",ic:"⌂",ct:opens.length},{k:"listings",l:"Listings",ic:"▤",ct:activeCount},{k:"contacts",l:"Contacts",ic:"◉",ct:contacts?contacts.length:null},{k:"targets",l:"Targets",ic:"◪",ct:teamPct!=null?Math.round(teamPct)+"%":null},{k:"match",l:"Buyer match",ic:"◎"}];
   const title={today:"Today",targets:"Targets",opens:"Open homes",listings:"Listings",contacts:"Contacts",owners:"Owners",match:"Buyer match"}[tab];
@@ -5908,9 +5911,9 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
                 <div className="vr"/>
                 <div className="seg"><div className="t-label">Where you are</div><div className="big">{_paceActualPct.toFixed(1)}%</div></div>
                 <div className="vr"/>
-                <div className="say">{_paceDelta<0
-                  ? <>Net GCI is <b>{Math.abs(_paceDelta).toFixed(1)} points</b> behind pace with <b>{_per.daysLeft} days</b> left. Closing it needs <b>{svK(_needPerMo)}</b> a month, against a {svK(_tgtTeam.netGci/12)} monthly target and the {svK(_avgSoFar)} averaged so far.</>
-                  : <>Net GCI is <b>{_paceDelta.toFixed(1)} points</b> ahead of pace with <b>{_per.daysLeft} days</b> left, on track to clear the {svK(_tgtTeam.netGci)} goal.</>}</div>
+                <div className="say">{_paceDollar<0
+                  ? <>Net GCI is <b>{svK(Math.abs(_paceDollar))} behind</b> where it needs to be by today, with <b>{_per.daysLeft} days</b> left. Closing the gap needs <b>{svK(_needPerMo)}</b> a month, against a {svK(_tgtTeam.netGci/12)} monthly target.</>
+                  : <>Net GCI is <b>{svK(_paceDollar)} ahead</b> of where it needs to be by today, with <b>{_per.daysLeft} days</b> left. On track to clear the {svK(_tgtTeam.netGci)} goal.</>}</div>
               </div>
               <SvPanel title={"Team · "+_per.year}><MetricTable groups={[{rows:teamRows}]}/></SvPanel>
               <SvPanel title="By agent"><MetricTable groups={byAgentGroups}/></SvPanel>
