@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v187-gci-basis-agent-active";
+const BUILD = "v188-contacts-fast";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -434,8 +434,8 @@ const Attio = {
     if (_buyerRecCache && (Date.now() - _buyerRecCache.t) < 60000) return;
     try {
       const [inspJ, pplJ] = await Promise.all([
-        call("listRecords", { objectSlug: "inspections" }),
-        call("listRecords", { objectSlug: "people" }),
+        call("listRecords", { objectSlug: "inspections", lite: true }),
+        call("listRecords", { objectSlug: "people", lite: true }),
       ]);
       if (inspJ?.ok) _buyerRecCache = { t: Date.now(), insp: inspJ.data || [], ppl: pplJ?.data || [] };
     } catch (e) {}
@@ -536,8 +536,8 @@ const Attio = {
       inspData = _buyerRecCache.insp; pplData = _buyerRecCache.ppl;
     } else {
       const [inspJ, pplJ] = await Promise.all([
-        call("listRecords", { objectSlug: "inspections" }),
-        call("listRecords", { objectSlug: "people" }),
+        call("listRecords", { objectSlug: "inspections", lite: true }),
+        call("listRecords", { objectSlug: "people", lite: true }),
       ]);
       if (!inspJ?.ok) return [];
       inspData = inspJ.data || []; pplData = pplJ?.data || [];
@@ -582,8 +582,8 @@ const Attio = {
       inspData = _buyerRecCache.insp; pplData = _buyerRecCache.ppl;
     } else {
       const [inspJ, pplJ] = await Promise.all([
-        call("listRecords", { objectSlug: "inspections" }),
-        call("listRecords", { objectSlug: "people" }),
+        call("listRecords", { objectSlug: "inspections", lite: true }),
+        call("listRecords", { objectSlug: "people", lite: true }),
       ]);
       if (!pplJ?.ok) return [];
       inspData = inspJ?.data || []; pplData = pplJ.data || [];
