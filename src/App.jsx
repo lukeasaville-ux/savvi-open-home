@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v186-pace-dollars";
+const BUILD = "v187-gci-basis-agent-active";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4835,6 +4835,7 @@ const SV_CSS = `
 .sv-month .m .bars{height:62px;display:flex;align-items:flex-end;justify-content:center;gap:3px;margin-top:10px;}
 .sv-month .m .bars .ba{width:14px;}
 .sv-month .m .bars .ba.a{background:var(--savvi-brown);}
+.sv-month .m .bars .ba.a.fc{background:repeating-linear-gradient(45deg,var(--savvi-brown),var(--savvi-brown) 3px,transparent 3px,transparent 6px);}
 .sv-month .m .bars .ba.t{background:var(--hairline);}
 .sv-month .m .cnt{font-size:11px;color:var(--ink-muted);margin-top:6px;}
 .sv-scope{font-family:var(--font-sans);font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);background:#fff;border:1px solid var(--hairline);border-radius:0;padding:6px 28px 6px 11px;appearance:none;-webkit-appearance:none;cursor:pointer;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%23311E10'/></svg>");background-repeat:no-repeat;background-position:right 10px center;}
@@ -5419,18 +5420,20 @@ function svMetricRows(a, t){
 }
 
 const SV_MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-function MonthBars({monthly,monthlyTarget}){
+function MonthBars({monthly,monthlyTarget,forecast}){
   const vals=(monthly||[]).map(m=>m&&m.net!=null?m.net:null).filter(v=>v!=null);
   const max=Math.max(monthlyTarget||0,...vals,1);
+  const unit=forecast?"deal":"sale";
   return <div className="sv-month">{SV_MONTHS.map((mn,i)=>{
     const m=(monthly||[])[i]; const has=m&&m.net!=null;
+    const fc=has&&m.fc; // a forecast bar (exchanged, awaiting settlement) draws striped
     const ah=has?Math.max(2,Math.round((m.net/max)*58)):0;
     const th=Math.max(2,Math.round(((monthlyTarget||0)/max)*58));
     return <div key={i} className={"m"+(has?"":" empty")}>
       <div className="t-label">{mn}</div>
       <div className="fig">{has?svK(m.net):<span className="sv-dash">—</span>}</div>
-      <div className="bars">{has&&<div className="ba a" style={{height:ah}}/>}<div className="ba t" style={{height:th}}/></div>
-      <div className="cnt">{has?(m.n+" "+(m.n===1?"sale":"sales")):"—"}</div>
+      <div className="bars">{has&&<div className={"ba a"+(fc?" fc":"")} style={{height:ah}}/>}{(monthlyTarget||0)>0&&<div className="ba t" style={{height:th}}/>}</div>
+      <div className="cnt">{has?(m.n+" "+(m.n===1?unit:unit+"s")):"—"}</div>
     </div>;
   })}</div>;
 }
@@ -5547,6 +5550,8 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
   // Net-GCI-by-month chart scope: "team" or an agent code (LS/SR). Per Luke, the director
   // (Luke) defaults to Team; other sales agents default to their own column.
   const [gciScope,setGciScope]=useState(()=> (agentName && agentName!=="Luke" && SV_AGENT_CODE[agentName]) ? SV_AGENT_CODE[agentName] : "team");
+  // By-month basis: GCI written (contract month, default), settled (banked), or forecast ahead.
+  const [gciBasis,setGciBasis]=useState("written");
   // Today-band scope (Team / per agent). Same default as the chart: Luke sees the team, others see themselves.
   const [todayScope,setTodayScope]=useState(()=> (agentName && agentName!=="Luke" && SV_AGENT_CODE[agentName]) ? SV_AGENT_CODE[agentName] : "team");
   useEffect(()=>{ let on=true; (async()=>{ try{ const j=await call("getTargets"); if(on) setTdata(j&&j.ok?(j.data||null):null); }catch(e){ if(on) setTdata(null); } })(); return ()=>{on=false;}; },[]);
@@ -5777,14 +5782,20 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
       elapsedPct:_per.elapsedPct };
     const agents=(tdata.agents||[]).map(a=>({ code:a.code, name:a.name, netGci:a.netComm, sales:a.sales,
       soldValue:a.totalValue, listingsWon:a.listingsWon, avgGci:a.avgNet, avgPrice:a.avgPrice,
-      offMarketPct:a.offMktPct, elapsedPct:_per.elapsedPct }));
+      activeListings:a.activeListings, offMarketPct:a.offMktPct, elapsedPct:_per.elapsedPct }));
     return { team, agents };
   },[tdata,_per.elapsedPct]);
 
   const teamPct = svModel? svModel.team.netGci/_tgtTeam.netGci*100 : null;
   // By-month chart: resolve the selected scope to its monthly array + monthly target line.
   const _gciAgent = (gciScope!=="team" && svModel) ? svModel.agents.find(a=>a.code===gciScope) : null;
-  const _gciMonthly = gciScope==="team" ? (tdata&&tdata.monthly) : (tdata&&tdata.monthlyByAgent&&tdata.monthlyByAgent[gciScope]);
+  // Pick the series set for the chosen basis (with graceful fallback to the legacy settled series).
+  const _gciSeries = (()=>{ if(!tdata) return {team:null,byAgent:null};
+    if(gciBasis==="settled") return {team:tdata.settledMonthly||tdata.monthly, byAgent:tdata.monthlyByAgent};
+    if(gciBasis==="forecast") return {team:tdata.forecastMonthly||null, byAgent:tdata.forecastMonthlyByAgent||null};
+    return {team:tdata.writtenMonthly||tdata.monthly, byAgent:tdata.writtenMonthlyByAgent||tdata.monthlyByAgent}; })();
+  const _gciMonthly = gciScope==="team" ? _gciSeries.team : (_gciSeries.byAgent&&_gciSeries.byAgent[gciScope]);
+  const _gciIsForecast = gciBasis==="forecast";
   const _gciTgtObj = gciScope==="team" ? _tgtTeam : (_gciAgent ? SV_TARGETS[String(_gciAgent.name).toLowerCase()] : null);
   const _gciTargetLine = (_gciTgtObj&&_gciTgtObj.netGci) ? _gciTgtObj.netGci/12 : 0;
   const _gciScopeName = gciScope==="team" ? "the team" : (_gciAgent ? _gciAgent.name : "this agent");
@@ -5805,7 +5816,7 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
     { label:"Net GCI", lead:true, value:svK(_tM.netGci), sub:"of "+svK(_tTgt.netGci)+" target", pct:_tM.netGci/_tTgt.netGci*100, elapsedPct:_per.elapsedPct },
     { label:_tIsTeam?"Team sales":"Sales", value:svNum(_tM.sales), sub:"of "+_tTgt.sales+" target", pct:_tM.sales/_tTgt.sales*100, elapsedPct:_per.elapsedPct },
     { label:"Avg price", value:svK(_tAvgPrice), sub:"of "+svK(_tTgt.avgPrice)+" target", pct:_tTgt.avgPrice?_tAvgPrice/_tTgt.avgPrice*100:null },
-    { label:"Active listings", value:activeCount, sub:"on the market now" },
+    { label:"Active listings", value:(_tIsTeam?activeCount:(_tAgent&&_tAgent.activeListings!=null?_tAgent.activeListings:0)), sub:"on the market now" },
   ] : [
     { label:"Net GCI", lead:true, value:"—", sub:"loading…" }, { label:"Team sales", value:"—", sub:"" },
     { label:"Avg price", value:"—", sub:"" }, { label:"Active listings", value:activeCount, sub:"on the market now" },
@@ -5918,10 +5929,17 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
               <SvPanel title={"Team · "+_per.year}><MetricTable groups={[{rows:teamRows}]}/></SvPanel>
               <SvPanel title="By agent"><MetricTable groups={byAgentGroups}/></SvPanel>
               <SvPanel title="Net GCI by month" actions={
-                <select className="sv-scope" value={gciScope} onChange={e=>setGciScope(e.target.value)} aria-label="Chart scope">
-                  <option value="team">Team</option>
-                  {svModel&&svModel.agents.map(a=><option key={a.code} value={a.code}>{a.name}</option>)}
-                </select>
+                <div style={{display:"flex",gap:8}}>
+                  <select className="sv-scope" value={gciBasis} onChange={e=>setGciBasis(e.target.value)} aria-label="Chart basis">
+                    <option value="written">Written in month</option>
+                    <option value="settled">Settled in month</option>
+                    <option value="forecast">Forecast to settle</option>
+                  </select>
+                  <select className="sv-scope" value={gciScope} onChange={e=>setGciScope(e.target.value)} aria-label="Chart scope">
+                    <option value="team">Team</option>
+                    {svModel&&svModel.agents.map(a=><option key={a.code} value={a.code}>{a.name}</option>)}
+                  </select>
+                </div>
               }>
                 <div className="sv-gci-avg">
                   <span className="t-label">Avg GCI · {_gciScopeLabel}</span>
@@ -5929,8 +5947,8 @@ function DesktopCRM({ agentName, opens, openDays, opensByDay, opensStale, allLis
                     ? <span className="v"><b>{svK(_avgGciActual)}</b> actual <span className="mut">vs {svK(_avgGciGoal)} goal</span> · {_avgGciPct}%</span>
                     : <span className="v"><b>{svK(_avgGciActual)}</b> actual</span>}
                 </div>
-                <div style={{padding:"2px 0 4px"}}><MonthBars monthly={_gciMonthly} monthlyTarget={_gciTargetLine}/></div>
-                {!_gciMonthly&&<div className="sv-note" style={{padding:"4px 20px 16px"}}>No settled sales yet for {_gciScopeName} this year. The faint bar shows {svK(_gciTargetLine)} as the monthly target.</div>}
+                <div style={{padding:"2px 0 4px"}}><MonthBars monthly={_gciMonthly} monthlyTarget={_gciIsForecast?0:_gciTargetLine} forecast={_gciIsForecast}/></div>
+                {!_gciMonthly&&<div className="sv-note" style={{padding:"4px 20px 16px"}}>{_gciIsForecast?`Nothing exchanged and awaiting settlement for ${_gciScopeName} right now.`:gciBasis==="settled"?`No settled sales yet for ${_gciScopeName} this year.`:`No sales written for ${_gciScopeName} yet this year. The faint bar shows ${svK(_gciTargetLine)} as the monthly target.`}</div>}
               </SvPanel>
               <div className="sv-note">Actuals refresh nightly from the Stocklist · Sold {_per.year} CY.</div>
             </>}
