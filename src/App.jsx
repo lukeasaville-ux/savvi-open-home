@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v184-drawer-fix-fullheight";
+const BUILD = "v185-agent-heading-target110";
 // Persist the session token so a reload / accidental pull-to-refresh doesn't log the agent out.
 let SESSION_TOKEN = null;
 try { SESSION_TOKEN = sessionStorage.getItem("savvi_tok") || null; } catch (e) {}
@@ -4818,6 +4818,10 @@ const SV_CSS = `
 .sv-mt tr.grp td{background:var(--surface-muted);height:40px;font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:19px;text-align:left;color:var(--ink);}
 .sv-mt td.prog{width:190px;}
 .sv-mt td.prog .sv-rule{margin-top:0;}
+/* grouped by agent: the name heads each block, column labels sit beneath it */
+.sv-mt.grouped tr.grp td{background:none;height:auto;padding:24px 20px 2px;border-bottom:none;}
+.sv-mt.grouped tr.grp:first-child td{padding-top:4px;}
+.sv-mt tr.colh td{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-muted);font-weight:500;height:auto;padding:4px 20px 9px;border-bottom:1px solid var(--hairline);}
 .sv-sq{display:inline-block;width:9px;height:9px;margin-right:7px;position:relative;top:0;}
 .sv-sq.o{background:var(--savvi-orange);} .sv-sq.b{background:var(--savvi-brown);}
 .sv-dash{color:var(--ink-muted);}
@@ -5281,7 +5285,7 @@ const svK = n => { n=Math.round(n||0);
 // target is team-level only (Luke's stretch figure, not netGci/sales); agents carry an
 // avg-price target instead.
 const SV_TARGETS = {
-  team: { netGci:1100000, sales:100, soldValue:70000000, listingsWon:100, avgGci:13000, avgPrice:700000 },
+  team: { netGci:1100000, sales:100, soldValue:70000000, listingsWon:110, avgGci:13000, avgPrice:700000 },
   luke: { netGci:950000,  sales:90,  soldValue:63000000, listingsWon:95,  avgGci:13500, avgPrice:700000 },
   sam:  { netGci:175000,  sales:15,  soldValue:8250000,  listingsWon:17,  avgGci:12000, avgPrice:550000 },
 };
@@ -5374,19 +5378,28 @@ function svCells({actual,target,paced,fmt,elapsedPct,lead}){
   };
 }
 function MetricTable({groups}){
-  return <table className="sv-mt">
-    <thead><tr><th>Metric</th><th>Actual</th><th>Target</th><th>Remaining</th><th className="prog">Progress</th><th>%</th></tr></thead>
+  const grouped=groups.some(g=>g.header);
+  const mrow=(r,ri)=><tr key={ri}>
+    <td className="m">{r.label}</td>
+    <td className={r.cells.lead?"lead-actual":""}>{r.cells.actual}</td>
+    <td>{r.cells.target}</td>
+    <td>{r.cells.remaining}</td>
+    <td className="prog">{r.cells.prog||<span className="sv-dash">—</span>}</td>
+    <td>{r.cells.pctTxt}</td>
+  </tr>;
+  const colhead=<tr className="colh"><td className="m">Metric</td><td>Actual</td><td>Target</td><td>Remaining</td><td className="prog">Progress</td><td>%</td></tr>;
+  // When rows are grouped by agent, each agent's name heads its own block with the
+  // column labels sitting beneath the name — not one shared header above everything.
+  if(grouped) return <table className="sv-mt grouped">
     <tbody>{groups.map((g,gi)=><Fragment key={gi}>
       {g.header&&<tr className="grp"><td colSpan={6}>{g.header}</td></tr>}
-      {g.rows.map((r,ri)=><tr key={ri}>
-        <td className="m">{r.label}</td>
-        <td className={r.cells.lead?"lead-actual":""}>{r.cells.actual}</td>
-        <td>{r.cells.target}</td>
-        <td>{r.cells.remaining}</td>
-        <td className="prog">{r.cells.prog||<span className="sv-dash">—</span>}</td>
-        <td>{r.cells.pctTxt}</td>
-      </tr>)}
+      {colhead}
+      {g.rows.map(mrow)}
     </Fragment>)}</tbody>
+  </table>;
+  return <table className="sv-mt">
+    <thead><tr><th>Metric</th><th>Actual</th><th>Target</th><th>Remaining</th><th className="prog">Progress</th><th>%</th></tr></thead>
+    <tbody>{groups.map((g,gi)=><Fragment key={gi}>{g.rows.map(mrow)}</Fragment>)}</tbody>
   </table>;
 }
 
