@@ -10,7 +10,7 @@ import wordmark from "./assets/savvi-wordmark.png";
 ════════════════════════════════════════════ */
 const API_BASE = "https://n8n.getsavvi.com.au/webhook/savvi-app";
 // Bump on every deploy — shown tiny in the home header so you can confirm the app updated.
-const BUILD = "v202-todo-timestamps";
+const BUILD = "v203-name-autocorrect-off";
 // Durable key/value across localStorage, a first-party cookie, AND sessionStorage, read from
 // whichever still has it. iOS Home Screen (standalone) PWAs routinely wipe sessionStorage on every
 // relaunch and can throw on localStorage, so a value kept in only one store is lost on reopen. The
@@ -1846,7 +1846,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
 
       {step==="mobile"&&byName&&<>
         <div className="fg"><label className="fl">Buyer's name</label>
-          <input className="fi big" type="text" placeholder="Start typing their name…" value={nameQ} onChange={e=>setNameQ(e.target.value)} autoCapitalize="words" autoComplete="off" autoFocus/></div>
+          <input className="fi big" type="text" placeholder="Start typing their name…" value={nameQ} onChange={e=>setNameQ(e.target.value)} autoCapitalize="words" autoComplete="off" autoCorrect="off" spellCheck={false} autoFocus/></div>
         {nameSearching&&<div className="lk-searching"><span className="sp-sm"/>Searching contacts…</div>}
         {!nameSearching&&nameRes.length>0&&<div className="lk">{nameRes.map(c=>
           <div key={c.id} className="lk-card" onClick={()=>pick(c)}>
@@ -1880,7 +1880,7 @@ function AddSheet({open,onClose,openHome,onSave,onReconcile,agentName,propContac
       </>}
 
       {step==="newdetails"&&<>
-        <div className="fg"><label className="fl">Full name</label><input className="fi" type="text" placeholder="e.g. Tom Nguyen" value={name} onChange={e=>setName(e.target.value)} onBlur={e=>setName(titleName(e.target.value))} autoCapitalize="words" autoFocus/></div>
+        <div className="fg"><label className="fl">Full name</label><input className="fi" type="text" placeholder="e.g. Tom Nguyen" value={name} onChange={e=>setName(e.target.value)} onBlur={e=>setName(titleName(e.target.value))} autoCapitalize="words" autoCorrect="off" autoComplete="off" spellCheck={false} autoFocus/></div>
         <div className="fg"><label className="fl">Email</label><input className="fi" type="email" placeholder="name@email.com" value={email} onChange={e=>setEmail(e.target.value)}/></div>
         {err&&<div style={{color:AMBER_D,fontSize:13,padding:"0 0 8px",lineHeight:1.4}}>{err}</div>}
         {kindPicker}
@@ -2000,7 +2000,7 @@ function GeneralEnquirySheet({ open, onClose, listings, agentName, onRegister })
         {item&&item.status==="done"&&<div style={{padding:"6px 0"}}>{(item.done||[]).map((d,i)=><div key={i} style={{fontSize:14,color:ESPRESSO,padding:"4px 0"}}>{/^⚠/.test(d)?d:"✓ "+d}</div>)}<button onClick={onClose} style={{marginTop:12,width:"100%",padding:"11px 0",borderRadius:10,border:"none",background:ESPRESSO,color:CREAM,fontWeight:800,fontSize:14,cursor:"pointer"}}>Done</button></div>}
         {item&&(item.status==="review"||item.status==="working")&&<>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-            <label style={{fontSize:11,fontWeight:700,color:BROWN_L}}>Name<input style={inp} value={item.buyer.name} onChange={e=>updB("name",e.target.value)}/></label>
+            <label style={{fontSize:11,fontWeight:700,color:BROWN_L}}>Name<input style={inp} value={item.buyer.name} onChange={e=>updB("name",e.target.value)} autoCapitalize="words" autoCorrect="off" autoComplete="off" spellCheck={false}/></label>
             <label style={{fontSize:11,fontWeight:700,color:BROWN_L}}>Mobile<input style={inp} value={item.buyer.mobile} onChange={e=>updB("mobile",e.target.value)}/></label>
           </div>
           <label style={{display:"block",fontSize:11,fontWeight:700,color:BROWN_L,marginTop:8}}>Email<input style={inp} value={item.buyer.email} onChange={e=>updB("email",e.target.value)}/></label>
@@ -3537,7 +3537,7 @@ function OfferContractSheet({open,onClose,buyer,openHome,agentName}){
             <div style={{display:"grid",gap:9}}>
               <div><label style={fl}>Purchaser email (signs first)</label><input style={fi} value={purEmail} onChange={e=>setPurEmail(e.target.value)} inputMode="email" placeholder="purchaser@email.com"/></div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                <div><label style={fl}>Vendor name</label><input style={fi} value={venName} onChange={e=>setVenName(e.target.value)} placeholder={venLoading?"Looking up…":"Vendor"}/></div>
+                <div><label style={fl}>Vendor name</label><input style={fi} value={venName} onChange={e=>setVenName(e.target.value)} placeholder={venLoading?"Looking up…":"Vendor"} autoCapitalize="words" autoCorrect="off" autoComplete="off" spellCheck={false}/></div>
                 <div><label style={fl}>Vendor email (signs after)</label><input style={fi} value={venEmail} onChange={e=>setVenEmail(e.target.value)} inputMode="email" placeholder={venLoading?"Looking up…":"vendor@email.com"}/></div>
               </div>
               <div style={{height:1,background:SAND_D,margin:"3px 0 1px"}}/>
@@ -3855,7 +3855,7 @@ function QuickContractSheet({ open, prop, agentName, onClose, onSent, onContract
             <ContractUpload propertyId={prop?.propertyId||prop?.id} onUploaded={onContractUploaded}/>
           </div>}
           {err && <div style={{margin:"0 16px 10px",background:"#FDECEA",color:"#C0392B",borderRadius:10,padding:"10px 13px",fontSize:13}}>{err}</div>}
-          <div className="fg"><label className="fl">Full name *</label><input className="fi" type="text" placeholder="e.g. Jane Smith" value={name} onChange={e=>setName(e.target.value)} autoFocus/></div>
+          <div className="fg"><label className="fl">Full name *</label><input className="fi" type="text" placeholder="e.g. Jane Smith" value={name} onChange={e=>setName(e.target.value)} autoCapitalize="words" autoCorrect="off" autoComplete="off" spellCheck={false} autoFocus/></div>
           <div className="fg"><label className="fl">Email address *</label><input className="fi" type="email" placeholder="jane@email.com" value={email} onChange={e=>setEmail(e.target.value)}/></div>
           <div className="fg"><label className="fl">Mobile (optional — also SMS contract)</label><input className="fi" type="tel" placeholder="04XX XXX XXX" value={mobile} onChange={e=>setMobile(e.target.value)}/></div>
           {!prop?.contractUrl && <div style={{margin:"0 16px 10px",background:"#FFF8E1",color:"#856404",borderRadius:10,padding:"10px 13px",fontSize:13}}>⚠️ No contract URL on this listing. Add it in Attio first.</div>}
@@ -5223,7 +5223,7 @@ function SvTodo({agent,index,indexing,suggestions,onOpenContact}){
     {crmId===x.id&&<div className="sv-crm-add">
       <div className="h">Add to CRM</div>
       <div className="g2">
-        <label>Name<input value={cf.name} onChange={e=>setCf({...cf,name:e.target.value})} placeholder="Full name" autoFocus/></label>
+        <label>Name<input value={cf.name} onChange={e=>setCf({...cf,name:e.target.value})} placeholder="Full name" autoCapitalize="words" autoCorrect="off" autoComplete="off" spellCheck={false} autoFocus/></label>
         <label>Mobile<input value={cf.mobile} onChange={e=>setCf({...cf,mobile:e.target.value})} placeholder="04…"/></label>
         <label>Email<input value={cf.email} onChange={e=>setCf({...cf,email:e.target.value})} placeholder="(optional)"/></label>
         <label>Follow-up<input type="date" value={cf.date} min={_today} onChange={e=>setCf({...cf,date:e.target.value})}/></label>
@@ -7277,7 +7277,7 @@ function SignAnythingSheet({ open, onClose, agentName, listings=[] }){
                 {signers.map(s=>(
                   <div key={s.id} style={{display:"flex",alignItems:"center",gap:7,marginBottom:8}}>
                     <span style={{width:11,height:11,borderRadius:6,background:s.color,flex:"0 0 auto"}}/>
-                    <input className="fi" value={s.name} placeholder={s.role+" name"} onChange={e=>editSigner(s.id,"name",e.target.value)} style={{flex:1,minWidth:0,padding:"8px 9px",fontSize:12.5}}/>
+                    <input className="fi" value={s.name} placeholder={s.role+" name"} onChange={e=>editSigner(s.id,"name",e.target.value)} autoCapitalize="words" autoCorrect="off" autoComplete="off" spellCheck={false} style={{flex:1,minWidth:0,padding:"8px 9px",fontSize:12.5}}/>
                     <input className="fi" value={s.email} inputMode="email" placeholder="email" onChange={e=>editSigner(s.id,"email",e.target.value)} style={{flex:1,minWidth:0,padding:"8px 9px",fontSize:12.5}}/>
                     {signers.length>1 && <button onClick={()=>removeSigner(s.id)} aria-label="Remove signer" style={{background:"transparent",border:"none",color:BROWN_L,fontSize:16,cursor:"pointer",padding:"0 2px",flex:"0 0 auto"}}>×</button>}
                   </div>
@@ -8079,19 +8079,19 @@ function AuthoritySheet({ open, onClose, agentName }){
             </div>
           </div>
           {vendorType==="company" && <div style={{padding:"0 16px 10px"}}><div style={fieldRow}>
-            <div><label className="fl">Company name</label><input className="fi" type="text" placeholder="ABC Pty Ltd" value={entityName} onChange={e=>setEntityName(e.target.value)}/></div>
+            <div><label className="fl">Company name</label><input className="fi" type="text" placeholder="ABC Pty Ltd" value={entityName} onChange={e=>setEntityName(e.target.value)} autoCorrect="off" autoComplete="off" spellCheck={false}/></div>
             <div><label className="fl">ACN</label><input className="fi" type="text" inputMode="numeric" placeholder="123 456 789" value={entityAcn} onChange={e=>setEntityAcn(e.target.value)}/></div>
           </div><div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Below, add the director(s) who sign for the company (s127 Corporations Act).</div></div>}
           {vendorType==="trust" && <div className="fg"><label className="fl">Trust name</label>
-            <input className="fi" type="text" placeholder="e.g. The Smith Family Trust" value={entityName} onChange={e=>setEntityName(e.target.value)}/>
+            <input className="fi" type="text" placeholder="e.g. The Smith Family Trust" value={entityName} onChange={e=>setEntityName(e.target.value)} autoCorrect="off" autoComplete="off" spellCheck={false}/>
             <div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Below, add the trustee(s) who sign.</div></div>}
           {vendorType==="estate" && <div className="fg"><label className="fl">Estate of the late</label>
-            <input className="fi" type="text" placeholder="deceased's full name, e.g. Mary Smith" value={deceasedName} onChange={e=>setDeceasedName(e.target.value)}/>
+            <input className="fi" type="text" placeholder="deceased's full name, e.g. Mary Smith" value={deceasedName} onChange={e=>setDeceasedName(e.target.value)} autoCapitalize="words" autoCorrect="off" autoComplete="off" spellCheck={false}/>
             <div style={{fontSize:11,color:BROWN_L,marginTop:4}}>Below, add the executor(s) who sign.</div></div>}
           {vendors.map((v,i)=>{ const W={individual:"Owner",company:"Director",trust:"Trustee",estate:"Executor"}[vendorType]||"Owner"; return (
             <div key={i} style={{borderTop:i?`1px solid #EFE8DC`:"none",paddingTop:i?8:0}}>
               <div className="fg" style={{paddingBottom:8}}><label className="fl">{i===0?`${W} full name`:`${W} ${i+1} full name`}{i>0&&<span onClick={()=>rmV(i)} style={{float:"right",color:BROWN_L,cursor:"pointer",fontWeight:400}}>remove</span>}</label>
-                <input className="fi" type="text" placeholder="e.g. Michael Chen" value={v.name} onChange={e=>setV(i,"name",e.target.value)}/></div>
+                <input className="fi" type="text" placeholder="e.g. Michael Chen" value={v.name} onChange={e=>setV(i,"name",e.target.value)} autoCapitalize="words" autoCorrect="off" autoComplete="off" spellCheck={false}/></div>
               <div style={{padding:"0 16px 8px"}}><div style={fieldRow}>
                 <div><label className="fl">Mobile</label><input className="fi" type="tel" placeholder="0412 345 678" value={v.mobile} onChange={e=>setV(i,"mobile",e.target.value)}/></div>
                 <div><label className="fl">Email</label><input className="fi" type="email" placeholder="name@email.com" value={v.email} onChange={e=>setV(i,"email",e.target.value)}/></div>
@@ -8170,7 +8170,7 @@ function AuthoritySheet({ open, onClose, agentName }){
               </span>
             </label>
             {advocate && <div style={{marginTop:9,display:"grid",gap:8}}>
-              <div><label className="fl">Advocate name</label><input className="fi" type="text" value={advocateName} onChange={e=>setAdvocateName(e.target.value)} placeholder="e.g. LongView Real Estate Pty Ltd"/></div>
+              <div><label className="fl">Advocate name</label><input className="fi" type="text" value={advocateName} onChange={e=>setAdvocateName(e.target.value)} placeholder="e.g. LongView Real Estate Pty Ltd" autoCapitalize="words" autoCorrect="off" autoComplete="off" spellCheck={false}/></div>
               <div><label className="fl">Advocate address</label><input className="fi" type="text" value={advocateAddress} onChange={e=>setAdvocateAddress(e.target.value)} placeholder="e.g. 31 Hardner Road, Mount Waverley"/></div>
               <div style={{fontSize:11,color:BROWN_L}}>Appends the CAV 80 "Notice of commission sharing" page, signed by the agent and owner(s).</div>
             </div>}
@@ -8350,12 +8350,12 @@ function ContractSheet({ open, onClose, agentName, listings }){
               </div>}
               <div style={label}>Purchaser</div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-                <input className="fi" placeholder="Name" value={purchaser.name} onChange={e=>setPurchaser(p=>({...p,name:e.target.value}))}/>
+                <input className="fi" placeholder="Name" value={purchaser.name} onChange={e=>setPurchaser(p=>({...p,name:e.target.value}))} autoCapitalize="words" autoCorrect="off" autoComplete="off" spellCheck={false}/>
                 <input className="fi" placeholder="Email" inputMode="email" value={purchaser.email} onChange={e=>setPurchaser(p=>({...p,email:e.target.value}))}/>
               </div>
               <div style={label}>Vendor</div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:6}}>
-                <input className="fi" placeholder="Name" value={vendor.name} onChange={e=>setVendor(p=>({...p,name:e.target.value}))}/>
+                <input className="fi" placeholder="Name" value={vendor.name} onChange={e=>setVendor(p=>({...p,name:e.target.value}))} autoCapitalize="words" autoCorrect="off" autoComplete="off" spellCheck={false}/>
                 <input className="fi" placeholder="Email" inputMode="email" value={vendor.email} onChange={e=>setVendor(p=>({...p,email:e.target.value}))}/>
               </div>
               <div style={{fontSize:11.5,color:BROWN_L,margin:"0 0 12px 2px"}}>Leave a party blank to send to the other only. Each party e-signs only their own spots.</div>
@@ -8876,7 +8876,7 @@ function ProposalSheet({ open, onClose, agentName }){
         <div className="sh-sub">Build the vendor's proposal, then preview it</div>
         <div style={{padding:"4px 16px 16px"}}>
           <label className="fl">Vendor name(s)</label>
-          <input className="fi" value={vendorNames} onChange={e=>setVendorNames(e.target.value)} placeholder="e.g. Sarah & James"/>
+          <input className="fi" value={vendorNames} onChange={e=>setVendorNames(e.target.value)} placeholder="e.g. Sarah & James" autoCapitalize="words" autoCorrect="off" autoComplete="off" spellCheck={false}/>
 
           <label className="fl" style={{marginTop:12}}>Property address</label>
           <AddressInput value={addr} onChange={setAddr} placeholder="e.g. 2/178 Auburn Road, Hawthorn"/>
