@@ -187,14 +187,49 @@ function parseBuyerQuery(q){
 const _loQuote=s=>{const m=String(s||"").replace(/,/g,"").match(/\d{5,}/);return m?parseInt(m[0],10):0;};
 // Match buyers by BEHAVIOUR (what they've inspected) against the parsed criteria, with a
 // generous tolerance — instant, client-side, no AI round-trip. Returns ranked matches.
+const _money=n=>n==null?"":(n>=1e6?("$"+(n/1e6).toFixed(n%1e6?1:0).replace(/\.0$/,"")+"m"):("$"+Math.round(n/1000)+"k"));
 function matchBuyersLocal(query, buyers, propMeta){
   const crit=parseBuyerQuery(query);
   const qs=String(query||"").toLowerCase();
   const suburbs=[...new Set(Object.values(propMeta).map(m=>(m.suburb||"").toLowerCase().trim()).filter(Boolean))];
   const wantSub=suburbs.filter(sub=>sub && qs.includes(sub));
   const rank={hot:3,watching:2,cool:1};
+  const now=Date.now();
   const out=[];
   for(const b of buyers){
+    const cr=b.crit;
+    const hasStruct=cr && (cr.budgetMax!=null || cr.bedsMin!=null || (cr.suburbs&&cr.suburbs.length));
+    if(hasStruct){
+      // Not prospects for a new listing — they've bought or stopped looking.
+      if(cr.status==="Purchased"||cr.status==="Stopped looking") continue;
+      // HARD FILTER on real numbers (only filter on a dimension the buyer actually has).
+      if(crit.price && cr.budgetMax!=null){
+        if(crit.price > cr.budgetMax*1.08) continue;                 // above their ceiling
+        if(cr.budgetMin!=null && crit.price < cr.budgetMin*0.85) continue; // well under their floor
+      }
+      if(crit.beds!=null && cr.bedsMin!=null && (crit.beds+1) < cr.bedsMin) continue; // too few beds
+      if(wantSub.length && cr.suburbs && cr.suburbs.length){
+        const subl=cr.suburbs.map(s=>s.toLowerCase());
+        if(!wantSub.some(w=>subl.some(s=>s.includes(w)||w.includes(s)))) continue;    // wrong area
+      }
+      // SCORE: interest heat + active status + budget fit + suburb + recency.
+      let score=(rank[b.interest]||0)*10;
+      if(cr.status==="Active") score+=6;
+      if(crit.price && cr.budgetMin!=null && cr.budgetMax!=null && crit.price>=cr.budgetMin && crit.price<=cr.budgetMax) score+=6;
+      else if(crit.price && cr.budgetMax!=null) score+=2;
+      if(wantSub.length && cr.suburbs && cr.suburbs.length) score+=4;
+      const la=cr.lastActivity?new Date(cr.lastActivity).getTime():0;
+      if(la){ const d=(now-la)/86400000; if(d<=30) score+=4; else if(d<=60) score+=2; }
+      const rp=[];
+      if(cr.bedsMin!=null) rp.push(cr.bedsMin+"+ bed");
+      if(cr.suburbs&&cr.suburbs.length) rp.push(cr.suburbs.slice(0,2).join("/"));
+      if(cr.budgetMin!=null&&cr.budgetMax!=null) rp.push(_money(cr.budgetMin)+" to "+_money(cr.budgetMax));
+      else if(cr.budgetMax!=null) rp.push("up to "+_money(cr.budgetMax));
+      const reason=(rp.join(" · ")||"matches your criteria")+" · fits this one";
+      out.push({ ...b, reason, _score:score });
+      continue;
+    }
+    // FALLBACK (buyer not yet profiled): match on BEHAVIOUR — the stock they've inspected.
     const insp=(b.propertyRefs||[]).map(r=>propMeta[r]).filter(Boolean);
     if(!insp.length) continue;
     let priceOk=!crit.price, subOk=!wantSub.length, best=null;
@@ -207,7 +242,6 @@ function matchBuyersLocal(query, buyers, propMeta){
       if(pOk && sOk && !best) best=p;
     }
     if(!priceOk || !subOk) continue;
-    // Beds: only exclude when the buyer's inspected stock has bed data AND none are within ±1.
     if(crit.beds!=null){
       const anyBeds=insp.some(p=>p.beds!=null);
       if(anyBeds && !insp.some(p=>Math.abs((+p.beds)-crit.beds)<=1)) continue;
@@ -577,6 +611,17 @@ const Attio = {
     const pnm = p => { const n = p?.values?.name?.[0]; return n ? `${n.first_name || ""} ${n.last_name || ""}`.trim() : ""; };
     const pph = p => p?.values?.phone_numbers?.[0]?.phone_number ?? "";
     const pem = p => p?.values?.email_addresses?.[0]?.email_address ?? "";
+    // Structured search criteria written by the droplet buyer_criteria engine (budget as real
+    // numbers, beds, suburbs). Buyer Match hard-filters on these; see matchBuyersLocal.
+    const pcur = (p, f) => { const x = p?.values?.[f]?.[0]; return x && x.currency_value != null ? Number(x.currency_value) : null; };
+    const pcrit = p => ({
+      budgetMin: pcur(p, "budget_min"), budgetMax: pcur(p, "budget_max"),
+      bedsMin: (p?.values?.beds_min?.[0]?.value ?? null),
+      suburbs: String(p?.values?.suburbs?.[0]?.value || "").split(",").map(s => s.trim()).filter(Boolean),
+      mustHaves: String(p?.values?.must_haves?.[0]?.value || "").split(",").map(s => s.trim()).filter(Boolean),
+      status: (p?.values?.buyer_status?.[0]?.option?.title || null),
+      lastActivity: (p?.values?.last_activity_at?.[0]?.value || null),
+    });
     const rank = { hot: 3, watching: 2, cool: 1 };
     // Buyers who recently PURCHASED through Savvi are excluded from the Buyer Match pool
     // (set twice daily by the Box+Dice sweep) so they never get new-listing SMS right after
@@ -591,7 +636,7 @@ const Attio = {
       const note = (rval(insp, "notes") || "").trim();
       const interest = (rval(insp, "interest") || "").toLowerCase();
       const pr = rref(insp, "property");
-      if (!byC[cid]) byC[cid] = { id: cid, contactId: cid, name: c ? pnm(c) : "Unknown", mobile: c ? pph(c) : "", email: c ? pem(c) : "", notes: [], interest, propertyRefs: [] };
+      if (!byC[cid]) byC[cid] = { id: cid, contactId: cid, name: c ? pnm(c) : "Unknown", mobile: c ? pph(c) : "", email: c ? pem(c) : "", notes: [], interest, propertyRefs: [], crit: c ? pcrit(c) : null };
       const b = byC[cid];
       if (note) b.notes.push(note);
       if (pr && !b.propertyRefs.includes(pr)) b.propertyRefs.push(pr);
